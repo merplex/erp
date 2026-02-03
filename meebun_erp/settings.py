@@ -37,8 +37,6 @@ CSRF_TRUSTED_ORIGINS = [
 # 2. บอกให้ Django รู้ว่า Railway มีการใช้งานผ่าน Proxy ที่เป็น HTTPS
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
-
-
 # Application definition
 
 INSTALLED_APPS = [
@@ -141,3 +139,7 @@ STORAGES = {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },
 }
+# บังคับให้คุกกี้ส่งผ่าน HTTPS เท่านั้น (Railway เป็น HTTPS)
+CSRF_COOKIE_SECURE = True
+SESSION_COOKIE_SECURE = True
+
