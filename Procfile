@@ -1,1 +1,1 @@
-web: gunicorn meebun_erp.wsgi
+web: gunicorn meebun_erp.wsgi:application
