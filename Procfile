@@ -1,0 +1,1 @@
+web: gunicorn meebun_erp.wsgi
