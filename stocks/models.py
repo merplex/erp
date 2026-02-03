@@ -87,3 +87,32 @@ class Product(models.Model):
 
     def __str__(self):
         return self.name
+
+class BOM(models.Model):
+    product = models.OneToOneField('Product', on_delete=models.CASCADE, related_name='bom_formula', verbose_name="สินค้าที่จะผลิต")
+    name = models.CharField(max_length=255, verbose_name="ชื่อสูตรการผลิต")
+    sale_price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, verbose_name="ราคาขาย")
+    production_time = models.IntegerField(default=1, verbose_name="ระยะเวลาผลิต (วัน)")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="bom_creator")
+    updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="bom_editor")
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def total_cost(self):
+        # คำนวณต้นทุนรวมจากวัตถุดิบทุกรายการในสูตร
+        return sum(item.subtotal for item in self.ingredients.all())
+
+class BOMIngredient(models.Model):
+    bom = models.ForeignKey(BOM, on_delete=models.CASCADE, related_name='ingredients')
+    material = models.ForeignKey('Product', on_delete=models.CASCADE, verbose_name="วัตถุดิบ")
+    quantity = models.DecimalField(max_digits=10, decimal_places=2, default=1.0, verbose_name="จำนวนที่ใช้")
+
+    @property
+    def subtotal(self):
+        # ต้นทุนต่อรายการ = ราคาซื้อของวัตถุดิบ x จำนวนที่ใช้
+        return self.material.buy_price * self.quantity
+
