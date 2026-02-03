@@ -28,10 +28,18 @@ class BOMIngredientInline(admin.TabularInline):
     model = BOMIngredient
     extra = 1 # ให้โชว์แถวว่างไว้ 1 แถวเสมอ
     autocomplete_fields = ['material'] # ช่วยให้ค้นหาวัตถุดิบได้เร็วขึ้น
+    fields = ('material', 'quantity', 'get_unit_display') 
+    readonly_fields = ('get_unit_display',) # ต้องตั้งเป็น Read Only เพราะดึงมาโชว์เฉยๆ
+    extra = 1
+
+    def get_unit_display(self, obj):
+        # ฟังก์ชันนี้จะไปเรียกหน่วยจาก Product มาโชว์ในหน้าตาราง
+        return obj.get_unit
+    get_unit_display.short_description = "หน่วย"
 
 @admin.register(BOM)
 class BOMAdmin(admin.ModelAdmin):
-    list_display = ('name', 'product', 'total_cost_display', 'sale_price', 'production_time', 'created_by')
+    list_display = ('name', 'product', 'total_cost_display', 'sale_price', 'unit', 'production_time', 'created_by')
     inlines = [BOMIngredientInline] # ดึงตารางวัตถุดิบมาไว้ด้านล่าง
     readonly_fields = ('created_by', 'updated_by')
 
