@@ -92,6 +92,7 @@ class BOM(models.Model):
     product = models.OneToOneField('Product', on_delete=models.CASCADE, related_name='bom_formula', verbose_name="สินค้าที่จะผลิต")
     name = models.CharField(max_length=255, verbose_name="ชื่อสูตรการผลิต")
     sale_price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, verbose_name="ราคาขาย")
+    unit = models.CharField(max_length=50, default="ชิ้น", verbose_name="หน่วยนับ (สินค้าสำเร็จ)")
     production_time = models.IntegerField(default=1, verbose_name="ระยะเวลาผลิต (วัน)")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -115,4 +116,8 @@ class BOMIngredient(models.Model):
     def subtotal(self):
         # ต้นทุนต่อรายการ = ราคาซื้อของวัตถุดิบ x จำนวนที่ใช้
         return self.material.buy_price * self.quantity
-
+    @property
+    def get_unit(self):
+        if self.material:
+            return self.material.unit
+        return "-"
