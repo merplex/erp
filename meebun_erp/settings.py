@@ -28,6 +28,15 @@ SECRET_KEY = "django-insecure-jtp%$=4w-=*kjvxs!4(nj$+coum#3t-h-7^vfa2k)i#2mefju#
 DEBUG = True
 
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', '.railway.app']
+# 1. ยืนยันว่าโดเมนของ Railway นี้เราเชื่อถือ (ต้องใส่ https:// ด้วยนะคะ)
+CSRF_TRUSTED_ORIGINS = [
+    "https://erp-production-3d70.up.railway.app",
+    "https://*.railway.app" # เผื่อกรณีมีการเปลี่ยนชื่อโดเมนในอนาคต
+]
+
+# 2. บอกให้ Django รู้ว่า Railway มีการใช้งานผ่าน Proxy ที่เป็น HTTPS
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
 
 
 # Application definition
