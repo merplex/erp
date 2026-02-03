@@ -1,11 +1,16 @@
 from django.contrib import admin
 from django.utils.html import format_html
+from django.core.exceptions import ValidationError
 from .models import *
 
-# --- Inline Tables ---
+# --- Inlines ---
+class ProductSupplierInline(admin.TabularInline):
+    model = ProductSupplier
+    extra = 1
+
 class BOMIngredientInline(admin.TabularInline):
     model = BOMIngredient
-    fields = ('material', 'quantity', 'get_unit_display') 
+    fields = ('material', 'quantity', 'get_unit_display')
     readonly_fields = ('get_unit_display',)
     autocomplete_fields = ['material']
     extra = 1
@@ -15,78 +20,109 @@ class BOMIngredientInline(admin.TabularInline):
 class PurchaseItemInline(admin.TabularInline):
     model = PurchaseItem
     extra = 1
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "product":
+            parent_id = request.resolver_match.kwargs.get('object_id')
+            if parent_id:
+                po = PurchaseOrder.objects.get(pk=parent_id)
+                kwargs["queryset"] = Product.objects.filter(product_suppliers__supplier=po.supplier)
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+class PurchaseReceiptLogInline(admin.TabularInline):
+    model = PurchaseReceiptLog
+    extra = 1
+    readonly_fields = ('received_date', 'user')
 
 class SalesItemInline(admin.TabularInline):
     model = SalesItem
     extra = 1
 
-# --- ฟังก์ชันช่วยแสดงสีของส่วนต่าง ---
+class SalesDeliveryLogInline(admin.TabularInline):
+    model = SalesDeliveryLog
+    extra = 1
+    readonly_fields = ('shipped_date', 'user')
+
+class ProductionLogInline(admin.TabularInline):
+    model = ProductionLog
+    extra = 1
+    readonly_fields = ('finished_date', 'user')
+
+# --- Helper ---
 def color_diff(diff):
     color = "green" if diff >= 0 else "red"
     prefix = "+" if diff > 0 else ""
     return format_html('<span style="color: {}; font-weight: bold;">{}{}{}</span>', color, prefix, diff, " ชิ้น" if diff != 0 else "")
 
-# --- Admin Registration ---
-@admin.register(ProductCategory)
-class ProductCategoryAdmin(admin.ModelAdmin):
-    list_display = ('name', 'created_at')
-
-@admin.register(Supplier)
-class SupplierAdmin(admin.ModelAdmin):
-    list_display = ('company_name', 'contact_person', 'type', 'vat', 'payment_term')
-    search_fields = ('company_name', 'contact_person')
-
-@admin.register(Customer)
-class CustomerAdmin(admin.ModelAdmin):
-    list_display = ('company_name', 'contact_person', 'payment_term')
-    search_fields = ('company_name', 'contact_person')
+# --- Admin Registrations ---
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ('name', 'barcode', 'buy_price', 'sale_price', 'stock_quantity', 'unit', 'has_bom')
+    list_display = ('name', 'barcode', 'buy_price', 'sale_price', 'stock_quantity', 'unit', 'has_bom', 'created_by', 'updated_by')
+    list_filter = ('category', 'has_bom', 'suppliers')
     search_fields = ('name', 'barcode')
-    list_filter = ('category', 'has_bom', 'supplier')
+    inlines = [ProductSupplierInline]
+    readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
+
+    # Logic: บันทึก User อัตโนมัติ (ใครพิมพ์คนนั้นเป็นคนสร้าง/แก้)
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.created_by = request.user
+            obj.updated_by = request.user
+        else:
+            obj.updated_by = request.user
+        super().save_model(request, obj, form, change)
+
+    # Logic: ตรวจสอบความสัมพันธ์ BOM กับ Lead Time
+    def clean_fields(self, request, obj):
+        if obj.has_bom and (obj.production_lead_time is None or obj.production_lead_time <= 0):
+            raise ValidationError({'production_lead_time': "เนื่องจากเป็นสินค้า BOM กรุณาระบุระยะเวลาผลิตด้วยค่ะ"})
+        return super().clean_fields(request, obj)
 
 @admin.register(BOM)
 class BOMAdmin(admin.ModelAdmin):
     list_display = ('name', 'product', 'total_cost_display', 'sale_price', 'unit', 'production_time', 'created_by')
+    list_filter = ('product__category',)
     inlines = [BOMIngredientInline]
     readonly_fields = ('created_by', 'updated_by')
     def total_cost_display(self, obj): return f"{obj.total_cost:,.2f}"
-    total_cost_display.short_description = "ต้นทุนรวม (บาท)"
+    
     def save_model(self, request, obj, form, change):
         if not change: obj.created_by = request.user
         obj.updated_by = request.user
         super().save_model(request, obj, form, change)
 
-# --- ส่วนของประวัติ ซื้อ/ขาย/ผลิต ---
 @admin.register(PurchaseOrder)
 class PurchaseOrderAdmin(admin.ModelAdmin):
-    list_display = ('po_number', 'supplier', 'order_date', 'status', 'diff_summary')
+    list_display = ('po_number', 'supplier', 'order_date', 'status', 'get_diff')
     list_filter = ('status', 'order_date', 'supplier')
     search_fields = ('po_number', 'invoice_no_supplier')
-    inlines = [PurchaseItemInline]
-    def diff_summary(self, obj):
-        diff = sum(i.quantity_received - i.quantity_ordered for i in obj.items.all())
-        return color_diff(diff)
-    diff_summary.short_description = "ยอดต่างรวม"
+    inlines = [PurchaseItemInline, PurchaseReceiptLogInline]
+    def get_diff(self, obj):
+        ordered = sum(i.quantity_ordered for i in obj.items.all())
+        received = sum(l.quantity_received for l in obj.receipt_logs.all())
+        return color_diff(received - ordered)
+    get_diff.short_description = "ยอดต่างรับเข้า"
 
 @admin.register(SalesOrder)
 class SalesOrderAdmin(admin.ModelAdmin):
-    list_display = ('so_number', 'customer', 'order_date', 'status', 'diff_summary')
+    list_display = ('so_number', 'customer', 'order_date', 'status', 'get_diff')
     list_filter = ('status', 'order_date', 'customer')
-    search_fields = ('so_number', 'po_no_customer')
-    inlines = [SalesItemInline]
-    def diff_summary(self, obj):
-        diff = sum(i.quantity_shipped - i.quantity_ordered for i in obj.items.all())
-        return color_diff(diff)
-    diff_summary.short_description = "ยอดต่าง (ปรับยอด)"
+    inlines = [SalesItemInline, SalesDeliveryLogInline]
+    def get_diff(self, obj):
+        ordered = sum(i.quantity_ordered for i in obj.items.all())
+        shipped = sum(l.quantity_shipped for l in obj.delivery_logs.all())
+        return color_diff(shipped - ordered)
 
 @admin.register(ProductionOrder)
 class ProductionOrderAdmin(admin.ModelAdmin):
-    list_display = ('pd_number', 'product', 'order_date', 'status', 'diff_status')
+    list_display = ('pd_number', 'product', 'order_date', 'status', 'get_diff')
     list_filter = ('status', 'order_date', 'product')
-    def diff_status(self, obj):
-        diff = obj.quantity_actual - obj.quantity_planned
-        return color_diff(diff)
-    diff_status.short_description = "ยอดต่างผลิต"
+    inlines = [ProductionLogInline]
+    def get_diff(self, obj):
+        planned = obj.quantity_planned
+        actual = sum(l.quantity_finished for l in obj.production_logs.all())
+        return color_diff(actual - planned)
+
+admin.site.register(ProductCategory)
+admin.site.register(Supplier)
+admin.site.register(Customer)
