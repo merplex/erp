@@ -120,14 +120,13 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
-STATIC_ROOT = BASE_DIR / "staticfiles"
-# 1. ที่อยู่สำหรับเรียกใช้งานไฟล์ Static (CSS, JS, รูปภาพ)
+# 1. ที่อยู่สำหรับเรียกใช้งานไฟล์ Static
 STATIC_URL = "static/"
 
 # 2. ที่อยู่สำหรับรวบรวมไฟล์ Static ทั้งหมดเพื่อส่งขึ้น Railway
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
-# 3. ตัวช่วยให้ WhiteNoise จัดการไฟล์ได้มีประสิทธิภาพขึ้น (บีบอัดไฟล์ให้เว็บโหลดเร็ว)
+# 3. ตัวช่วยให้ WhiteNoise จัดการไฟล์ (สำหรับ Django 6.0+)
 STORAGES = {
     "staticfiles": {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
