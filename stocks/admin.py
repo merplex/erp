@@ -1,5 +1,10 @@
 from django.contrib import admin
-from .models import Supplier, Customer, Product
+from .models import ProductCategory, Supplier, Customer, Product
+
+@admin.register(ProductCategory)
+class ProductCategoryAdmin(admin.ModelAdmin):
+    list_display = ('name', 'created_at')
+
 
 @admin.register(Supplier)
 class SupplierAdmin(admin.ModelAdmin):
