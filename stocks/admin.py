@@ -163,6 +163,13 @@ class BOMAdmin(admin.ModelAdmin):
         obj.updated_by = request.user
         super().save_model(request, obj, form, change)
 
+# 🛡️ ด่านตรวจ: ตอนสร้างสูตร BOM ให้เลือกได้เฉพาะสินค้าที่เปรมติ๊ก "สินค้าผลิตเอง (BOM)" เท่านั้น
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "product":
+            kwargs["queryset"] = Product.objects.filter(has_bom=True)
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+
 # --- กลุ่ม B: Orders ---
 @admin.register(PurchaseOrder)
 class PurchaseOrderAdmin(admin.ModelAdmin):
