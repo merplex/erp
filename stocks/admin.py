@@ -225,6 +225,18 @@ class ProductAdmin(admin.ModelAdmin):
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
 
     filter_horizontal = ('tags',) 
+    # ใน class ProductAdmin(admin.ModelAdmin):
+
+    def formfield_for_manytomany(self, db_field, request, **kwargs):
+        if db_field.name == "tags":
+            # ✅ เรียงตามจำนวนสินค้าที่ใช้ (บ่อยสุดขึ้นก่อน) 
+            # ถ้าคะแนนเท่ากัน ให้เอาตัวที่เพิ่งสร้างล่าสุด (id เยอะสุด) ขึ้นก่อน
+            from django.db.models import Count
+            kwargs["queryset"] = ProductTag.objects.annotate(
+                num_products=Count('products')
+            ).order_field('-num_products', '-id')
+        return super().formfield_for_manytomany(db_field, request, **kwargs)
+
     def display_tags(self, obj):
         tags = obj.tags.all()
         if not tags: return "-"
@@ -446,6 +458,36 @@ class ProductCategoryAdmin(admin.ModelAdmin):
     list_display = ('name',)
     search_fields = ('name',)
     inlines = [ProductInCategoryInline] # แปะ Inline เข้าไป
+
+    def changelist_view(self, request, extra_context=None):
+        from django.db.models import Count
+        # ดึง Tag พร้อมนับจำนวนสินค้าที่ใช้
+        tags = ProductTag.objects.annotate(num_products=Count('products')).order_by('-num_products', '-id')
+        
+        tag_html = '<div style="margin-bottom: 20px; padding: 20px; background: #fff; border: 1px solid #ddd; border-radius: 10px; line-height: 2;">'
+        tag_html += '<h3 style="margin:0 0 15px 0; font-size:18px; border-bottom: 2px solid #eee; padding-bottom: 10px;">🏷️ แท็กยอดนิยม & แท็กมาใหม่</h3>'
+        
+        if tags.exists():
+            for tag in tags:
+                count = tag.num_products
+                # ✅ คำนวณขนาด: ยิ่งใช้เยอะ ยิ่งตัวใหญ่ (ตั้งแต่ 13px ถึง 24px)
+                font_size = 13 + (min(count, 10) * 1.1) 
+                
+                url = f"/admin/stocks/product/?tags__id__exact={tag.id}"
+                tag_html += f'''
+                    <a href="{url}" style="display: inline-block; margin: 5px 10px; padding: 5px 15px; 
+                    background: {tag.color}; color: white; border-radius: 25px; text-decoration: none; 
+                    font-weight: bold; font-size: {font_size}px; box-shadow: 2px 2px 5px rgba(0,0,0,0.1);">
+                    #{tag.name} <span style="font-size: 10px; opacity: 0.8;">({count})</span>
+                    </a>'''
+        else:
+            tag_html += '<p style="color:#999;">ยังไม่มีการสร้างแท็ก</p>'
+        
+        tag_html += '</div>'
+        
+        extra_context = extra_context or {}
+        extra_context['tag_cloud'] = mark_safe(tag_html)
+        return super().changelist_view(request, extra_context=extra_context)
 
     def changelist_view(self, request, extra_context=None):
         tags = ProductTag.objects.all()
