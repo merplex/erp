@@ -173,6 +173,8 @@ class PurchaseReceiptLog(models.Model):
                 po.save()
         super().save(*args, **kwargs)
     # 🛠️ ระบบจัดการเมื่อ "ลบรายการรับสินค้า" (คืนสต็อกและถอยสถานะ)
+    
+# --- ย้ายออกมาอยู่นอก Class (ชิดซ้ายสุด) ---
 @receiver(post_delete, sender=PurchaseReceiptLog)
 def handle_receipt_deletion(sender, instance, **kwargs):
     # 1. คืนสต็อกสินค้า
@@ -183,12 +185,13 @@ def handle_receipt_deletion(sender, instance, **kwargs):
         item = PurchaseItem.objects.get(purchase_order=instance.purchase_order, product=instance.product)
         item.quantity_received -= instance.quantity_received
         item.save()
-    except: pass
-    
-        # 3. 🤖 ออโต้สถานะ: ถ้าลบจนไม่เหลือประวัติรับเลย ให้กลับไปเป็น 'ยืนยัน'
-        po = instance.purchase_order
-            if not po.receipt_logs.exists() and po.status == 'Received':
-        po.status = 'Confirmed' # 'ยืนยัน'
+    except:
+        pass
+
+    # 3. ออโต้สถานะกลับเป็น 'ยืนยัน' ถ้าไม่เหลือประวัติรับเลย
+    po = instance.purchase_order
+    if not po.receipt_logs.exists() and po.status == 'Received':
+        po.status = 'Confirmed'
         po.save()
 
 
