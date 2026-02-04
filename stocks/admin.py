@@ -469,5 +469,22 @@ class ProductCategoryAdmin(admin.ModelAdmin):
         extra_context['tag_cloud'] = mark_safe(tag_html)
         return super().changelist_view(request, extra_context=extra_context)
 
+# ---------------------------------------------------------
+# Register ProductTag เพื่อให้เมนูโผล่ในหน้า Admin
+# ---------------------------------------------------------
+@admin.register(ProductTag)
+class ProductTagAdmin(admin.ModelAdmin):
+    # แสดงชื่อแท็กและตัวอย่างสีในหน้า List
+    list_display = ('name', 'color_display')
+    search_fields = ('name',)
+
+    def color_display(self, obj):
+        # แสดงเป็นกล่องสีสวยๆ ให้เห็นในหน้า Admin เลยครับ
+        return format_html(
+            '<span style="background: {}; color: white; padding: 3px 10px; border-radius: 12px; font-weight: bold;">{}</span>',
+            obj.color, obj.name
+        )
+    color_display.short_description = "ตัวอย่างสี"
+
 
 admin.site.register(Customer)
