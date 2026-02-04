@@ -217,11 +217,24 @@ class SupplierAdmin(admin.ModelAdmin):
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ('name', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit', 'has_bom', 'created_by')
-    list_filter = ('category', 'has_bom', 'suppliers')
-    search_fields = ('name', 'barcodes__code')
+    list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit', 'has_bom', 'created_by')
+    list_filter = ('category', 'tags', 'has_bom', 'suppliers')
+    search_fields = ('name', 'barcodes__code','tags__name')
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
+
+    filter_horizontal = ('tags',) 
+    def display_tags(self, obj):
+        tags = obj.tags.all()
+        if not tags: return "-"
+        # สร้างกล่องสีสำหรับแต่ละ Tag
+        html = "".join([
+            f'<span style="background:{t.color}; color:white; padding:2px 8px; '
+            f'border-radius:12px; margin-right:4px; font-size:11px; font-weight:bold;">'
+            f'{t.name}</span>' for t in tags
+        ])
+        return mark_safe(html)
+    display_tags.short_description = "แท็ก"
 
     # 🛠️ จุดที่แก้เพื่อเลิกล่ม: ดัก Error การจัดรูปแบบตัวเลข
     def get_production_cost(self, obj):
@@ -432,5 +445,28 @@ class ProductCategoryAdmin(admin.ModelAdmin):
     list_display = ('name',)
     search_fields = ('name',)
     inlines = [ProductInCategoryInline] # แปะ Inline เข้าไป
+
+    def changelist_view(self, request, extra_context=None):
+        tags = ProductTag.objects.all()
+        # สร้าง HTML สำหรับกล่อง Tag Cloud
+        tag_html = '<div style="margin-bottom: 20px; padding: 15px; background: #fff; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">'
+        tag_html += '<h3 style="margin:0 0 10px 0; color:#333; font-size:16px;">🔍 ค้นหาด่วนตามแท็ก:</h3>'
+        
+        for tag in tags:
+            # ลิงก์ไปหน้าสินค้าโดยใส่ Filter Tag ID
+            url = f"/admin/stocks/product/?tags__id__exact={tag.id}"
+            tag_html += f'''
+                <a href="{url}" style="display: inline-block; margin: 4px; padding: 6px 14px; 
+                background: {tag.color}; color: white; border-radius: 20px; text-decoration: none; 
+                font-weight: bold; font-size: 13px; transition: opacity 0.2s;">
+                #{tag.name}
+                </a>'''
+        
+        tag_html += '</div>'
+        
+        extra_context = extra_context or {}
+        extra_context['tag_cloud'] = mark_safe(tag_html)
+        return super().changelist_view(request, extra_context=extra_context)
+
 
 admin.site.register(Customer)

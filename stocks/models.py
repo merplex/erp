@@ -25,6 +25,16 @@ class ProductCategory(models.Model):
     def __str__(self): return self.name
     class Meta: verbose_name_plural = "A1. กลุ่มสินค้า"
 
+class ProductTag(models.Model):
+    name = models.CharField(max_length=50, unique=True, verbose_name="ชื่อแท็ก")
+    color = models.CharField(max_length=7, default="#6c757d", verbose_name="สีแท็ก (Hex)")
+
+    def __str__(self):
+        return self.name
+    class Meta:
+        verbose_name = "แท็กสินค้า"
+        verbose_name_plural = "แท็กสินค้าทั้งหมด"
+
 # 2. ผู้จำหน่าย
 class Supplier(models.Model):
     TYPE_CHOICES = [('Domestic', 'ในประเทศ'), ('International', 'ต่างประเทศ')]
@@ -60,6 +70,7 @@ class Customer(models.Model):
 class Product(models.Model):
     name = models.CharField(max_length=255, verbose_name="ชื่อสินค้า")
     category = models.ForeignKey(ProductCategory, on_delete=models.SET_NULL, null=True, blank=True)
+    tags = models.ManyToManyField(ProductTag, blank=True, related_name='products', verbose_name="แท็ก")
     suppliers = models.ManyToManyField(Supplier, through='ProductSupplier', related_name='products')
     has_bom = models.BooleanField(default=False, verbose_name="สินค้าผลิตเอง (BOM)")
     buy_price = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="ราคาทุน")
@@ -107,7 +118,7 @@ class Product(models.Model):
         # ดึงบาร์โค้ดตัวล่าสุด (ลำดับสุดท้ายที่เพิ่มเข้าไป)
         last_entry = self.barcodes.all().last()
         return last_entry.code if last_entry else "-"
-        
+
     class Meta: verbose_name_plural = "A4. รายการสินค้า (Product)"
 
 class ProductBarcode(models.Model):
