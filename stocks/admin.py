@@ -151,6 +151,11 @@ class BOMAdmin(admin.ModelAdmin):
     inlines = [BOMIngredientInline]
     readonly_fields = ('created_by', 'updated_by')
     
+    def total_cost_display(self, obj):
+        try:
+            return f"{float(obj.total_cost):,.2f}"
+        except: return "0.00"
+    
     def save_model(self, request, obj, form, change):
         if not change: obj.created_by = request.user
         obj.updated_by = request.user
