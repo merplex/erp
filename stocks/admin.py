@@ -62,7 +62,7 @@ class PurchaseReceiptLogInline(admin.TabularInline):
             if resolved and 'object_id' in resolved.kwargs:
                 po_id = resolved.kwargs['object_id']
                 # กรองสินค้า: ต้องเป็นสินค้าที่มีอยู่ในรายการ PurchaseItem ของ PO นี้เท่านั้น
-                kwargs["queryset"] = Product.objects.filter(purchaseitem_order_id=po_id).distinct()
+                kwargs["queryset"] = Product.objects.filter(purchaseitem__purchase_order_id=po_id).distinct()
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 class SalesItemInline(admin.TabularInline):
