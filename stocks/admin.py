@@ -98,6 +98,15 @@ class PendingSaleInline(admin.TabularInline):
     def has_add_permission(self, request, obj=None): return False
 
 # --- Inlines ---
+# ---------------------------------------------------------
+# Inline สำหรับจัดการหลายบาร์โค้ดในหน้าเดียว
+# ---------------------------------------------------------
+class ProductBarcodeInline(admin.TabularInline):
+    model = ProductBarcode
+    extra = 1  # จะมีช่องว่างให้เติม 1 ช่องเสมอ และมีปุ่ม + เพิ่มได้เรื่อยๆ
+    verbose_name = "บาร์โค้ดสินค้า"
+    verbose_name_plural = "บาร์โค้ดทั้งหมดของสินค้านี้"
+
 class ProductSupplierInline(admin.TabularInline):
     model = ProductSupplier
     extra = 1
@@ -200,10 +209,10 @@ class SupplierAdmin(admin.ModelAdmin):
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ('name', 'barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit', 'has_bom', 'created_by')
+    list_display = ('name', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit', 'has_bom', 'created_by')
     list_filter = ('category', 'has_bom', 'suppliers')
-    search_fields = ('name', 'barcode')
-    inlines = [ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
+    search_fields = ('name', 'barcodes__code')
+    inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
 
     # 🛠️ จุดที่แก้เพื่อเลิกล่ม: ดัก Error การจัดรูปแบบตัวเลข
@@ -236,6 +245,11 @@ class ProductAdmin(admin.ModelAdmin):
         return "-"
 
     get_production_cost.short_description = "ต้นทุนผลิตเฉลี่ย (BOM)"
+
+    def get_latest_barcode(self, obj):
+        # ดึงจาก property ที่เราเขียนไว้ใน models
+        return obj.latest_barcode
+    get_latest_barcode.short_description = "บาร์โค้ด (ล่าสุด)"
 
     def save_model(self, request, obj, form, change):
         if not change:

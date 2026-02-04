@@ -59,7 +59,6 @@ class Customer(models.Model):
 # 4. รายการสินค้า
 class Product(models.Model):
     name = models.CharField(max_length=255, verbose_name="ชื่อสินค้า")
-    barcode = models.CharField(max_length=100, unique=True)
     category = models.ForeignKey(ProductCategory, on_delete=models.SET_NULL, null=True, blank=True)
     suppliers = models.ManyToManyField(Supplier, through='ProductSupplier', related_name='products')
     has_bom = models.BooleanField(default=False, verbose_name="สินค้าผลิตเอง (BOM)")
@@ -102,6 +101,21 @@ class Product(models.Model):
             return self.bom_formulas.count()
         except:
             return 0
+
+    @property
+    def latest_barcode(self):
+        # ดึงบาร์โค้ดตัวล่าสุด (ลำดับสุดท้ายที่เพิ่มเข้าไป)
+        last_entry = self.barcodes.all().last()
+        return last_entry.code if last_entry else "-"
+
+class ProductBarcode(models.Model):
+    product = models.ForeignKey(Product, on_extended_modules=True, related_name='barcodes', on_delete=models.CASCADE)
+    code = models.CharField(max_length=100, unique=True, verbose_name="บาร์โค้ด")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.code
+
 
 
     class Meta: verbose_name_plural = "A4. รายการสินค้า"
