@@ -245,11 +245,48 @@ class ProductionOrderAdmin(admin.ModelAdmin):
 
 @admin.register(StockPlanning)
 class StockPlanningAdmin(admin.ModelAdmin):
-    list_display = ('name', 'stock_quantity', 'show_available')
-    def show_available(self, obj):
-        # เดี๋ยวเรามาใส่สูตรคำนวณในสเต็ปถัดไปนะคะ ตอนนี้โชว์ยอดสต็อกไปก่อน
-        return obj.stock_quantity
-    show_available.short_description = "ยอดพร้อมใช้ (Available)"
+    list_display = ('name', 'category', 'stock_quantity', 'get_pending_in', 'get_pending_out', 'get_pending_prod', 'get_available', 'buy_price')
+    list_filter = ('category', 'suppliers', BuyPriceRangeFilter)
+    search_fields = ('name', 'barcode')
+
+    # --- 1. ฝั่งซื้อ (Pending IN): สั่งแล้วแต่ยังไม่ได้รับ ---
+    def get_pending_in(self, obj):
+        # โลจิก: เอาเฉพาะใบที่ยังไม่ปิด (Confirmed/Received) ถ้า Complete/Cancel แล้วยอดค้างต้องเป็น 0
+        items = obj.purchaseitem_set.filter(purchase_order__status__in=['Confirmed', 'Received'])
+        total = sum((i.quantity_ordered - i.quantity_received) for i in items)
+        return total if total > 0 else 0
+    get_pending_in.short_description = "แผนรับ (PO)"
+
+    # --- 2. ฝั่งขาย (Pending OUT): จองแล้วแต่ยังไม่ได้ส่ง ---
+    def get_pending_out(self, obj):
+        # โลจิก: เอาเฉพาะใบที่ยังไม่ปิด (Confirmed/Shipped) ยอดที่เหลือจะไปลด Available
+        items = obj.salesitem_set.filter(sales_order__status__in=['Confirmed', 'Shipped'])
+        total = sum((i.quantity_ordered - i.quantity_shipped) for i in items)
+        return total if total > 0 else 0
+    get_pending_out.short_description = "แผนส่ง (SO)"
+
+    # --- 3. ฝั่งผลิต (Pending PROD): วางแผนแล้วแต่ยังไม่เสร็จ ---
+    def get_pending_prod(self, obj):
+        # โลจิก: เอาเฉพาะใบที่กำลังผลิต (Started/Finished) 
+        orders = obj.productionorder_set.filter(status__in=['Started', 'Finished'])
+        total = sum((o.quantity_planned - o.quantity_actual) for o in orders)
+        return total if total > 0 else 0
+    get_pending_prod.short_description = "แผนผลิต (PD)"
+
+    # --- 4. ยอดพร้อมใช้จริง (Available) ---
+    def get_available(self, obj):
+        on_hand = obj.stock_quantity
+        p_in = self.get_pending_in(obj)
+        p_out = self.get_pending_out(obj)
+        p_prod = self.get_pending_prod(obj)
+        
+        # สูตร: มีอยู่ + (กำลังมา - กำลังไป) + (กำลังจะผลิตเสร็จ)
+        total = on_hand + p_in - p_out + p_prod
+        
+        color = "red" if total < 0 else "blue"
+        return format_html('<b style="color: {};">{}</b>', color, total)
+    get_available.short_description = "ยอดพร้อมใช้ (Available)"
+
 
 @admin.register(FinanceReport)
 class FinanceReportAdmin(admin.ModelAdmin):
