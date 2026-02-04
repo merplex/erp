@@ -1,7 +1,8 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from django.core.exceptions import ValidationError
-from django.forms import TextInput # อย่าลืม Import ตัวนี้ไว้บนสุดของ admin.py นะคะ
+from django.forms import TextInput
+from django.db import models # เพิ่มเพื่อรองรับ formfield_overrides
 from .models import *
 
 # --- Inlines ---
@@ -9,7 +10,6 @@ class ProductSupplierInline(admin.TabularInline):
     model = ProductSupplier
     extra = 1
 
-# นี่คือส่วนที่เปรมขอ: แสดงสินค้าใต้ Supplier
 class SupplierProductInline(admin.TabularInline):
     model = ProductSupplier
     extra = 1
@@ -21,7 +21,6 @@ class BOMIngredientInline(admin.TabularInline):
     fields = ('material', 'quantity', 'get_unit_display')
     readonly_fields = ('get_unit_display',)
     autocomplete_fields = ['material']
-    model = BOMIngredient
     extra = 1
     def get_unit_display(self, obj): return obj.get_unit
     get_unit_display.short_description = "หน่วย"
@@ -29,18 +28,17 @@ class BOMIngredientInline(admin.TabularInline):
 class PurchaseItemInline(admin.TabularInline):
     model = PurchaseItem
     extra = 1
-    # เพิ่มบรรทัดนี้ครับ ยอดสะสมจะกลายเป็นตัวหนังสือสีเทาที่อ่านได้อย่างเดียว แก้ไม่ได้
     readonly_fields = ('quantity_received',) 
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "product":
-            # หา ID ของใบสั่งซื้อปัจจุบัน
             resolved = request.resolver_match
             if resolved and 'object_id' in resolved.kwargs:
                 po_id = resolved.kwargs['object_id']
-                po = PurchaseOrder.objects.get(pk=po_id)
-                # กรองสินค้า: ต้องเป็นสินค้าที่มีชื่อ Supplier คนนี้ผูกอยู่เท่านั้น
-                kwargs["queryset"] = Product.objects.filter(product_suppliers__supplier=po.supplier)
+                try:
+                    po = PurchaseOrder.objects.get(pk=po_id)
+                    kwargs["queryset"] = Product.objects.filter(product_suppliers__supplier=po.supplier)
+                except: pass
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 class PurchaseReceiptLogInline(admin.TabularInline):
@@ -49,11 +47,8 @@ class PurchaseReceiptLogInline(admin.TabularInline):
     fields = ('product', 'supplier_invoice', 'quantity_received', 'user', 'notes', 'received_date')
     readonly_fields = ('user', 'received_date')
 
-    # --- ส่วนที่เพิ่มเพื่อบีบหน้าจอ ---
     formfield_overrides = {
-        # บีบช่อง Invoice (CharField) ให้เหลือ 1/4 (ประมาณ 100-120px)
         models.CharField: {'widget': TextInput(attrs={'style': 'width: 120px;', 'placeholder': 'เลขใบส่งของ'})},
-        # เปลี่ยนช่อง Note (TextField) จากกล่องใหญ่เป็นบรรทัดเดียว (TextInput) ยาว 80 ตัวอักษร
         models.TextField: {'widget': TextInput(attrs={'style': 'width: 200px;', 'placeholder': 'หมายเหตุ'})},
     }
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
@@ -61,7 +56,7 @@ class PurchaseReceiptLogInline(admin.TabularInline):
             resolved = request.resolver_match
             if resolved and 'object_id' in resolved.kwargs:
                 po_id = resolved.kwargs['object_id']
-                # กรองสินค้า: ต้องเป็นสินค้าที่มีอยู่ในรายการ PurchaseItem ของ PO นี้เท่านั้น
+                # แก้ไขจากขีดเดียวเป็นสองขีด (__) เพื่อป้องกัน FieldError
                 kwargs["queryset"] = Product.objects.filter(purchaseitem__purchase_order_id=po_id).distinct()
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
@@ -75,11 +70,8 @@ class SalesDeliveryLogInline(admin.TabularInline):
     extra = 1
     fields = ('product','shipping_no', 'quantity_shipped', 'user', 'notes','shipped_date')
     readonly_fields = ('user', 'shipped_date')
-    # --- ส่วนที่เพิ่มเพื่อบีบหน้าจอ ---
     formfield_overrides = {
-        # บีบช่อง Invoice (CharField) ให้เหลือ 1/4 (ประมาณ 100-120px)
         models.CharField: {'widget': TextInput(attrs={'style': 'width: 120px;', 'placeholder': 'เลขใบส่งของ'})},
-        # เปลี่ยนช่อง Note (TextField) จากกล่องใหญ่เป็นบรรทัดเดียว (TextInput) ยาว 80 ตัวอักษร
         models.TextField: {'widget': TextInput(attrs={'style': 'width: 200px;', 'placeholder': 'หมายเหตุ'})},
     }
 
@@ -88,7 +80,6 @@ class SalesDeliveryLogInline(admin.TabularInline):
             resolved = request.resolver_match
             if resolved and 'object_id' in resolved.kwargs:
                 so_id = resolved.kwargs['object_id']
-                # กรองสินค้า: ต้องเป็นสินค้าที่มีอยู่ในรายการ SalesItem ของ SO นี้เท่านั้น
                 kwargs["queryset"] = Product.objects.filter(salesitem__sales_order_id=so_id).distinct()
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
@@ -97,11 +88,8 @@ class ProductionLogInline(admin.TabularInline):
     extra = 1
     fields = ('quantity_finished', 'user','notes', 'finished_date')
     readonly_fields = ('user', 'finished_date')
-    # --- ส่วนที่เพิ่มเพื่อบีบหน้าจอ ---
     formfield_overrides = {
-        # บีบช่อง Invoice (CharField) ให้เหลือ 1/4 (ประมาณ 100-120px)
         models.CharField: {'widget': TextInput(attrs={'style': 'width: 120px;', 'placeholder': 'เลขใบส่งของ'})},
-        # เปลี่ยนช่อง Note (TextField) จากกล่องใหญ่เป็นบรรทัดเดียว (TextInput) ยาว 80 ตัวอักษร
         models.TextField: {'widget': TextInput(attrs={'style': 'width: 200px;', 'placeholder': 'หมายเหตุ'})},
     }
 
@@ -116,49 +104,39 @@ def color_diff(diff):
 @admin.register(Supplier)
 class SupplierAdmin(admin.ModelAdmin):
     list_display = ('company_name', 'contact_person', 'type')
-    inlines = [SupplierProductInline] # เพิ่ม Inline ตัวที่เปรมขอที่นี่ค่ะ
+    inlines = [SupplierProductInline]
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ('name', 'barcode', 'buy_price', 'sale_price', 'stock_quantity', 'unit', 'has_bom', 'get_production_cost', 'created_by', 'updated_by')
+    list_display = ('name', 'barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit', 'has_bom', 'created_by')
     list_filter = ('category', 'has_bom', 'suppliers')
     search_fields = ('name', 'barcode')
     inlines = [ProductSupplierInline]
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
 
+    # 🛠️ จุดที่แก้เพื่อเลิกล่ม: ดัก Error การจัดรูปแบบตัวเลข
     def get_production_cost(self, obj):
-        # 1. เช็กจำนวน BOM ก่อน
-        count = obj.bom_count
-        
-        # 2. ถ้ามีการสร้างสูตรไว้แล้ว
-        if count > 0:
-            try:
-                # บังคับให้เป็น float ก่อนใส่ทศนิยม .2f เพื่อป้องกัน ValueError
+        try:
+            count = obj.bom_count
+            if count > 0:
+                # บังคับแปลงเป็น float ก่อนจัดรูปแบบเสมอ
                 avg_cost = float(obj.production_cost_avg)
                 return format_html(
                     '<b style="color: #28a745;">{:,.2f}</b> <span style="color: #666;">({})</span>', 
-                    avg_cost, 
-                    count
+                    avg_cost, count
                 )
-            except (ValueError, TypeError):
-                pass
-
-        # 3. ถ้าติ๊ก BOM แล้วแต่ยังไม่มีสูตร
-        if obj.has_bom:
-            return format_html('<span style="color: #999;">0.00 (0)</span>')
-            
-        # 4. กรณีอื่นๆ ให้โชว์ขีด (ส่งกลับเป็น String ปกติ ไม่ผ่านตัวจัดฟอร์แมตเลข)
-        return "-"
+            if obj.has_bom:
+                return format_html('<span style="color: #999;">0.00 (0)</span>')
+        except (ValueError, TypeError, AttributeError):
+            pass
+        return "-" 
     
     get_production_cost.short_description = "ต้นทุนผลิตเฉลี่ย (BOM)"
 
-    # Logic: บันทึก User อัตโนมัติ (ใครพิมพ์คนนั้นเป็นคนสร้าง/แก้)
     def save_model(self, request, obj, form, change):
         if not change:
             obj.created_by = request.user
-            obj.updated_by = request.user
-        else:
-            obj.updated_by = request.user
+        obj.updated_by = request.user
         super().save_model(request, obj, form, change)
 
 @admin.register(BOM)
@@ -167,44 +145,40 @@ class BOMAdmin(admin.ModelAdmin):
     list_filter = ('product__category',)
     inlines = [BOMIngredientInline]
     readonly_fields = ('created_by', 'updated_by')
-    def total_cost_display(self, obj): return f"{obj.total_cost:,.2f}"
+    def total_cost_display(self, obj):
+        try:
+            return f"{float(obj.total_cost):,.2f}"
+        except: return "0.00"
     
     def save_model(self, request, obj, form, change):
         if not change: obj.created_by = request.user
         obj.updated_by = request.user
         super().save_model(request, obj, form, change)
 
-# 🛡️ ด่านตรวจ: ตอนสร้างสูตร BOM ให้เลือกได้เฉพาะสินค้าที่เปรมติ๊ก "สินค้าผลิตเอง (BOM)" เท่านั้น
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "product":
             kwargs["queryset"] = Product.objects.filter(has_bom=True)
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
-
-# --- กลุ่ม B: Orders ---
 @admin.register(PurchaseOrder)
 class PurchaseOrderAdmin(admin.ModelAdmin):
-    # เพิ่ม 'get_diff' เข้าไปในรายการโชว์หน้า List
     list_display = ('po_number', 'supplier', 'order_date', 'status', 'get_diff')
     list_filter = ('status', 'order_date', 'supplier')
     search_fields = ('po_number', 'invoice_no_supplier', 'supplier__company_name')
     inlines = [PurchaseItemInline, PurchaseReceiptLogInline]
-    readonly_fields = ('created_by', 'status') # เพิ่ม status เข้าไปตรงนี้
+    readonly_fields = ('created_by', 'status')
 
-    # เพิ่มฟังก์ชันนี้เพื่อดึงชื่อคนล็อกอินมาบันทึกอัตโนมัติ
     def save_model(self, request, obj, form, change):
-        if not change: # ถ้าเป็นการสร้างใหม่
+        if not change:
             obj.created_by = request.user
         super().save_model(request, obj, form, change)
 
-    # ฟังก์ชันคำนวณส่วนต่าง (รับจริง vs สั่งซื้อ)
     def get_diff(self, obj):
         ordered = sum(i.quantity_ordered for i in obj.items.all())
         received = sum(l.quantity_received for l in obj.receipt_logs.all())
         return color_diff(received - ordered)
     get_diff.short_description = "สถานะรับของ"
 
-    # ฟังก์ชันบันทึก User อัตโนมัติในตาราง Log
     def save_formset(self, request, form, formset, change):
         instances = formset.save(commit=False)
         for instance in instances:
@@ -218,15 +192,13 @@ class SalesOrderAdmin(admin.ModelAdmin):
     list_filter = ('status', 'order_date', 'customer')
     search_fields = ('so_number', 'po_no_customer', 'customer__company_name')
     inlines = [SalesItemInline, SalesDeliveryLogInline]
-    readonly_fields = ('created_by',) 
+    readonly_fields = ('created_by', 'status') # ล็อค status ให้ระบบจัดการออโต้
     
-    # เพิ่มฟังก์ชันนี้เพื่อดึงชื่อคนล็อกอินมาบันทึกอัตโนมัติ
     def save_model(self, request, obj, form, change):
-        if not change: # ถ้าเป็นการสร้างใหม่
+        if not change:
             obj.created_by = request.user
         super().save_model(request, obj, form, change)
 
-    # คำนวณส่วนต่าง (ส่งจริง vs สั่งขาย)
     def get_diff(self, obj):
         ordered = sum(i.quantity_ordered for i in obj.items.all())
         shipped = sum(l.quantity_shipped for l in obj.delivery_logs.all())
@@ -246,15 +218,13 @@ class ProductionOrderAdmin(admin.ModelAdmin):
     list_filter = ('status', 'order_date', 'product')
     search_fields = ('pd_number', 'product__name')
     inlines = [ProductionLogInline]
-    readonly_fields = ('created_by',) 
+    readonly_fields = ('created_by', 'status') 
 
-    # เพิ่มฟังก์ชันนี้เพื่อดึงชื่อคนล็อกอินมาบันทึกอัตโนมัติ
     def save_model(self, request, obj, form, change):
-        if not change: # ถ้าเป็นการสร้างใหม่
+        if not change:
             obj.created_by = request.user
         super().save_model(request, obj, form, change)
 
-    # คำนวณส่วนต่าง (ผลิตได้จริง vs แผนผลิต)
     def get_diff(self, obj):
         planned = obj.quantity_planned
         actual = obj.quantity_actual
@@ -270,18 +240,9 @@ class ProductionOrderAdmin(admin.ModelAdmin):
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "product":
-            # 🛡️ ด่านตรวจ: กรองเฉพาะสินค้าที่ติ๊ก "สินค้าผลิตเอง (BOM)" เท่านั้น
             kwargs["queryset"] = Product.objects.filter(has_bom=True)
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
-
-# --- กลุ่ม C: Planning & Finance (ตารางแยก) ---
-
-# ==========================================
-# --- กลุ่ม C: Planning & Finance ---
-# ==========================================
-
-# 1. ตัวกรองช่วงราคา (ต้องอยู่ก่อน Admin)
 class BuyPriceRangeFilter(admin.SimpleListFilter):
     title = 'ช่วงราคาทุน'
     parameter_name = 'price_range'
@@ -301,53 +262,43 @@ class BuyPriceRangeFilter(admin.SimpleListFilter):
         if self.value() == '1001-plus': return queryset.filter(buy_price__gt=1000)
         return queryset
 
-# 2. หน้าจอวางแผนสต็อก (C1)
 @admin.register(StockPlanning)
 class StockPlanningAdmin(admin.ModelAdmin):
     list_display = ('name', 'category', 'stock_quantity', 'get_pending_in', 'get_pending_out', 'get_pending_prod', 'get_available', 'buy_price')
     list_filter = ('category', 'suppliers', BuyPriceRangeFilter)
     search_fields = ('name', 'barcode')
 
-    # ฝั่งซื้อ: สั่งแล้วแต่ยังไม่ได้รับ (Outstanding)
     def get_pending_in(self, obj):
         items = obj.purchaseitem_set.filter(purchase_order__status__in=['Confirmed', 'Received'])
         total = sum((i.quantity_ordered - i.quantity_received) for i in items)
         return total if total > 0 else 0
     get_pending_in.short_description = "แผนรับ (PO)"
 
-    # ฝั่งขาย: จองแล้วแต่ยังไม่ได้ส่ง (Outstanding)
     def get_pending_out(self, obj):
         items = obj.salesitem_set.filter(sales_order__status__in=['Confirmed', 'Shipped'])
         total = sum((i.quantity_ordered - i.quantity_shipped) for i in items)
         return total if total > 0 else 0
     get_pending_out.short_description = "แผนส่ง (SO)"
 
-    # ฝั่งผลิต: วางแผนแล้วแต่ยังไม่เสร็จ (Outstanding)
     def get_pending_prod(self, obj):
         orders = obj.productionorder_set.filter(status__in=['Started', 'Finished'])
         total = sum((o.quantity_planned - o.quantity_actual) for o in orders)
         return total if total > 0 else 0
     get_pending_prod.short_description = "แผนผลิต (PD)"
 
-    # ยอดพร้อมใช้จริง (Available)
     def get_available(self, obj):
         on_hand = obj.stock_quantity
         p_in = self.get_pending_in(obj)
         p_out = self.get_pending_out(obj)
         p_prod = self.get_pending_prod(obj)
         total = on_hand + p_in - p_out + p_prod
-        
         color = "red" if total < 0 else "blue"
         return format_html('<b style="color: {};">{}</b>', color, total)
     get_available.short_description = "พร้อมขาย (Available)"
 
-
 @admin.register(FinanceReport)
 class FinanceReportAdmin(admin.ModelAdmin):
     list_display = ('po_number', 'supplier', 'order_date', 'status')
-
-# --- ลงทะเบียนตารางที่เหลือ ---
-# --- ลงทะเบียนที่เหลือ (ต้องมีแค่ตัวที่ไม่ได้ใช้ @admin.register ข้างบน) ---
 
 admin.site.register(ProductCategory)
 admin.site.register(Customer)
