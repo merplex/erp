@@ -141,7 +141,7 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
     list_filter = ('status', 'order_date', 'supplier')
     search_fields = ('po_number', 'invoice_no_supplier', 'supplier__company_name')
     inlines = [PurchaseItemInline, PurchaseReceiptLogInline]
-    readonly_fields = ('created_by',) 
+    readonly_fields = ('created_by', 'status') # เพิ่ม status เข้าไปตรงนี้
 
     # เพิ่มฟังก์ชันนี้เพื่อดึงชื่อคนล็อกอินมาบันทึกอัตโนมัติ
     def save_model(self, request, obj, form, change):

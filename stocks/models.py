@@ -1,6 +1,8 @@
 from django.db import models
 from django.utils import timezone
 from django.contrib.auth.models import User
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
 import datetime
 
 # --- ฟังก์ชันช่วยรันเลขที่เอกสาร ---
@@ -130,6 +132,13 @@ class PurchaseOrder(models.Model):
         super().save(*args, **kwargs)
     class Meta: verbose_name_plural = "B1. ใบสั่งซื้อ (Purchase)"
 
+    def delete(self, *args, **kwargs):
+        if self.receipt_logs.exists():
+            self.status = 'Cancelled' # เปลี่ยนเป็น 'ยกเลิก'
+            self.save()
+        else:
+            super().delete(*args, **kwargs) # ลบทิ้งจริงๆ ถ้ายังไม่เคยรับของ
+
 class PurchaseItem(models.Model):
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
@@ -147,15 +156,41 @@ class PurchaseReceiptLog(models.Model):
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก") # ออโต้
 
     def save(self, *args, **kwargs):
-        if not self.pk:
-            # สมองกล: บวกสต็อกจริง
+        is_new = self.pk is None
+        if is_new:
+            # 1. สมองกล: บวกสต็อกจริง
             self.product.stock_quantity += self.quantity_received
             self.product.save()
-            # สมองกล: สะสมยอดในใบ PO
+            # 2. สมองกล: สะสมยอดในใบ PO
             item = PurchaseItem.objects.get(purchase_order=self.purchase_order, product=self.product)
             item.quantity_received += self.quantity_received
             item.save()
+            
+            # 3. 🤖 ออโต้สถานะ: เปลี่ยนเป็น 'รับบางส่วน' ทันทีที่มีการรับครั้งแรก
+            po = self.purchase_order
+            if po.status in ['Draft', 'Confirmed']:
+                po.status = 'Received' # 'รับบางส่วน'
+                po.save()
         super().save(*args, **kwargs)
+    # 🛠️ ระบบจัดการเมื่อ "ลบรายการรับสินค้า" (คืนสต็อกและถอยสถานะ)
+@receiver(post_delete, sender=PurchaseReceiptLog)
+def handle_receipt_deletion(sender, instance, **kwargs):
+    # 1. คืนสต็อกสินค้า
+    instance.product.stock_quantity -= instance.quantity_received
+    instance.product.save()
+    # 2. หักยอดรับสะสมใน PO
+    try:
+        item = PurchaseItem.objects.get(purchase_order=instance.purchase_order, product=instance.product)
+        item.quantity_received -= instance.quantity_received
+        item.save()
+    except: pass
+    
+        # 3. 🤖 ออโต้สถานะ: ถ้าลบจนไม่เหลือประวัติรับเลย ให้กลับไปเป็น 'ยืนยัน'
+        po = instance.purchase_order
+            if not po.receipt_logs.exists() and po.status == 'Received':
+        po.status = 'Confirmed' # 'ยืนยัน'
+        po.save()
+
 
 # 7. ระบบเอกสารสั่งขาย
 class SalesOrder(models.Model):
