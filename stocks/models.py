@@ -107,6 +107,8 @@ class Product(models.Model):
         # ดึงบาร์โค้ดตัวล่าสุด (ลำดับสุดท้ายที่เพิ่มเข้าไป)
         last_entry = self.barcodes.all().last()
         return last_entry.code if last_entry else "-"
+        
+    class Meta: verbose_name_plural = "A4. รายการสินค้า (Product)"
 
 class ProductBarcode(models.Model):
     product = models.ForeignKey(Product, related_name='barcodes', on_delete=models.CASCADE)
@@ -116,7 +118,7 @@ class ProductBarcode(models.Model):
     def __str__(self):
         return self.code
 
-    class Meta: verbose_name_plural = "A4. รายการสินค้า"
+
 
 class ProductSupplier(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='product_suppliers')
