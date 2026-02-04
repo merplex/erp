@@ -135,20 +135,18 @@ class ProductAdmin(admin.ModelAdmin):
             obj.updated_by = request.user
         super().save_model(request, obj, form, change)
 
-    # Logic: ตรวจสอบความสัมพันธ์ BOM กับ Lead Time
-    def clean_fields(self, request, obj):
-        if obj.has_bom and (obj.production_lead_time is None or obj.production_lead_time <= 0):
-            raise ValidationError({'production_lead_time': "เนื่องจากเป็นสินค้า BOM กรุณาระบุระยะเวลาผลิตด้วยค่ะ"})
-        return super().clean_fields(request, obj)
-
     # Logic: แสดงต้นทุนผลิต (ถ้ามี BOM)
     def get_production_cost(self, obj):
-        cost = obj.production_cost
-        if cost > 0:
-            return format_html('<b style="color: #28a745;">{:,.2f}</b>', cost)
-        return "-"
+        try:
+            # ดึงค่ามาแปลงเป็น float ก่อนจัดฟอร์แมตเพื่อป้องกัน ValueError
+            cost = float(obj.production_cost)
+            if cost > 0:
+                # ใช้ฟอร์แมตแบบปลอดภัย
+                return format_html('<b style="color: #28a745;">{:,.2f}</b>', cost)
+        except (TypeError, ValueError):
+            pass
+        return "-" # ถ้าเป็น 0 หรือ Error ให้โชว์ขีดแทน เว็บจะได้ไม่ล่ม
     get_production_cost.short_description = "ต้นทุนผลิต (BOM)"
-
 
 @admin.register(BOM)
 class BOMAdmin(admin.ModelAdmin):

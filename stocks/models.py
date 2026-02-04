@@ -78,12 +78,18 @@ class Product(models.Model):
         if not self.sale_price: self.sale_price = self.buy_price
         super().save(*args, **kwargs)
     def __str__(self): return self.name
+
     @property
     def production_cost(self):
-        # โลจิก: ถ้าติ๊ก has_bom และมีสูตร BOM อยู่จริง ให้ไปดึง total_cost มา
-        if self.has_bom and hasattr(self, 'bom_formula'):
-            return self.bom_formula.total_cost
-        return 0 # ถ้าไม่มี BOM ให้เป็น 0
+        try:
+            # เช็กว่าติ๊ก has_bom และมีสูตร BOM จริงไหม
+            if self.has_bom and hasattr(self, 'bom_formula'):
+                cost = self.bom_formula.total_cost
+                return float(cost) if cost else 0.0
+        except Exception:
+            return 0.0
+        return 0.0
+
     class Meta: verbose_name_plural = "A4. รายการสินค้า"
 
 class ProductSupplier(models.Model):
