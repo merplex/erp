@@ -67,12 +67,8 @@ class Product(models.Model):
     sale_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, verbose_name="ราคาขาย")
     unit = models.CharField(max_length=50, default="ชิ้น", verbose_name="หน่วย")
     stock_quantity = models.IntegerField(default=0, verbose_name="สต็อกปัจจุบัน")
-    
-    # แก้ไขให้ blank=True เพื่อให้ไม่ต้องกรอกในกรณีไม่มี BOM
     production_lead_time = models.IntegerField(default=0, blank=True, null=True, verbose_name="ระยะเวลาผลิต (วัน)")
     delivery_lead_time = models.IntegerField(default=0, verbose_name="ระยะเวลาส่งมอบ (วัน)")
-    
-    # ระบบ User Logging (Auto by Admin)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="prod_created")
     updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="prod_updated")
     created_at = models.DateTimeField(auto_now_add=True, null=True)
@@ -84,7 +80,6 @@ class Product(models.Model):
     def __str__(self): return self.name
     class Meta: verbose_name_plural = "A4. รายการสินค้า"
 
-# ตารางเชื่อมสินค้ากับ Supplier หลายเจ้า
 class ProductSupplier(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='product_suppliers')
     supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE, verbose_name="ผู้จำหน่าย")
@@ -134,10 +129,10 @@ class PurchaseOrder(models.Model):
 
     def delete(self, *args, **kwargs):
         if self.receipt_logs.exists():
-            self.status = 'Cancelled' # เปลี่ยนเป็น 'ยกเลิก'
+            self.status = 'Cancelled'
             self.save()
         else:
-            super().delete(*args, **kwargs) # ลบทิ้งจริงๆ ถ้ายังไม่เคยรับของ
+            super().delete(*args, **kwargs)
 
 class PurchaseItem(models.Model):
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='items')
@@ -145,36 +140,30 @@ class PurchaseItem(models.Model):
     quantity_ordered = models.PositiveIntegerField(verbose_name="จำนวนที่สั่งซื้อ")
     quantity_received = models.PositiveIntegerField(default=0, verbose_name="รับสะสม")
 
-# --- 6. ระบบรับของเข้า (Partial Receipt) ---
 class PurchaseReceiptLog(models.Model):
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='receipt_logs')
     product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้าที่รับ")
     quantity_received = models.PositiveIntegerField(verbose_name="จำนวนที่รับครั้งนี้")
-    supplier_invoice = models.CharField(max_length=100, blank=True, verbose_name="เลข Invoice/ใบส่งของ Supplier") # กรอกเอง
-    notes = models.TextField(blank=True, verbose_name="หมายเหตุ") # กรอกเอง
-    received_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่บันทึก") # ออโต้
-    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก") # ออโต้
+    supplier_invoice = models.CharField(max_length=100, blank=True, verbose_name="เลข Invoice/ใบส่งของ Supplier")
+    notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
+    received_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่บันทึก")
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
 
     def save(self, *args, **kwargs):
         is_new = self.pk is None
         if is_new:
-            # 1. สมองกล: บวกสต็อกจริง
             self.product.stock_quantity += self.quantity_received
             self.product.save()
-            # 2. สมองกล: สะสมยอดในใบ PO
             item = PurchaseItem.objects.get(purchase_order=self.purchase_order, product=self.product)
             item.quantity_received += self.quantity_received
             item.save()
-            
-            # 3. 🤖 ออโต้สถานะ: เปลี่ยนเป็น 'รับบางส่วน' ทันทีที่มีการรับครั้งแรก
             po = self.purchase_order
             if po.status in ['Draft', 'Confirmed']:
-                po.status = 'Received' # 'รับบางส่วน'
+                po.status = 'Received'
                 po.save()
         super().save(*args, **kwargs)
-    # 🛠️ ระบบจัดการเมื่อ "ลบรายการรับสินค้า" (คืนสต็อกและถอยสถานะ)
-    
-# --- ย้ายออกมาอยู่นอก Class (ชิดซ้ายสุด) ---
+
+# --- ย้ายออกมาอยู่นอก Class และจัดแนวแถวให้ถูกต้อง ---
 @receiver(post_delete, sender=PurchaseReceiptLog)
 def handle_receipt_deletion(sender, instance, **kwargs):
     # 1. คืนสต็อกสินค้า
@@ -193,7 +182,6 @@ def handle_receipt_deletion(sender, instance, **kwargs):
     if not po.receipt_logs.exists() and po.status == 'Received':
         po.status = 'Confirmed'
         po.save()
-
 
 # 7. ระบบเอกสารสั่งขาย
 class SalesOrder(models.Model):
@@ -216,22 +204,19 @@ class SalesItem(models.Model):
     quantity_ordered = models.PositiveIntegerField(verbose_name="จำนวนที่สั่งขาย")
     quantity_shipped = models.PositiveIntegerField(default=0, verbose_name="ส่งสะสม")
 
-# --- 7. ระบบส่งของขาย (Partial Delivery) ---
 class SalesDeliveryLog(models.Model):
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='delivery_logs')
     product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้าที่ส่ง")
     quantity_shipped = models.PositiveIntegerField(verbose_name="จำนวนที่ส่งครั้งนี้")
-    shipping_no = models.CharField(max_length=100, blank=True, verbose_name="เลขใบขนส่ง/Invoice ของเรา") # กรอกเอง
-    notes = models.TextField(blank=True, verbose_name="หมายเหตุ") # กรอกเอง
-    shipped_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่ส่ง") # ออโต้
-    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก") # ออโต้
+    shipping_no = models.CharField(max_length=100, blank=True, verbose_name="เลขใบขนส่ง/Invoice ของเรา")
+    notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
+    shipped_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่ส่ง")
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
 
     def save(self, *args, **kwargs):
         if not self.pk:
-            # สมองกล: ลดสต็อกจริง
             self.product.stock_quantity -= self.quantity_shipped
             self.product.save()
-            # สมองกล: สะสมยอดในใบ SO
             item = SalesItem.objects.get(sales_order=self.sales_order, product=self.product)
             item.quantity_shipped += self.quantity_shipped
             item.save()
@@ -253,26 +238,22 @@ class ProductionOrder(models.Model):
         super().save(*args, **kwargs)
     class Meta: verbose_name_plural = "B3. ใบสั่งผลิต (Production)"
 
-# --- 8. ระบบผลิตเข้า (Partial Production) ---
 class ProductionLog(models.Model):
     production_order = models.ForeignKey(ProductionOrder, on_delete=models.CASCADE, related_name='production_logs')
     quantity_finished = models.PositiveIntegerField(verbose_name="จำนวนที่เสร็จครั้งนี้")
-    notes = models.TextField(blank=True, verbose_name="หมายเหตุ") # กรอกเอง
-    finished_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่เสร็จ") # ออโต้
-    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก") # ออโต้
+    notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
+    finished_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่เสร็จ")
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
 
     def save(self, *args, **kwargs):
         if not self.pk:
             prod_order = self.production_order
-            # สมองกล: เพิ่มสต็อกสินค้าสำเร็จรูป
             prod_order.product.stock_quantity += self.quantity_finished
             prod_order.product.save()
-            # สมองกล: ตัดวัตถุดิบตาม BOM (ถ้ามี)
             if prod_order.product.has_bom:
                 for ing in prod_order.product.bom_formula.ingredients.all():
                     ing.material.stock_quantity -= (ing.quantity * self.quantity_finished)
                     ing.material.save()
-            # สมองกล: สะสมยอดผลิตจริง
             prod_order.quantity_actual += self.quantity_finished
             prod_order.save()
         super().save(*args, **kwargs)
@@ -286,4 +267,3 @@ class FinanceReport(PurchaseOrder):
     class Meta:
         proxy = True
         verbose_name_plural = "C2. รายงานสรุปการเงิน"
-
