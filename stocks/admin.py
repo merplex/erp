@@ -4,6 +4,7 @@ from django.core.exceptions import ValidationError
 from django.forms import TextInput
 from django.db import models # เพิ่มเพื่อรองรับ formfield_overrides
 from .models import *
+from django import forms # ✅ เพิ่มบรรทัดนี้ครับ ทำระบบ tag checkbox
 from django.db.models import F
 from django.utils.safestring import mark_safe # ✅ ต้องมีบรรทัดนี้ครับ
 from django.utils.html import format_html
@@ -223,20 +224,32 @@ class ProductAdmin(admin.ModelAdmin):
     search_fields = ('name', 'barcodes__code','tags__name')
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
+    
+    class Media:
+        css = {
+            'all': ('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css',)
+        }
+        # ใส่สไตล์เพิ่มเติมให้ตัว Checkbox ดูห่างกันและอ่านง่าย
+        js = []
 
-    filter_horizontal = ('tags',) 
-    # ใน class ProductAdmin(admin.ModelAdmin):
+    formfield_overrides = {
+        models.ManyToManyField: {
+            'widget': forms.CheckboxSelectMultiple(attrs={
+                'style': 'display: flex; flex-wrap: wrap; gap: 15px; list-style: none; padding: 0;'
+            })
+        },
+    }
 
+    # ✅ 3. สั่งเรียงลำดับความนิยมเหมือนเดิม แต่คราวนี้จะขึ้นในรูปแบบ Checkbox
     def formfield_for_manytomany(self, db_field, request, **kwargs):
         if db_field.name == "tags":
-            # ✅ เรียงตามจำนวนสินค้าที่ใช้ (บ่อยสุดขึ้นก่อน) 
-            # ถ้าคะแนนเท่ากัน ให้เอาตัวที่เพิ่งสร้างล่าสุด (id เยอะสุด) ขึ้นก่อน
             from django.db.models import Count
             kwargs["queryset"] = ProductTag.objects.annotate(
                 num_products=Count('products')
             ).order_by('-num_products', '-id')
         return super().formfield_for_manytomany(db_field, request, **kwargs)
 
+    # ... (ส่วน display_tags และ Inlines อื่นๆ เหมือนเดิม) ...
     def display_tags(self, obj):
         tags = obj.tags.all()
         if not tags: return "-"
