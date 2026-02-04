@@ -84,23 +84,14 @@ class Product(models.Model):
         if not self.has_bom:
             return 0.0
         try:
-            # ดึงผ่าน related_name 'bom_formulas' ที่เราตั้งไว้ใน BOM model
             boms = self.bom_formulas.all()
             if boms.exists():
-                total = sum(float(bom.total_cost) for bom in boms)
-                return total / boms.count()
+                total_sum = sum(float(bom.total_cost) for bom in boms)
+                # ส่งค่าเป็นตัวเลข float ธรรมดา ห้ามมี html
+                return float(total_sum / boms.count()) 
         except:
             return 0.0
         return 0.0
-
-    @property
-    def bom_count(self):
-        if not self.has_bom:
-            return 0
-        try:
-            return self.bom_formulas.count()
-        except:
-            return 0
 
     class Meta: verbose_name_plural = "A4. รายการสินค้า"
 

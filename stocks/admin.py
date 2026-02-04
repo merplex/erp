@@ -117,29 +117,33 @@ class ProductAdmin(admin.ModelAdmin):
     # 🛠️ จุดที่แก้เพื่อเลิกล่ม: ดัก Error การจัดรูปแบบตัวเลข
     def get_production_cost(self, obj):
         try:
-            # 1. ลองดึงค่า BOM Count (ถ้าดึงไม่ได้ ให้มันฟ้อง Error ตรงนี้เลย)
+            # 1. ดึงค่าจากโมเดล
             count = getattr(obj, 'bom_count', 0)
-            
-            # 2. ถ้ามีสูตร BOM
+            raw_cost = getattr(obj, 'production_cost_avg', 0)
+
+            # 2. แปลงเป็นตัวเลขให้ชัวร์ที่สุด
+            if raw_cost is None or raw_cost == "":
+                avg_cost = 0.0
+            else:
+                # แปลงค่า (เผื่อมันหลุดมาเป็น String)
+                avg_cost = float(raw_cost)
+
+            # 3. แสดงผลเมื่อมีข้อมูล
             if count > 0:
-                # ลองแปลงเป็น Float (ถ้าค่ามาแปลกๆ มันจะกระโดดไป except)
-                avg_cost = float(obj.production_cost_avg)
                 return format_html(
                     '<b style="color: #28a745;">{:,.2f}</b> <span style="color: #666;">({})</span>', 
                     avg_cost, count
                 )
             
-            # 3. ถ้าติ๊ก BOM แล้วแต่ยังไม่มีสูตร
+            # 4. กรณีไม่มีสูตร
             if getattr(obj, 'has_bom', False):
                 return format_html('<span style="color: #999;">0.00 (0)</span>')
-                
-            return "-"
 
-        except Exception as e:
-            # 🚨 ถ้าพัง ให้โชว์ Error สีแดงออกมาในช่องนั้นเลย (เว็บจะไม่ล่ม)
-            return format_html('<span style="color: red; font-size: 10px;">Err: {}</span>', str(e))
-    
-    get_production_cost.short_description = "ต้นทุนผลิต (BOM)"
+        except Exception:
+            pass # ถ้าพังจริงๆ ให้เงียบไว้แล้วไปโชว์ขีด
+
+        return "-"
+    get_production_cost.short_description = "ต้นทุนผลิตเฉลี่ย (BOM)"
 
     def save_model(self, request, obj, form, change):
         if not change:
