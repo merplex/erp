@@ -39,7 +39,8 @@ class PurchaseItemInline(admin.TabularInline):
 class PurchaseReceiptLogInline(admin.TabularInline):
     model = PurchaseReceiptLog
     extra = 1
-    readonly_fields = ('received_date', 'user')
+    fields = ('product', 'supplier_invoice','quantity_received', 'user','note', 'received_date')
+    readonly_fields = ('user', 'received_date')
 
 class SalesItemInline(admin.TabularInline):
     model = SalesItem
@@ -48,12 +49,14 @@ class SalesItemInline(admin.TabularInline):
 class SalesDeliveryLogInline(admin.TabularInline):
     model = SalesDeliveryLog
     extra = 1
-    readonly_fields = ('shipped_date', 'user')
+    fields = ('product','shipping_no', 'quantity_shipped', 'user', 'note','shipped_date')
+    readonly_fields = ('user', 'shipped_date')
 
 class ProductionLogInline(admin.TabularInline):
     model = ProductionLog
     extra = 1
-    readonly_fields = ('finished_date', 'user')
+    fields = ('quantity_finished', 'user','note', 'finished_date')
+    readonly_fields = ('user', 'finished_date')
 
 # --- Helper ---
 def color_diff(diff):
@@ -105,38 +108,70 @@ class BOMAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
 # --- กลุ่ม B: Orders ---
-
 @admin.register(PurchaseOrder)
 class PurchaseOrderAdmin(admin.ModelAdmin):
+    # เพิ่ม 'get_diff' เข้าไปในรายการโชว์หน้า List
     list_display = ('po_number', 'supplier', 'order_date', 'status', 'get_diff')
     list_filter = ('status', 'order_date', 'supplier')
-    search_fields = ('po_number', 'invoice_no_supplier')
+    search_fields = ('po_number', 'invoice_no_supplier', 'supplier__company_name')
     inlines = [PurchaseItemInline, PurchaseReceiptLogInline]
+
+    # ฟังก์ชันคำนวณส่วนต่าง (รับจริง vs สั่งซื้อ)
     def get_diff(self, obj):
         ordered = sum(i.quantity_ordered for i in obj.items.all())
         received = sum(l.quantity_received for l in obj.receipt_logs.all())
         return color_diff(received - ordered)
-    get_diff.short_description = "ยอดต่างรับเข้า"
+    get_diff.short_description = "สถานะรับของ"
+
+    # ฟังก์ชันบันทึก User อัตโนมัติในตาราง Log
+    def save_formset(self, request, form, formset, change):
+        instances = formset.save(commit=False)
+        for instance in instances:
+            if hasattr(instance, 'user'): instance.user = request.user
+            instance.save()
+        formset.save_m2m()
 
 @admin.register(SalesOrder)
 class SalesOrderAdmin(admin.ModelAdmin):
     list_display = ('so_number', 'customer', 'order_date', 'status', 'get_diff')
     list_filter = ('status', 'order_date', 'customer')
+    search_fields = ('so_number', 'po_no_customer', 'customer__company_name')
     inlines = [SalesItemInline, SalesDeliveryLogInline]
+
+    # คำนวณส่วนต่าง (ส่งจริง vs สั่งขาย)
     def get_diff(self, obj):
         ordered = sum(i.quantity_ordered for i in obj.items.all())
         shipped = sum(l.quantity_shipped for l in obj.delivery_logs.all())
         return color_diff(shipped - ordered)
+    get_diff.short_description = "สถานะส่งของ"
+
+    def save_formset(self, request, form, formset, change):
+        instances = formset.save(commit=False)
+        for instance in instances:
+            if hasattr(instance, 'user'): instance.user = request.user
+            instance.save()
+        formset.save_m2m()
 
 @admin.register(ProductionOrder)
 class ProductionOrderAdmin(admin.ModelAdmin):
-    list_display = ('pd_number', 'product', 'order_date', 'status', 'get_diff')
+    list_display = ('pd_number', 'product', 'quantity_planned', 'quantity_actual', 'get_diff', 'status')
     list_filter = ('status', 'order_date', 'product')
+    search_fields = ('pd_number', 'product__name')
     inlines = [ProductionLogInline]
+
+    # คำนวณส่วนต่าง (ผลิตได้จริง vs แผนผลิต)
     def get_diff(self, obj):
         planned = obj.quantity_planned
-        actual = sum(l.quantity_finished for l in obj.production_logs.all())
+        actual = obj.quantity_actual
         return color_diff(actual - planned)
+    get_diff.short_description = "สถานะผลิต"
+
+    def save_formset(self, request, form, formset, change):
+        instances = formset.save(commit=False)
+        for instance in instances:
+            if hasattr(instance, 'user'): instance.user = request.user
+            instance.save()
+        formset.save_m2m()
 
 # --- กลุ่ม C: Planning & Finance (ตารางแยก) ---
 

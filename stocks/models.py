@@ -136,12 +136,26 @@ class PurchaseItem(models.Model):
     quantity_ordered = models.PositiveIntegerField(verbose_name="จำนวนที่สั่งซื้อ")
     quantity_received = models.PositiveIntegerField(default=0, verbose_name="รับสะสม")
 
+# --- 6. ระบบรับของเข้า (Partial Receipt) ---
 class PurchaseReceiptLog(models.Model):
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='receipt_logs')
-    received_date = models.DateTimeField(auto_now_add=True)
-    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้าที่รับ")
     quantity_received = models.PositiveIntegerField(verbose_name="จำนวนที่รับครั้งนี้")
-    notes = models.TextField(blank=True)
+    supplier_invoice = models.CharField(max_length=100, blank=True, verbose_name="เลข Invoice/ใบส่งของ Supplier") # กรอกเอง
+    notes = models.TextField(blank=True, verbose_name="หมายเหตุ") # กรอกเอง
+    received_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่บันทึก") # ออโต้
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก") # ออโต้
+
+    def save(self, *args, **kwargs):
+        if not self.pk:
+            # สมองกล: บวกสต็อกจริง
+            self.product.stock_quantity += self.quantity_received
+            self.product.save()
+            # สมองกล: สะสมยอดในใบ PO
+            item = PurchaseItem.objects.get(purchase_order=self.purchase_order, product=self.product)
+            item.quantity_received += self.quantity_received
+            item.save()
+        super().save(*args, **kwargs)
 
 # 7. ระบบเอกสารสั่งขาย
 class SalesOrder(models.Model):
@@ -164,12 +178,26 @@ class SalesItem(models.Model):
     quantity_ordered = models.PositiveIntegerField(verbose_name="จำนวนที่สั่งขาย")
     quantity_shipped = models.PositiveIntegerField(default=0, verbose_name="ส่งสะสม")
 
+# --- 7. ระบบส่งของขาย (Partial Delivery) ---
 class SalesDeliveryLog(models.Model):
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='delivery_logs')
-    shipped_date = models.DateTimeField(auto_now_add=True)
-    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้าที่ส่ง")
     quantity_shipped = models.PositiveIntegerField(verbose_name="จำนวนที่ส่งครั้งนี้")
-    notes = models.TextField(blank=True)
+    shipping_no = models.CharField(max_length=100, blank=True, verbose_name="เลขใบขนส่ง/Invoice ของเรา") # กรอกเอง
+    notes = models.TextField(blank=True, verbose_name="หมายเหตุ") # กรอกเอง
+    shipped_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่ส่ง") # ออโต้
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก") # ออโต้
+
+    def save(self, *args, **kwargs):
+        if not self.pk:
+            # สมองกล: ลดสต็อกจริง
+            self.product.stock_quantity -= self.quantity_shipped
+            self.product.save()
+            # สมองกล: สะสมยอดในใบ SO
+            item = SalesItem.objects.get(sales_order=self.sales_order, product=self.product)
+            item.quantity_shipped += self.quantity_shipped
+            item.save()
+        super().save(*args, **kwargs)
 
 # 8. ระบบเอกสารสั่งผลิต
 class ProductionOrder(models.Model):
@@ -187,12 +215,29 @@ class ProductionOrder(models.Model):
         super().save(*args, **kwargs)
     class Meta: verbose_name_plural = "B3. ใบสั่งผลิต (Production)"
 
+# --- 8. ระบบผลิตเข้า (Partial Production) ---
 class ProductionLog(models.Model):
     production_order = models.ForeignKey(ProductionOrder, on_delete=models.CASCADE, related_name='production_logs')
-    finished_date = models.DateTimeField(auto_now_add=True)
-    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
     quantity_finished = models.PositiveIntegerField(verbose_name="จำนวนที่เสร็จครั้งนี้")
-    notes = models.TextField(blank=True)
+    notes = models.TextField(blank=True, verbose_name="หมายเหตุ") # กรอกเอง
+    finished_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่เสร็จ") # ออโต้
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก") # ออโต้
+
+    def save(self, *args, **kwargs):
+        if not self.pk:
+            prod_order = self.production_order
+            # สมองกล: เพิ่มสต็อกสินค้าสำเร็จรูป
+            prod_order.product.stock_quantity += self.quantity_finished
+            prod_order.product.save()
+            # สมองกล: ตัดวัตถุดิบตาม BOM (ถ้ามี)
+            if prod_order.product.has_bom:
+                for ing in prod_order.product.bom_formula.ingredients.all():
+                    ing.material.stock_quantity -= (ing.quantity * self.quantity_finished)
+                    ing.material.save()
+            # สมองกล: สะสมยอดผลิตจริง
+            prod_order.quantity_actual += self.quantity_finished
+            prod_order.save()
+        super().save(*args, **kwargs)
 
 class StockPlanning(Product):
     class Meta:
