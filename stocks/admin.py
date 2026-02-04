@@ -7,6 +7,19 @@ from .models import *
 from django.db.models import F
 from django.utils.html import format_html
 
+# ---------------------------------------------------------
+# Inline แสดงรายการสินค้าในหน้ากลุ่มสินค้า (Category)
+# ---------------------------------------------------------
+class ProductInCategoryInline(admin.TabularInline):
+    model = Product
+    fields = ['name', 'barcode', 'buy_price', 'sale_price', 'stock_quantity', 'unit']
+    readonly_fields = fields # ให้ดูอย่างเดียว ไม่ให้แก้จากหน้านี้เพื่อความปลอดภัย
+    extra = 0
+    can_delete = False
+    verbose_name = "📦 สินค้าในกลุ่มนี้"
+    verbose_name_plural = "📦 รายการสินค้าทั้งหมดในกลุ่ม"
+
+    def has_add_permission(self, request, obj=None): return False
 
 # ---------------------------------------------------------
 # 1. รายการสั่งซื้อ (ค้างรับ) -> ใช้ po_number และติดลบ
@@ -392,5 +405,10 @@ class StockPlanningAdmin(admin.ModelAdmin):
 class FinanceReportAdmin(admin.ModelAdmin):
     list_display = ('po_number', 'supplier', 'order_date', 'status')
 
-admin.site.register(ProductCategory)
+@admin.register(ProductCategory)
+class ProductCategoryAdmin(admin.ModelAdmin):
+    list_display = ('name',)
+    search_fields = ('name',)
+    inlines = [ProductInCategoryInline] # แปะ Inline เข้าไป
+
 admin.site.register(Customer)
