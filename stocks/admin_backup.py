@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from django.core.exceptions import ValidationError
+from django.forms import TextInput # อย่าลืม Import ตัวนี้ไว้บนสุดของ admin.py นะคะ
 from .models import *
 
 # --- Inlines ---
@@ -28,6 +29,9 @@ class BOMIngredientInline(admin.TabularInline):
 class PurchaseItemInline(admin.TabularInline):
     model = PurchaseItem
     extra = 1
+    # เพิ่มบรรทัดนี้ครับ ยอดสะสมจะกลายเป็นตัวหนังสือสีเทาที่อ่านได้อย่างเดียว แก้ไม่ได้
+    readonly_fields = ('quantity_received',) 
+
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "product":
             parent_id = request.resolver_match.kwargs.get('object_id')
@@ -39,21 +43,47 @@ class PurchaseItemInline(admin.TabularInline):
 class PurchaseReceiptLogInline(admin.TabularInline):
     model = PurchaseReceiptLog
     extra = 1
-    readonly_fields = ('received_date', 'user')
+    fields = ('product', 'supplier_invoice', 'quantity_received', 'user', 'notes', 'received_date')
+    readonly_fields = ('user', 'received_date')
+
+    # --- ส่วนที่เพิ่มเพื่อบีบหน้าจอ ---
+    formfield_overrides = {
+        # บีบช่อง Invoice (CharField) ให้เหลือ 1/4 (ประมาณ 100-120px)
+        models.CharField: {'widget': TextInput(attrs={'style': 'width: 120px;', 'placeholder': 'เลขใบส่งของ'})},
+        # เปลี่ยนช่อง Note (TextField) จากกล่องใหญ่เป็นบรรทัดเดียว (TextInput) ยาว 80 ตัวอักษร
+        models.TextField: {'widget': TextInput(attrs={'style': 'width: 200px;', 'placeholder': 'หมายเหตุ'})},
+    }
 
 class SalesItemInline(admin.TabularInline):
     model = SalesItem
     extra = 1
+    readonly_fields = ('quantity_shipped',)
 
 class SalesDeliveryLogInline(admin.TabularInline):
     model = SalesDeliveryLog
     extra = 1
-    readonly_fields = ('shipped_date', 'user')
+    fields = ('product','shipping_no', 'quantity_shipped', 'user', 'notes','shipped_date')
+    readonly_fields = ('user', 'shipped_date')
+    # --- ส่วนที่เพิ่มเพื่อบีบหน้าจอ ---
+    formfield_overrides = {
+        # บีบช่อง Invoice (CharField) ให้เหลือ 1/4 (ประมาณ 100-120px)
+        models.CharField: {'widget': TextInput(attrs={'style': 'width: 120px;', 'placeholder': 'เลขใบส่งของ'})},
+        # เปลี่ยนช่อง Note (TextField) จากกล่องใหญ่เป็นบรรทัดเดียว (TextInput) ยาว 80 ตัวอักษร
+        models.TextField: {'widget': TextInput(attrs={'style': 'width: 200px;', 'placeholder': 'หมายเหตุ'})},
+    }
 
 class ProductionLogInline(admin.TabularInline):
     model = ProductionLog
     extra = 1
-    readonly_fields = ('finished_date', 'user')
+    fields = ('quantity_finished', 'user','notes', 'finished_date')
+    readonly_fields = ('user', 'finished_date')
+    # --- ส่วนที่เพิ่มเพื่อบีบหน้าจอ ---
+    formfield_overrides = {
+        # บีบช่อง Invoice (CharField) ให้เหลือ 1/4 (ประมาณ 100-120px)
+        models.CharField: {'widget': TextInput(attrs={'style': 'width: 120px;', 'placeholder': 'เลขใบส่งของ'})},
+        # เปลี่ยนช่อง Note (TextField) จากกล่องใหญ่เป็นบรรทัดเดียว (TextInput) ยาว 80 ตัวอักษร
+        models.TextField: {'widget': TextInput(attrs={'style': 'width: 200px;', 'placeholder': 'หมายเหตุ'})},
+    }
 
 # --- Helper ---
 def color_diff(diff):
@@ -105,38 +135,91 @@ class BOMAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
 # --- กลุ่ม B: Orders ---
-
 @admin.register(PurchaseOrder)
 class PurchaseOrderAdmin(admin.ModelAdmin):
+    # เพิ่ม 'get_diff' เข้าไปในรายการโชว์หน้า List
     list_display = ('po_number', 'supplier', 'order_date', 'status', 'get_diff')
     list_filter = ('status', 'order_date', 'supplier')
-    search_fields = ('po_number', 'invoice_no_supplier')
+    search_fields = ('po_number', 'invoice_no_supplier', 'supplier__company_name')
     inlines = [PurchaseItemInline, PurchaseReceiptLogInline]
+    readonly_fields = ('created_by', 'status') # เพิ่ม status เข้าไปตรงนี้
+
+    # เพิ่มฟังก์ชันนี้เพื่อดึงชื่อคนล็อกอินมาบันทึกอัตโนมัติ
+    def save_model(self, request, obj, form, change):
+        if not change: # ถ้าเป็นการสร้างใหม่
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+
+    # ฟังก์ชันคำนวณส่วนต่าง (รับจริง vs สั่งซื้อ)
     def get_diff(self, obj):
         ordered = sum(i.quantity_ordered for i in obj.items.all())
         received = sum(l.quantity_received for l in obj.receipt_logs.all())
         return color_diff(received - ordered)
-    get_diff.short_description = "ยอดต่างรับเข้า"
+    get_diff.short_description = "สถานะรับของ"
+
+    # ฟังก์ชันบันทึก User อัตโนมัติในตาราง Log
+    def save_formset(self, request, form, formset, change):
+        instances = formset.save(commit=False)
+        for instance in instances:
+            if hasattr(instance, 'user'): instance.user = request.user
+            instance.save()
+        formset.save_m2m()
 
 @admin.register(SalesOrder)
 class SalesOrderAdmin(admin.ModelAdmin):
     list_display = ('so_number', 'customer', 'order_date', 'status', 'get_diff')
     list_filter = ('status', 'order_date', 'customer')
+    search_fields = ('so_number', 'po_no_customer', 'customer__company_name')
     inlines = [SalesItemInline, SalesDeliveryLogInline]
+    readonly_fields = ('created_by',) 
+    
+    # เพิ่มฟังก์ชันนี้เพื่อดึงชื่อคนล็อกอินมาบันทึกอัตโนมัติ
+    def save_model(self, request, obj, form, change):
+        if not change: # ถ้าเป็นการสร้างใหม่
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+
+    # คำนวณส่วนต่าง (ส่งจริง vs สั่งขาย)
     def get_diff(self, obj):
         ordered = sum(i.quantity_ordered for i in obj.items.all())
         shipped = sum(l.quantity_shipped for l in obj.delivery_logs.all())
         return color_diff(shipped - ordered)
+    get_diff.short_description = "สถานะส่งของ"
+
+    def save_formset(self, request, form, formset, change):
+        instances = formset.save(commit=False)
+        for instance in instances:
+            if hasattr(instance, 'user'): instance.user = request.user
+            instance.save()
+        formset.save_m2m()
 
 @admin.register(ProductionOrder)
 class ProductionOrderAdmin(admin.ModelAdmin):
-    list_display = ('pd_number', 'product', 'order_date', 'status', 'get_diff')
+    list_display = ('pd_number', 'product', 'quantity_planned', 'quantity_actual', 'get_diff', 'status')
     list_filter = ('status', 'order_date', 'product')
+    search_fields = ('pd_number', 'product__name')
     inlines = [ProductionLogInline]
+    readonly_fields = ('created_by',) 
+
+    # เพิ่มฟังก์ชันนี้เพื่อดึงชื่อคนล็อกอินมาบันทึกอัตโนมัติ
+    def save_model(self, request, obj, form, change):
+        if not change: # ถ้าเป็นการสร้างใหม่
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+
+    # คำนวณส่วนต่าง (ผลิตได้จริง vs แผนผลิต)
     def get_diff(self, obj):
         planned = obj.quantity_planned
-        actual = sum(l.quantity_finished for l in obj.production_logs.all())
+        actual = obj.quantity_actual
         return color_diff(actual - planned)
+    get_diff.short_description = "สถานะผลิต"
+
+    def save_formset(self, request, form, formset, change):
+        instances = formset.save(commit=False)
+        for instance in instances:
+            if hasattr(instance, 'user'): instance.user = request.user
+            instance.save()
+        formset.save_m2m()
 
 # --- กลุ่ม C: Planning & Finance (ตารางแยก) ---
 

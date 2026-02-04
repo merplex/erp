@@ -34,9 +34,12 @@ class PurchaseItemInline(admin.TabularInline):
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "product":
-            parent_id = request.resolver_match.kwargs.get('object_id')
-            if parent_id:
-                po = PurchaseOrder.objects.get(pk=parent_id)
+            # หา ID ของใบสั่งซื้อปัจจุบัน
+            resolved = request.resolver_match
+            if resolved and 'object_id' in resolved.kwargs:
+                po_id = resolved.kwargs['object_id']
+                po = PurchaseOrder.objects.get(pk=po_id)
+                # กรองสินค้า: ต้องเป็นสินค้าที่มีชื่อ Supplier คนนี้ผูกอยู่เท่านั้น
                 kwargs["queryset"] = Product.objects.filter(product_suppliers__supplier=po.supplier)
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
@@ -53,6 +56,14 @@ class PurchaseReceiptLogInline(admin.TabularInline):
         # เปลี่ยนช่อง Note (TextField) จากกล่องใหญ่เป็นบรรทัดเดียว (TextInput) ยาว 80 ตัวอักษร
         models.TextField: {'widget': TextInput(attrs={'style': 'width: 200px;', 'placeholder': 'หมายเหตุ'})},
     }
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "product":
+            resolved = request.resolver_match
+            if resolved and 'object_id' in resolved.kwargs:
+                po_id = resolved.kwargs['object_id']
+                # กรองสินค้า: ต้องเป็นสินค้าที่มีอยู่ในรายการ PurchaseItem ของ PO นี้เท่านั้น
+                kwargs["queryset"] = Product.objects.filter(items__purchase_order_id=po_id).distinct()
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 class SalesItemInline(admin.TabularInline):
     model = SalesItem
@@ -71,6 +82,15 @@ class SalesDeliveryLogInline(admin.TabularInline):
         # เปลี่ยนช่อง Note (TextField) จากกล่องใหญ่เป็นบรรทัดเดียว (TextInput) ยาว 80 ตัวอักษร
         models.TextField: {'widget': TextInput(attrs={'style': 'width: 200px;', 'placeholder': 'หมายเหตุ'})},
     }
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "product":
+            resolved = request.resolver_match
+            if resolved and 'object_id' in resolved.kwargs:
+                so_id = resolved.kwargs['object_id']
+                # กรองสินค้า: ต้องเป็นสินค้าที่มีอยู่ในรายการ SalesItem ของ SO นี้เท่านั้น
+                kwargs["queryset"] = Product.objects.filter(sales_items__sales_order_id=so_id).distinct()
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 class ProductionLogInline(admin.TabularInline):
     model = ProductionLog
