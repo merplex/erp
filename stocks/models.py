@@ -78,30 +78,28 @@ class Product(models.Model):
         if not self.sale_price: self.sale_price = self.buy_price
         super().save(*args, **kwargs)
     def __str__(self): return self.name
-    
+
     @property
     def production_cost_avg(self):
-        """คำนวณราคาทุนเฉลี่ยจากทุก BOM ที่มี"""
         if not self.has_bom:
             return 0.0
         try:
-            # ดึงสูตรทั้งหมดที่ผูกกับสินค้านี้
+            # ดึงผ่าน related_name 'bom_formulas' ที่เราตั้งไว้ใน BOM model
             boms = self.bom_formulas.all()
             if boms.exists():
-                total_sum = sum(float(bom.total_cost) for bom in boms)
-                return total_sum / boms.count()
-        except Exception:
+                total = sum(float(bom.total_cost) for bom in boms)
+                return total / boms.count()
+        except:
             return 0.0
         return 0.0
 
     @property
     def bom_count(self):
-        """นับจำนวนสูตร BOM"""
         if not self.has_bom:
             return 0
         try:
             return self.bom_formulas.count()
-        except Exception:
+        except:
             return 0
 
     class Meta: verbose_name_plural = "A4. รายการสินค้า"
