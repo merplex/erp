@@ -120,7 +120,7 @@ class SupplierAdmin(admin.ModelAdmin):
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ('name', 'barcode', 'buy_price', 'sale_price', 'stock_quantity', 'unit', 'has_bom', 'created_by', 'updated_by')
+    list_display = ('name', 'barcode', 'buy_price', 'sale_price', 'stock_quantity', 'unit', 'has_bom', 'get_production_cost', 'created_by', 'updated_by')
     list_filter = ('category', 'has_bom', 'suppliers')
     search_fields = ('name', 'barcode')
     inlines = [ProductSupplierInline]
@@ -140,6 +140,15 @@ class ProductAdmin(admin.ModelAdmin):
         if obj.has_bom and (obj.production_lead_time is None or obj.production_lead_time <= 0):
             raise ValidationError({'production_lead_time': "เนื่องจากเป็นสินค้า BOM กรุณาระบุระยะเวลาผลิตด้วยค่ะ"})
         return super().clean_fields(request, obj)
+
+    # Logic: แสดงต้นทุนผลิต (ถ้ามี BOM)
+    def get_production_cost(self, obj):
+        cost = obj.production_cost
+        if cost > 0:
+            return format_html('<b style="color: #28a745;">{:,.2f}</b>', cost)
+        return "-"
+    get_production_cost.short_description = "ต้นทุนผลิต (BOM)"
+
 
 @admin.register(BOM)
 class BOMAdmin(admin.ModelAdmin):
@@ -240,6 +249,13 @@ class ProductionOrderAdmin(admin.ModelAdmin):
             if hasattr(instance, 'user'): instance.user = request.user
             instance.save()
         formset.save_m2m()
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "product":
+            # 🛡️ ด่านตรวจ: กรองเฉพาะสินค้าที่ติ๊ก "สินค้าผลิตเอง (BOM)" เท่านั้น
+            kwargs["queryset"] = Product.objects.filter(has_bom=True)
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
 
 # --- กลุ่ม C: Planning & Finance (ตารางแยก) ---
 

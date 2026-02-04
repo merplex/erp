@@ -73,10 +73,17 @@ class Product(models.Model):
     updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="prod_updated")
     created_at = models.DateTimeField(auto_now_add=True, null=True)
     updated_at = models.DateTimeField(auto_now=True, null=True)
+
     def save(self, *args, **kwargs):
         if not self.sale_price: self.sale_price = self.buy_price
         super().save(*args, **kwargs)
     def __str__(self): return self.name
+    @property
+    def production_cost(self):
+        # โลจิก: ถ้าติ๊ก has_bom และมีสูตร BOM อยู่จริง ให้ไปดึง total_cost มา
+        if self.has_bom and hasattr(self, 'bom_formula'):
+            return self.bom_formula.total_cost
+        return 0 # ถ้าไม่มี BOM ให้เป็น 0
     class Meta: verbose_name_plural = "A4. รายการสินค้า"
 
 class ProductSupplier(models.Model):
