@@ -8,37 +8,81 @@ from django.db.models import F
 from django.utils.html import format_html
 
 
+# ---------------------------------------------------------
+# 1. รายการสั่งซื้อ (ค้างรับ) -> ใช้ po_number และติดลบ
+# ---------------------------------------------------------
 class PendingPurchaseInline(admin.TabularInline):
     model = PurchaseItem
     fields = ['get_ref_no', 'quantity_ordered', 'quantity_received', 'get_pending']
     readonly_fields = fields
     extra = 0
+    can_delete = False
+    verbose_name = "🛒 รายการสั่งซื้อ (ค้างรับ)"
+    verbose_name_plural = "🛒 รายการสั่งซื้อค้างรับ"
+
     def get_queryset(self, request):
         return super().get_queryset(request).filter(quantity_ordered__gt=F('quantity_received'))
-    def get_ref_no(self, obj): return obj.purchase_order.po_number
-    def get_pending(self, obj):
-        return format_html('<b style="color:#dc3545;">-{}</b>', obj.quantity_ordered - obj.quantity_received)
 
+    def get_ref_no(self, obj):
+        # ✅ แก้จาก obj.order เป็น obj.purchase_order ตามโครงสร้างเปรม
+        return obj.purchase_order.po_number 
+    get_ref_no.short_description = "PO No."
+
+    def get_pending(self, obj):
+        diff = obj.quantity_ordered - obj.quantity_received
+        return format_html('<b style="color:#dc3545;">-{}</b>', diff)
+    get_pending.short_description = "ขาดรับ"
+
+    def has_add_permission(self, request, obj=None): return False
+
+# ---------------------------------------------------------
+# 2. รายการผลิต (ค้างผลิต) -> ใช้ pd_number
+# ---------------------------------------------------------
 class PendingProductionInline(admin.TabularInline):
     model = ProductionOrder
     fields = ['pd_number', 'quantity_planned', 'quantity_actual', 'get_pending']
     readonly_fields = fields
     extra = 0
+    can_delete = False
+    verbose_name = "🔨 รายการผลิต (ค้างผลิต)"
+    verbose_name_plural = "🔨 รายการผลิตค้างผลิต"
+
     def get_queryset(self, request):
         return super().get_queryset(request).filter(quantity_planned__gt=F('quantity_actual'))
-    def get_pending(self, obj):
-        return format_html('<b style="color:#dc3545;">-{}</b>', obj.quantity_planned - obj.quantity_actual)
 
+    def get_pending(self, obj):
+        diff = obj.quantity_planned - obj.quantity_actual
+        return format_html('<b style="color:#dc3545;">-{}</b>', diff)
+    get_pending.short_description = "ขาดผลิต"
+
+    def has_add_permission(self, request, obj=None): return False
+
+# ---------------------------------------------------------
+# 3. รายการขาย (ค้างส่ง) -> ใช้ so_number
+# ---------------------------------------------------------
 class PendingSaleInline(admin.TabularInline):
     model = SalesItem
     fields = ['get_ref_no', 'quantity_ordered', 'quantity_shipped', 'get_pending']
     readonly_fields = fields
     extra = 0
+    can_delete = False
+    verbose_name = "📦 รายการขาย (ค้างส่ง)"
+    verbose_name_plural = "📦 รายการขายค้างส่ง"
+
     def get_queryset(self, request):
         return super().get_queryset(request).filter(quantity_ordered__gt=F('quantity_shipped'))
-    def get_ref_no(self, obj): return obj.sales_order.so_number
+
+    def get_ref_no(self, obj):
+        # ✅ แก้จาก obj.order เป็น obj.sales_order ตามโครงสร้างเปรม
+        return obj.sales_order.so_number
+    get_ref_no.short_description = "SO No."
+
     def get_pending(self, obj):
-        return format_html('<b style="color:#dc3545;">-{}</b>', obj.quantity_ordered - obj.quantity_shipped)
+        diff = obj.quantity_ordered - obj.quantity_shipped
+        return format_html('<b style="color:#dc3545;">-{}</b>', diff)
+    get_pending.short_description = "ขาดส่ง"
+
+    def has_add_permission(self, request, obj=None): return False
 
 # --- Inlines ---
 class ProductSupplierInline(admin.TabularInline):
