@@ -4,6 +4,100 @@ from django.core.exceptions import ValidationError
 from django.forms import TextInput
 from django.db import models # เพิ่มเพื่อรองรับ formfield_overrides
 from .models import *
+from django.db.models import F
+# ⚠️ อย่าลืม Import Model ของเปรมให้ครบนะครับ
+
+# ---------------------------------------------------------
+# 1. ตารางรายการสั่งซื้อ (รอรับของ) -> แก้เป็นติดลบ (-)
+# ---------------------------------------------------------
+class PendingPurchaseInline(admin.TabularInline):
+    model = PurchaseOrderItem  # 👈 แก้เป็นชื่อ Model ของเปรม
+    fields = ['get_ref_no', 'quantity', 'received_quantity', 'get_pending']
+    readonly_fields = ['get_ref_no', 'quantity', 'received_quantity', 'get_pending']
+    extra = 0
+    can_delete = False
+    verbose_name = "🛒 รายการสั่งซื้อ (ค้างรับ)"
+    verbose_name_plural = "🛒 รายการสั่งซื้อค้างรับ (Purchase Backlog)"
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        # กรองเอาเฉพาะที่ สั่ง > รับ (ยังค้างอยู่)
+        return qs.filter(quantity__gt=F('received_quantity'))
+
+    def get_ref_no(self, obj):
+        return obj.order.invoice_no # 👈 แก้เป็นฟิลด์เลขที่ใบสั่งซื้อ
+    get_ref_no.short_description = "Invoice No."
+
+    def get_pending(self, obj):
+        pending = obj.quantity - obj.received_quantity
+        # 🔴 แก้เป็นติดลบ (-) และสีแดง ตามที่ขอครับ
+        return format_html('<b style="color:#dc3545;">-{}</b>', pending)
+    get_pending.short_description = "ขาดส่ง (ค้างรับ)"
+
+    def has_add_permission(self, request, obj=None): return False
+    def has_change_permission(self, request, obj=None): return False
+
+
+# ---------------------------------------------------------
+# 2. ตารางรายการผลิต (รอผลิต) -> ปรับเป็นติดลบ (-) ให้เข้าพวก
+# ---------------------------------------------------------
+class PendingProductionInline(admin.TabularInline):
+    model = ProductionOrder # 👈 แก้เป็นชื่อ Model ของเปรม
+    fields = ['get_job_no', 'qty_planned', 'qty_produced', 'get_pending']
+    readonly_fields = ['get_job_no', 'qty_planned', 'qty_produced', 'get_pending']
+    extra = 0
+    can_delete = False
+    verbose_name = "🔨 รายการผลิต (ค้างผลิต)"
+    verbose_name_plural = "🔨 รายการผลิตค้างรับ (Production Backlog)"
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        # กรองเอาเฉพาะที่ แผน > ผลิตจริง (ยังค้างอยู่)
+        return qs.filter(qty_planned__gt=F('qty_produced'))
+
+    def get_job_no(self, obj):
+        return obj.job_no # 👈 แก้เป็นเลขที่ใบสั่งผลิต
+    get_job_no.short_description = "Job No."
+
+    def get_pending(self, obj):
+        pending = obj.qty_planned - obj.qty_produced
+        # 🔴 ปรับเป็นติดลบ (-) ให้เหมือนกัน
+        return format_html('<b style="color:#dc3545;">-{}</b>', pending)
+    get_pending.short_description = "ขาดผลิต (ค้างรับ)"
+    
+    def has_add_permission(self, request, obj=None): return False
+    def has_change_permission(self, request, obj=None): return False
+
+
+# ---------------------------------------------------------
+# 3. ตารางรายการขาย (รอส่งของ) -> อันนี้ถูกแล้ว (ติดลบ)
+# ---------------------------------------------------------
+class PendingSaleInline(admin.TabularInline):
+    model = SaleOrderItem # 👈 แก้เป็นชื่อ Model ของเปรม
+    fields = ['get_customer_po', 'quantity', 'shipped_quantity', 'get_pending']
+    readonly_fields = ['get_customer_po', 'quantity', 'shipped_quantity', 'get_pending']
+    extra = 0
+    can_delete = False
+    verbose_name = "📦 รายการขาย (ค้างส่ง)"
+    verbose_name_plural = "📦 รายการขายค้างส่ง (Sales Backlog)"
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        # กรองเอาเฉพาะที่ สั่ง > ส่งจริง (ยังค้างอยู่)
+        return qs.filter(quantity__gt=F('shipped_quantity'))
+
+    def get_customer_po(self, obj):
+        return obj.order.customer_po # 👈 แก้เป็นฟิลด์ PO ลูกค้า
+    get_customer_po.short_description = "PO ลูกค้า"
+
+    def get_pending(self, obj):
+        pending = obj.quantity - obj.shipped_quantity
+        # 🔴 แสดงเป็นติดลบ (-) สีแดง
+        return format_html('<b style="color:#dc3545;">-{}</b>', pending)
+    get_pending.short_description = "ขาดส่ง (ค้างส่ง)"
+
+    def has_add_permission(self, request, obj=None): return False
+    def has_change_permission(self, request, obj=None): return False
 
 # --- Inlines ---
 class ProductSupplierInline(admin.TabularInline):
@@ -111,7 +205,7 @@ class ProductAdmin(admin.ModelAdmin):
     list_display = ('name', 'barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit', 'has_bom', 'created_by')
     list_filter = ('category', 'has_bom', 'suppliers')
     search_fields = ('name', 'barcode')
-    inlines = [ProductSupplierInline]
+    inlines = [ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
 
     # 🛠️ จุดที่แก้เพื่อเลิกล่ม: ดัก Error การจัดรูปแบบตัวเลข
