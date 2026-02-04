@@ -127,6 +127,7 @@ class ProductAdmin(admin.ModelAdmin):
                     '<b style="color: #28a745;">{:,.2f}</b> <span style="color: #666;">({})</span>', 
                     avg_cost, count
                 )
+            
             except:
                 pass
 
@@ -150,7 +151,7 @@ class BOMAdmin(admin.ModelAdmin):
     list_filter = ('product__category',)
     inlines = [BOMIngredientInline]
     readonly_fields = ('created_by', 'updated_by')
-    
+
     def total_cost_display(self, obj):
         try:
             return f"{float(obj.total_cost):,.2f}"
