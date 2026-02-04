@@ -116,30 +116,38 @@ class ProductAdmin(admin.ModelAdmin):
 
     # 🛠️ จุดที่แก้เพื่อเลิกล่ม: ดัก Error การจัดรูปแบบตัวเลข
     def get_production_cost(self, obj):
-        # 1. ดึงค่าดิบๆ ออกมาก่อน
-        raw_val = getattr(obj, 'production_cost_avg', None)
-        
-        # 2. แฉทันที! ถ้าไม่ใช่ตัวเลข ให้โชว์หน้าเว็บเลยว่ามันคือ Type อะไร
-        # (วิธีนี้จะทำให้เว็บไม่ล่ม และเราจะเห็น "ตัวการ" ทันที)
-        if not isinstance(raw_val, (int, float)):
-            return format_html(
-                '<span style="color:red; font-weight:bold;">'
-                'ไม่ใช่ตัวเลข!<br>'
-                'Type: {}<br>'
-                'Value: {}'
-                '</span>',
-                type(raw_val).__name__,
-                str(raw_val)
-            )
-            
-        # 3. ถ้ารอดมาถึงตรงนี้ แสดงว่าเป็นตัวเลขจริง ค่อยโชว์สวยๆ
         try:
-            return format_html(
-                '<b style="color: #28a745;">{:,.2f}</b>', 
-                float(raw_val)
-            )
+            # 1. ดึงค่า
+            count = getattr(obj, 'bom_count', 0)
+            avg_cost = getattr(obj, 'production_cost_avg', 0)
+
+            # 2. แปลงเป็นตัวเลขแบบ "ล้างไพ่" (ไม่สนว่าเป็น SafeString หรืออะไรมา)
+            try:
+                # แปลงเป็น string ธรรมดาก่อน (เพื่อล้างความเป็น SafeString) แล้วค่อยเป็น float
+                final_val = float(str(avg_cost).replace(',', ''))
+            except (ValueError, TypeError):
+                final_val = 0.0
+
+            # 3. แสดงผล
+            if count and count > 0:
+                # ✅ "ปรุงสุก" ที่นี่เลย (แปลงเป็นข้อความทศนิยม 2 ตำแหน่งให้เสร็จก่อน)
+                # วิธีนี้ format_html จะได้รับแค่ "ข้อความธรรมดา" ซึ่งไม่มีทาง Error แน่นอน
+                display_text = "{:,.2f}".format(final_val)
+
+                return format_html(
+                    '<b style="color: #28a745;">{}</b> <span style="color: #666;">({})</span>', 
+                    display_text,  # ส่งข้อความที่จัด Format แล้วเข้าไป
+                    count
+                )
+            
+            # กรณีไม่มี BOM
+            if getattr(obj, 'has_bom', False):
+                return format_html('<span style="color: #999;">0.00 (0)</span>')
+
         except Exception as e:
-            return f"Err: {e}"
+            return format_html('<span style="color:red; font-size:10px;">Err: {}</span>', str(e))
+
+        return "-"
 
     get_production_cost.short_description = "ต้นทุนผลิตเฉลี่ย (BOM)"
 
