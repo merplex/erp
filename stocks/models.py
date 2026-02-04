@@ -81,11 +81,17 @@ class Product(models.Model):
 
     @property
     def production_cost(self):
+        # 1. ถ้าไม่ติ๊กช่อง "สินค้าผลิตเอง (BOM)" ให้เป็น 0 ทันที
+        if not self.has_bom:
+            return 0.0
+        
         try:
-            # เช็กว่าติ๊ก has_bom และมีสูตร BOM จริงไหม
-            if self.has_bom and hasattr(self, 'bom_formula'):
-                cost = self.bom_formula.total_cost
-                return float(cost) if cost else 0.0
+            # 2. ค้นหาใบ BOM ที่ผูกกับสินค้าตัวนี้โดยตรง
+            from .models import BOM # Import ข้างในเพื่อป้องกันวงจรซ้อน
+            bom = BOM.objects.filter(product=self).first()
+            if bom:
+                # ส่งค่ารวมจาก BOM กลับไป (แปลงเป็น float เพื่อความปลอดภัย)
+                return float(bom.total_cost)
         except Exception:
             return 0.0
         return 0.0
