@@ -243,49 +243,69 @@ class ProductionOrderAdmin(admin.ModelAdmin):
 
 # --- กลุ่ม C: Planning & Finance (ตารางแยก) ---
 
+# ==========================================
+# --- กลุ่ม C: Planning & Finance ---
+# ==========================================
+
+# 1. ตัวกรองช่วงราคา (ต้องอยู่ก่อน Admin)
+class BuyPriceRangeFilter(admin.SimpleListFilter):
+    title = 'ช่วงราคาทุน'
+    parameter_name = 'price_range'
+
+    def lookups(self, request, model_admin):
+        return [
+            ('0-100', '0 - 100 บาท'),
+            ('101-500', '101 - 500 บาท'),
+            ('501-1000', '501 - 1,000 บาท'),
+            ('1001-plus', 'มากกว่า 1,000 บาท'),
+        ]
+
+    def queryset(self, request, queryset):
+        if self.value() == '0-100': return queryset.filter(buy_price__lte=100)
+        if self.value() == '101-500': return queryset.filter(buy_price__gt=100, buy_price__lte=500)
+        if self.value() == '501-1000': return queryset.filter(buy_price__gt=500, buy_price__lte=1000)
+        if self.value() == '1001-plus': return queryset.filter(buy_price__gt=1000)
+        return queryset
+
+# 2. หน้าจอวางแผนสต็อก (C1)
 @admin.register(StockPlanning)
 class StockPlanningAdmin(admin.ModelAdmin):
     list_display = ('name', 'category', 'stock_quantity', 'get_pending_in', 'get_pending_out', 'get_pending_prod', 'get_available', 'buy_price')
     list_filter = ('category', 'suppliers', BuyPriceRangeFilter)
     search_fields = ('name', 'barcode')
 
-    # --- 1. ฝั่งซื้อ (Pending IN): สั่งแล้วแต่ยังไม่ได้รับ ---
+    # ฝั่งซื้อ: สั่งแล้วแต่ยังไม่ได้รับ (Outstanding)
     def get_pending_in(self, obj):
-        # โลจิก: เอาเฉพาะใบที่ยังไม่ปิด (Confirmed/Received) ถ้า Complete/Cancel แล้วยอดค้างต้องเป็น 0
         items = obj.purchaseitem_set.filter(purchase_order__status__in=['Confirmed', 'Received'])
         total = sum((i.quantity_ordered - i.quantity_received) for i in items)
         return total if total > 0 else 0
     get_pending_in.short_description = "แผนรับ (PO)"
 
-    # --- 2. ฝั่งขาย (Pending OUT): จองแล้วแต่ยังไม่ได้ส่ง ---
+    # ฝั่งขาย: จองแล้วแต่ยังไม่ได้ส่ง (Outstanding)
     def get_pending_out(self, obj):
-        # โลจิก: เอาเฉพาะใบที่ยังไม่ปิด (Confirmed/Shipped) ยอดที่เหลือจะไปลด Available
         items = obj.salesitem_set.filter(sales_order__status__in=['Confirmed', 'Shipped'])
         total = sum((i.quantity_ordered - i.quantity_shipped) for i in items)
         return total if total > 0 else 0
     get_pending_out.short_description = "แผนส่ง (SO)"
 
-    # --- 3. ฝั่งผลิต (Pending PROD): วางแผนแล้วแต่ยังไม่เสร็จ ---
+    # ฝั่งผลิต: วางแผนแล้วแต่ยังไม่เสร็จ (Outstanding)
     def get_pending_prod(self, obj):
-        # โลจิก: เอาเฉพาะใบที่กำลังผลิต (Started/Finished) 
         orders = obj.productionorder_set.filter(status__in=['Started', 'Finished'])
         total = sum((o.quantity_planned - o.quantity_actual) for o in orders)
         return total if total > 0 else 0
     get_pending_prod.short_description = "แผนผลิต (PD)"
 
-    # --- 4. ยอดพร้อมใช้จริง (Available) ---
+    # ยอดพร้อมใช้จริง (Available)
     def get_available(self, obj):
         on_hand = obj.stock_quantity
         p_in = self.get_pending_in(obj)
         p_out = self.get_pending_out(obj)
         p_prod = self.get_pending_prod(obj)
-        
-        # สูตร: มีอยู่ + (กำลังมา - กำลังไป) + (กำลังจะผลิตเสร็จ)
         total = on_hand + p_in - p_out + p_prod
         
         color = "red" if total < 0 else "blue"
         return format_html('<b style="color: {};">{}</b>', color, total)
-    get_available.short_description = "ยอดพร้อมใช้ (Available)"
+    get_available.short_description = "พร้อมขาย (Available)"
 
 
 @admin.register(FinanceReport)
