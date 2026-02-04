@@ -52,7 +52,7 @@ class Customer(models.Model):
     payment_term = models.IntegerField(default=30, verbose_name="Credit (วัน)")
     vat = models.DecimalField(max_digits=5, decimal_places=2, default=7.00)
     created_at = models.DateTimeField(auto_now_add=True, null=True)
-    updated_at = models.DateTimeField(auto_now=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True) # แก้ไขจาก auto_True เป็น auto_now
     def __str__(self): return self.company_name
     class Meta: verbose_name_plural = "A3. ลูกค้า (Customer)"
 
@@ -73,7 +73,6 @@ class Product(models.Model):
     updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="prod_updated")
     created_at = models.DateTimeField(auto_now_add=True, null=True)
     updated_at = models.DateTimeField(auto_now=True, null=True)
-
     def save(self, *args, **kwargs):
         if not self.sale_price: self.sale_price = self.buy_price
         super().save(*args, **kwargs)
@@ -126,7 +125,6 @@ class PurchaseOrder(models.Model):
         if not self.po_number: self.po_number = generate_number('PO', PurchaseOrder, 'po_number')
         super().save(*args, **kwargs)
     class Meta: verbose_name_plural = "B1. ใบสั่งซื้อ (Purchase)"
-
     def delete(self, *args, **kwargs):
         if self.receipt_logs.exists():
             self.status = 'Cancelled'
@@ -148,7 +146,6 @@ class PurchaseReceiptLog(models.Model):
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     received_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่บันทึก")
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
-
     def save(self, *args, **kwargs):
         is_new = self.pk is None
         if is_new:
@@ -163,21 +160,17 @@ class PurchaseReceiptLog(models.Model):
                 po.save()
         super().save(*args, **kwargs)
 
-# --- ย้ายออกมาอยู่นอก Class และจัดแนวแถวให้ถูกต้อง ---
+# --- ย้ายออกมานอก Class และจัดแนวแถวให้ตรงกัน ---
 @receiver(post_delete, sender=PurchaseReceiptLog)
 def handle_receipt_deletion(sender, instance, **kwargs):
-    # 1. คืนสต็อกสินค้า
     instance.product.stock_quantity -= instance.quantity_received
     instance.product.save()
-    # 2. หักยอดรับสะสมใน PO
     try:
         item = PurchaseItem.objects.get(purchase_order=instance.purchase_order, product=instance.product)
         item.quantity_received -= instance.quantity_received
         item.save()
     except:
         pass
-
-    # 3. ออโต้สถานะกลับเป็น 'ยืนยัน' ถ้าไม่เหลือประวัติรับเลย
     po = instance.purchase_order
     if not po.receipt_logs.exists() and po.status == 'Received':
         po.status = 'Confirmed'
@@ -212,7 +205,6 @@ class SalesDeliveryLog(models.Model):
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     shipped_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่ส่ง")
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
-
     def save(self, *args, **kwargs):
         if not self.pk:
             self.product.stock_quantity -= self.quantity_shipped
@@ -244,7 +236,6 @@ class ProductionLog(models.Model):
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     finished_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่เสร็จ")
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
-
     def save(self, *args, **kwargs):
         if not self.pk:
             prod_order = self.production_order
