@@ -29,6 +29,9 @@ class BOMIngredientInline(admin.TabularInline):
 class PurchaseItemInline(admin.TabularInline):
     model = PurchaseItem
     extra = 1
+    # เพิ่มบรรทัดนี้ครับ ยอดสะสมจะกลายเป็นตัวหนังสือสีเทาที่อ่านได้อย่างเดียว แก้ไม่ได้
+    readonly_fields = ('quantity_received',) 
+
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "product":
             parent_id = request.resolver_match.kwargs.get('object_id')
@@ -48,7 +51,7 @@ class PurchaseReceiptLogInline(admin.TabularInline):
         # บีบช่อง Invoice (CharField) ให้เหลือ 1/4 (ประมาณ 100-120px)
         models.CharField: {'widget': TextInput(attrs={'style': 'width: 120px;', 'placeholder': 'เลขใบส่งของ'})},
         # เปลี่ยนช่อง Note (TextField) จากกล่องใหญ่เป็นบรรทัดเดียว (TextInput) ยาว 80 ตัวอักษร
-        models.TextField: {'widget': TextInput(attrs={'style': 'width: 400px;', 'placeholder': 'หมายเหตุสั้นๆ'})},
+        models.TextField: {'widget': TextInput(attrs={'style': 'width: 200px;', 'placeholder': 'หมายเหตุ'})},
     }
 
 class SalesItemInline(admin.TabularInline):
@@ -65,7 +68,7 @@ class SalesDeliveryLogInline(admin.TabularInline):
         # บีบช่อง Invoice (CharField) ให้เหลือ 1/4 (ประมาณ 100-120px)
         models.CharField: {'widget': TextInput(attrs={'style': 'width: 120px;', 'placeholder': 'เลขใบส่งของ'})},
         # เปลี่ยนช่อง Note (TextField) จากกล่องใหญ่เป็นบรรทัดเดียว (TextInput) ยาว 80 ตัวอักษร
-        models.TextField: {'widget': TextInput(attrs={'style': 'width: 400px;', 'placeholder': 'หมายเหตุสั้นๆ'})},
+        models.TextField: {'widget': TextInput(attrs={'style': 'width: 200px;', 'placeholder': 'หมายเหตุ'})},
     }
 
 class ProductionLogInline(admin.TabularInline):
@@ -78,7 +81,7 @@ class ProductionLogInline(admin.TabularInline):
         # บีบช่อง Invoice (CharField) ให้เหลือ 1/4 (ประมาณ 100-120px)
         models.CharField: {'widget': TextInput(attrs={'style': 'width: 120px;', 'placeholder': 'เลขใบส่งของ'})},
         # เปลี่ยนช่อง Note (TextField) จากกล่องใหญ่เป็นบรรทัดเดียว (TextInput) ยาว 80 ตัวอักษร
-        models.TextField: {'widget': TextInput(attrs={'style': 'width: 400px;', 'placeholder': 'หมายเหตุสั้นๆ'})},
+        models.TextField: {'widget': TextInput(attrs={'style': 'width: 200px;', 'placeholder': 'หมายเหตุ'})},
     }
 
 # --- Helper ---
