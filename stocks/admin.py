@@ -5,6 +5,10 @@ from django.forms import TextInput
 from django.db import models # เพิ่มเพื่อรองรับ formfield_overrides
 from .models import *
 from django.db.models import F
+from purchases.models import PurchaseItem
+from sales.models import SalesItem
+from production.models import ProductionOrder
+
 # ⚠️ อย่าลืม Import Model ของเปรมให้ครบนะครับ
 
 # ---------------------------------------------------------
