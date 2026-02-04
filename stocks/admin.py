@@ -234,7 +234,7 @@ class ProductAdmin(admin.ModelAdmin):
             from django.db.models import Count
             kwargs["queryset"] = ProductTag.objects.annotate(
                 num_products=Count('products')
-            ).order_field('-num_products', '-id')
+            ).order_by('-num_products', '-id')
         return super().formfield_for_manytomany(db_field, request, **kwargs)
 
     def display_tags(self, obj):
