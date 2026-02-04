@@ -39,7 +39,7 @@ class PurchaseItemInline(admin.TabularInline):
 class PurchaseReceiptLogInline(admin.TabularInline):
     model = PurchaseReceiptLog
     extra = 1
-    fields = ('product', 'supplier_invoice','quantity_received', 'user','note', 'received_date')
+    fields = ('product', 'supplier_invoice','quantity_received', 'user','notes', 'received_date')
     readonly_fields = ('user', 'received_date')
 
 class SalesItemInline(admin.TabularInline):
@@ -49,13 +49,13 @@ class SalesItemInline(admin.TabularInline):
 class SalesDeliveryLogInline(admin.TabularInline):
     model = SalesDeliveryLog
     extra = 1
-    fields = ('product','shipping_no', 'quantity_shipped', 'user', 'note','shipped_date')
+    fields = ('product','shipping_no', 'quantity_shipped', 'user', 'notes','shipped_date')
     readonly_fields = ('user', 'shipped_date')
 
 class ProductionLogInline(admin.TabularInline):
     model = ProductionLog
     extra = 1
-    fields = ('quantity_finished', 'user','note', 'finished_date')
+    fields = ('quantity_finished', 'user','notes', 'finished_date')
     readonly_fields = ('user', 'finished_date')
 
 # --- Helper ---
