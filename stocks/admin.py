@@ -153,3 +153,7 @@ class FinanceReportAdmin(admin.ModelAdmin):
     list_display = ('po_number', 'supplier', 'order_date', 'status')
 
 # --- ลงทะเบียนตารางที่เหลือ ---
+# --- ลงทะเบียนที่เหลือ (ต้องมีแค่ตัวที่ไม่ได้ใช้ @admin.register ข้างบน) ---
+
+admin.site.register(ProductCategory)
+admin.site.register(Customer)
