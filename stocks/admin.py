@@ -8,11 +8,19 @@ class ProductSupplierInline(admin.TabularInline):
     model = ProductSupplier
     extra = 1
 
+# นี่คือส่วนที่เปรมขอ: แสดงสินค้าใต้ Supplier
+class SupplierProductInline(admin.TabularInline):
+    model = ProductSupplier
+    extra = 1
+    autocomplete_fields = ['product']
+    fields = ('product', 'supplier_sku', 'latest_buy_price')
+
 class BOMIngredientInline(admin.TabularInline):
     model = BOMIngredient
     fields = ('material', 'quantity', 'get_unit_display')
     readonly_fields = ('get_unit_display',)
     autocomplete_fields = ['material']
+    model = BOMIngredient
     extra = 1
     def get_unit_display(self, obj): return obj.get_unit
     get_unit_display.short_description = "หน่วย"
@@ -55,6 +63,11 @@ def color_diff(diff):
 
 # --- Admin Registrations ---
 
+@admin.register(Supplier)
+class SupplierAdmin(admin.ModelAdmin):
+    list_display = ('company_name', 'contact_person', 'type')
+    inlines = [SupplierProductInline] # เพิ่ม Inline ตัวที่เปรมขอที่นี่ค่ะ
+
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
     list_display = ('name', 'barcode', 'buy_price', 'sale_price', 'stock_quantity', 'unit', 'has_bom', 'created_by', 'updated_by')
@@ -91,6 +104,8 @@ class BOMAdmin(admin.ModelAdmin):
         obj.updated_by = request.user
         super().save_model(request, obj, form, change)
 
+# --- กลุ่ม B: Orders ---
+
 @admin.register(PurchaseOrder)
 class PurchaseOrderAdmin(admin.ModelAdmin):
     list_display = ('po_number', 'supplier', 'order_date', 'status', 'get_diff')
@@ -123,6 +138,18 @@ class ProductionOrderAdmin(admin.ModelAdmin):
         actual = sum(l.quantity_finished for l in obj.production_logs.all())
         return color_diff(actual - planned)
 
-admin.site.register(ProductCategory)
-admin.site.register(Supplier)
-admin.site.register(Customer)
+# --- กลุ่ม C: Planning & Finance (ตารางแยก) ---
+
+@admin.register(StockPlanning)
+class StockPlanningAdmin(admin.ModelAdmin):
+    list_display = ('name', 'stock_quantity', 'show_available')
+    def show_available(self, obj):
+        # เดี๋ยวเรามาใส่สูตรคำนวณในสเต็ปถัดไปนะคะ ตอนนี้โชว์ยอดสต็อกไปก่อน
+        return obj.stock_quantity
+    show_available.short_description = "ยอดพร้อมใช้ (Available)"
+
+@admin.register(FinanceReport)
+class FinanceReportAdmin(admin.ModelAdmin):
+    list_display = ('po_number', 'supplier', 'order_date', 'status')
+
+# --- ลงทะเบียนตารางที่เหลือ ---

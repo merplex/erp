@@ -21,7 +21,7 @@ class ProductCategory(models.Model):
     name = models.CharField(max_length=100, verbose_name="กลุ่มสินค้า")
     created_at = models.DateTimeField(auto_now_add=True, null=True)
     def __str__(self): return self.name
-    class Meta: verbose_name_plural = "1. กลุ่มสินค้า"
+    class Meta: verbose_name_plural = "A1. กลุ่มสินค้า"
 
 # 2. ผู้จำหน่าย
 class Supplier(models.Model):
@@ -39,7 +39,7 @@ class Supplier(models.Model):
         if self.type == 'International': self.vat = 0
         super().save(*args, **kwargs)
     def __str__(self): return self.company_name
-    class Meta: verbose_name_plural = "2. ผู้จำหน่าย (Supplier)"
+    class Meta: verbose_name_plural = "A2. ผู้จำหน่าย (Supplier)"
 
 # 3. ลูกค้า
 class Customer(models.Model):
@@ -52,7 +52,7 @@ class Customer(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, null=True)
     updated_at = models.DateTimeField(auto_now=True, null=True)
     def __str__(self): return self.company_name
-    class Meta: verbose_name_plural = "3. ลูกค้า (Customer)"
+    class Meta: verbose_name_plural = "A3. ลูกค้า (Customer)"
 
 # 4. รายการสินค้า
 class Product(models.Model):
@@ -80,7 +80,7 @@ class Product(models.Model):
         if not self.sale_price: self.sale_price = self.buy_price
         super().save(*args, **kwargs)
     def __str__(self): return self.name
-    class Meta: verbose_name_plural = "4. รายการสินค้า"
+    class Meta: verbose_name_plural = "A4. รายการสินค้า"
 
 # ตารางเชื่อมสินค้ากับ Supplier หลายเจ้า
 class ProductSupplier(models.Model):
@@ -104,7 +104,7 @@ class BOM(models.Model):
     @property
     def total_cost(self): return sum(item.subtotal for item in self.ingredients.all())
     def __str__(self): return self.name
-    class Meta: verbose_name_plural = "5. สูตรการผลิต (BOM)"
+    class Meta: verbose_name_plural = "A5. สูตรการผลิต (BOM)"
 
 class BOMIngredient(models.Model):
     bom = models.ForeignKey(BOM, on_delete=models.CASCADE, related_name='ingredients')
@@ -128,7 +128,7 @@ class PurchaseOrder(models.Model):
     def save(self, *args, **kwargs):
         if not self.po_number: self.po_number = generate_number('PO', PurchaseOrder, 'po_number')
         super().save(*args, **kwargs)
-    class Meta: verbose_name_plural = "6. ใบสั่งซื้อ (Purchase)"
+    class Meta: verbose_name_plural = "B1. ใบสั่งซื้อ (Purchase)"
 
 class PurchaseItem(models.Model):
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='items')
@@ -156,7 +156,7 @@ class SalesOrder(models.Model):
     def save(self, *args, **kwargs):
         if not self.so_number: self.so_number = generate_number('SO', SalesOrder, 'so_number')
         super().save(*args, **kwargs)
-    class Meta: verbose_name_plural = "7. ใบสั่งขาย (Sales)"
+    class Meta: verbose_name_plural = "B2. ใบสั่งขาย (Sales)"
 
 class SalesItem(models.Model):
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='items')
@@ -185,7 +185,7 @@ class ProductionOrder(models.Model):
     def save(self, *args, **kwargs):
         if not self.pd_number: self.pd_number = generate_number('PD', ProductionOrder, 'pd_number')
         super().save(*args, **kwargs)
-    class Meta: verbose_name_plural = "8. ใบสั่งผลิต (Production)"
+    class Meta: verbose_name_plural = "B3. ใบสั่งผลิต (Production)"
 
 class ProductionLog(models.Model):
     production_order = models.ForeignKey(ProductionOrder, on_delete=models.CASCADE, related_name='production_logs')
@@ -193,3 +193,14 @@ class ProductionLog(models.Model):
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
     quantity_finished = models.PositiveIntegerField(verbose_name="จำนวนที่เสร็จครั้งนี้")
     notes = models.TextField(blank=True)
+
+class StockPlanning(Product):
+    class Meta:
+        proxy = True
+        verbose_name_plural = "C1. ตารางการวางแผนสต็อก"
+
+class FinanceReport(PurchaseOrder):
+    class Meta:
+        proxy = True
+        verbose_name_plural = "C2. รายงานสรุปการเงิน"
+
