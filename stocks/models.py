@@ -92,6 +92,17 @@ class Product(models.Model):
         except:
             return 0.0
         return 0.0
+        # เติมตัวนี้เข้าไปครับ แอดมินถึงจะเห็นว่ามี BOM กี่ใบ
+    @property
+    def bom_count(self):
+        if not self.has_bom:
+            return 0
+        try:
+            # ใช้ related_name ตัวเดียวกับที่คำนวณราคานั่นแหละ
+            return self.bom_formulas.count()
+        except:
+            return 0
+
 
     class Meta: verbose_name_plural = "A4. รายการสินค้า"
 
