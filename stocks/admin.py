@@ -115,7 +115,7 @@ class ProductAdmin(admin.ModelAdmin):
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
 
     # 🛠️ จุดที่แก้เพื่อเลิกล่ม: ดัก Error การจัดรูปแบบตัวเลข
-        def get_production_cost(self, obj):
+    def get_production_cost(self, obj):
         try:
             # 1. ดึงค่า (ที่เปรมพิสูจน์แล้วว่ามีอยู่จริง)
             count = getattr(obj, 'bom_count', 0)
