@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from django.core.exceptions import ValidationError
+from django.forms import TextInput # อย่าลืม Import ตัวนี้ไว้บนสุดของ admin.py นะคะ
 from .models import *
 
 # --- Inlines ---
@@ -39,8 +40,16 @@ class PurchaseItemInline(admin.TabularInline):
 class PurchaseReceiptLogInline(admin.TabularInline):
     model = PurchaseReceiptLog
     extra = 1
-    fields = ('product', 'supplier_invoice','quantity_received', 'user','notes', 'received_date')
+    fields = ('product', 'supplier_invoice', 'quantity_received', 'user', 'notes', 'received_date')
     readonly_fields = ('user', 'received_date')
+
+    # --- ส่วนที่เพิ่มเพื่อบีบหน้าจอ ---
+    formfield_overrides = {
+        # บีบช่อง Invoice (CharField) ให้เหลือ 1/4 (ประมาณ 100-120px)
+        models.CharField: {'widget': TextInput(attrs={'style': 'width: 120px;', 'placeholder': 'เลขใบส่งของ'})},
+        # เปลี่ยนช่อง Note (TextField) จากกล่องใหญ่เป็นบรรทัดเดียว (TextInput) ยาว 80 ตัวอักษร
+        models.TextField: {'widget': TextInput(attrs={'style': 'width: 400px;', 'placeholder': 'หมายเหตุสั้นๆ'})},
+    }
 
 class SalesItemInline(admin.TabularInline):
     model = SalesItem
@@ -51,12 +60,26 @@ class SalesDeliveryLogInline(admin.TabularInline):
     extra = 1
     fields = ('product','shipping_no', 'quantity_shipped', 'user', 'notes','shipped_date')
     readonly_fields = ('user', 'shipped_date')
+    # --- ส่วนที่เพิ่มเพื่อบีบหน้าจอ ---
+    formfield_overrides = {
+        # บีบช่อง Invoice (CharField) ให้เหลือ 1/4 (ประมาณ 100-120px)
+        models.CharField: {'widget': TextInput(attrs={'style': 'width: 120px;', 'placeholder': 'เลขใบส่งของ'})},
+        # เปลี่ยนช่อง Note (TextField) จากกล่องใหญ่เป็นบรรทัดเดียว (TextInput) ยาว 80 ตัวอักษร
+        models.TextField: {'widget': TextInput(attrs={'style': 'width: 400px;', 'placeholder': 'หมายเหตุสั้นๆ'})},
+    }
 
 class ProductionLogInline(admin.TabularInline):
     model = ProductionLog
     extra = 1
     fields = ('quantity_finished', 'user','notes', 'finished_date')
     readonly_fields = ('user', 'finished_date')
+    # --- ส่วนที่เพิ่มเพื่อบีบหน้าจอ ---
+    formfield_overrides = {
+        # บีบช่อง Invoice (CharField) ให้เหลือ 1/4 (ประมาณ 100-120px)
+        models.CharField: {'widget': TextInput(attrs={'style': 'width: 120px;', 'placeholder': 'เลขใบส่งของ'})},
+        # เปลี่ยนช่อง Note (TextField) จากกล่องใหญ่เป็นบรรทัดเดียว (TextInput) ยาว 80 ตัวอักษร
+        models.TextField: {'widget': TextInput(attrs={'style': 'width: 400px;', 'placeholder': 'หมายเหตุสั้นๆ'})},
+    }
 
 # --- Helper ---
 def color_diff(diff):
@@ -115,6 +138,13 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
     list_filter = ('status', 'order_date', 'supplier')
     search_fields = ('po_number', 'invoice_no_supplier', 'supplier__company_name')
     inlines = [PurchaseItemInline, PurchaseReceiptLogInline]
+    readonly_fields = ('created_by',) 
+
+    # เพิ่มฟังก์ชันนี้เพื่อดึงชื่อคนล็อกอินมาบันทึกอัตโนมัติ
+    def save_model(self, request, obj, form, change):
+        if not change: # ถ้าเป็นการสร้างใหม่
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
 
     # ฟังก์ชันคำนวณส่วนต่าง (รับจริง vs สั่งซื้อ)
     def get_diff(self, obj):
@@ -137,6 +167,13 @@ class SalesOrderAdmin(admin.ModelAdmin):
     list_filter = ('status', 'order_date', 'customer')
     search_fields = ('so_number', 'po_no_customer', 'customer__company_name')
     inlines = [SalesItemInline, SalesDeliveryLogInline]
+    readonly_fields = ('created_by',) 
+
+    # เพิ่มฟังก์ชันนี้เพื่อดึงชื่อคนล็อกอินมาบันทึกอัตโนมัติ
+    def save_model(self, request, obj, form, change):
+        if not change: # ถ้าเป็นการสร้างใหม่
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
 
     # คำนวณส่วนต่าง (ส่งจริง vs สั่งขาย)
     def get_diff(self, obj):
@@ -158,6 +195,13 @@ class ProductionOrderAdmin(admin.ModelAdmin):
     list_filter = ('status', 'order_date', 'product')
     search_fields = ('pd_number', 'product__name')
     inlines = [ProductionLogInline]
+    readonly_fields = ('created_by',) 
+
+    # เพิ่มฟังก์ชันนี้เพื่อดึงชื่อคนล็อกอินมาบันทึกอัตโนมัติ
+    def save_model(self, request, obj, form, change):
+        if not change: # ถ้าเป็นการสร้างใหม่
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
 
     # คำนวณส่วนต่าง (ผลิตได้จริง vs แผนผลิต)
     def get_diff(self, obj):
