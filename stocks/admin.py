@@ -12,7 +12,7 @@ from django.utils.html import format_html
 # ---------------------------------------------------------
 class ProductInCategoryInline(admin.TabularInline):
     model = Product
-    fields = ['name', 'barcode', 'buy_price', 'sale_price', 'stock_quantity', 'unit']
+    fields = ['barcode', 'buy_price', 'sale_price', 'stock_quantity', 'unit']
     readonly_fields = fields # ให้ดูอย่างเดียว ไม่ให้แก้จากหน้านี้เพื่อความปลอดภัย
     extra = 0
     can_delete = False
