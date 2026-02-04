@@ -126,6 +126,28 @@ class ProductAdmin(admin.ModelAdmin):
     inlines = [ProductSupplierInline]
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
 
+    def get_production_cost(self, obj):
+        # ดึงจำนวน BOM มาเช็กก่อน
+        count = obj.bom_count
+        
+        # กรณีที่ 1: ถ้ามีการสร้างสูตร BOM ไว้แล้ว (ไม่ว่าจะกี่สูตรก็ตาม)
+        if count > 0:
+            avg_price = obj.production_cost_avg
+            return format_html(
+                '<b style="color: #28a745;">{:,.2f}</b> <span style="color: #666;">({})</span>', 
+                avg_price, 
+                count
+            )
+        
+        # กรณีที่ 2: ถ้าติ๊ก "สินค้าผลิตเอง" แล้ว แต่ยังไม่มีสูตรโผล่มาเลย
+        if obj.has_bom:
+            return format_html('<span style="color: #999;">0.00 (0)</span>')
+            
+        # กรณีที่ 3: ไม่ได้ติ๊ก และไม่มีสูตร (คือสินค้าซื้อมาขายไปปกติ)
+        return "-"
+
+    get_production_cost.short_description = "ต้นทุนผลิตเฉลี่ย (จำนวน BOM)"
+
     # Logic: บันทึก User อัตโนมัติ (ใครพิมพ์คนนั้นเป็นคนสร้าง/แก้)
     def save_model(self, request, obj, form, change):
         if not change:
@@ -134,19 +156,6 @@ class ProductAdmin(admin.ModelAdmin):
         else:
             obj.updated_by = request.user
         super().save_model(request, obj, form, change)
-
-    # Logic: แสดงต้นทุนผลิต (ถ้ามี BOM)
-    def get_production_cost(self, obj):
-        try:
-            # ดึงค่ามาแปลงเป็น float ก่อนจัดฟอร์แมตเพื่อป้องกัน ValueError
-            cost = float(obj.production_cost)
-            if cost > 0:
-                # ใช้ฟอร์แมตแบบปลอดภัย
-                return format_html('<b style="color: #28a745;">{:,.2f}</b>', cost)
-        except (TypeError, ValueError):
-            pass
-        return "-" # ถ้าเป็น 0 หรือ Error ให้โชว์ขีดแทน เว็บจะได้ไม่ล่ม
-    get_production_cost.short_description = "ต้นทุนผลิต (BOM)"
 
 @admin.register(BOM)
 class BOMAdmin(admin.ModelAdmin):

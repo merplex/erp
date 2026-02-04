@@ -80,21 +80,29 @@ class Product(models.Model):
     def __str__(self): return self.name
 
     @property
-    def production_cost(self):
-        # 1. ถ้าไม่ติ๊กช่อง "สินค้าผลิตเอง (BOM)" ให้เป็น 0 ทันที
+    def production_cost_avg(self):
+        # 1. เช็กก่อนว่ามีเครื่องหมายติ๊กถูกไหม
         if not self.has_bom:
             return 0.0
         
         try:
-            # 2. ค้นหาใบ BOM ที่ผูกกับสินค้าตัวนี้โดยตรง
-            from .models import BOM # Import ข้างในเพื่อป้องกันวงจรซ้อน
-            bom = BOM.objects.filter(product=self).first()
-            if bom:
-                # ส่งค่ารวมจาก BOM กลับไป (แปลงเป็น float เพื่อความปลอดภัย)
-                return float(bom.total_cost)
-        except Exception:
+            # 2. ไปดึงข้อมูล BOM ทั้งหมดที่ผูกกับสินค้าตัวนี้ (ใช้คำสั่ง filter ตรงๆ เพื่อความชัวร์)
+            from .models import BOM
+            boms = BOM.objects.filter(product=self)
+            
+            if boms.exists():
+                # คำนวณหาค่าเฉลี่ย
+                total_sum = sum(float(bom.total_cost) for bom in boms)
+                return total_sum / boms.count()
+        except:
             return 0.0
         return 0.0
+
+    @property
+    def bom_count(self):
+        # นับจำนวน BOM
+        from .models import BOM
+        return BOM.objects.filter(product=self).count()
 
     class Meta: verbose_name_plural = "A4. รายการสินค้า"
 
@@ -107,7 +115,8 @@ class ProductSupplier(models.Model):
 
 # 5. สูตรการผลิต (BOM)
 class BOM(models.Model):
-    product = models.OneToOneField(Product, on_delete=models.CASCADE, related_name='bom_formula')
+    # แก้ไขจาก OneToOneField เป็น ForeignKey และเปลี่ยน related_name เป็นพหูพจน์
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='bom_formulas')
     name = models.CharField(max_length=255, verbose_name="ชื่อสูตร")
     sale_price = models.DecimalField(max_digits=10, decimal_places=2)
     unit = models.CharField(max_length=50, default="ชิ้น", verbose_name="หน่วยผลิต")
