@@ -5,6 +5,7 @@ from django.forms import TextInput
 from django.db import models # เพิ่มเพื่อรองรับ formfield_overrides
 from .models import *
 from django.db.models import F
+from django.utils.safestring import mark_safe # ✅ ต้องมีบรรทัดนี้ครับ
 from django.utils.html import format_html
 
 # ---------------------------------------------------------
