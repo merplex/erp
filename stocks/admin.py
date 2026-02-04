@@ -116,13 +116,26 @@ class ProductAdmin(admin.ModelAdmin):
 
     # 🛠️ จุดที่แก้เพื่อเลิกล่ม: ดัก Error การจัดรูปแบบตัวเลข
     def get_production_cost(self, obj):
-        # โชว์ค่าดิบๆ ออกมาเลย จะได้รู้ว่าตัวแปรไหน "บอด"
-        return format_html(
-            '<span style="color:blue">Check: {} | Count: {} | Cost: {}</span>', 
-            getattr(obj, 'has_bom', 'Not Found'),       # ดูว่าติ๊กถูกไหม
-            getattr(obj, 'bom_count', 'Not Found'),     # ดูว่านับได้กี่ใบ
-            getattr(obj, 'production_cost_avg', 'Not Found') # ดูว่าราคามาเท่าไหร่
-        )
+        try:
+            # 1. ดึงค่า (ตอนนี้ bom_count จะมาแล้ว)
+            count = getattr(obj, 'bom_count', 0)
+            avg_cost = getattr(obj, 'production_cost_avg', 0)
+
+            # 2. ถ้ามีสูตร (Count > 0)
+            if count and count > 0:
+                return format_html(
+                    '<b style="color: #28a745;">{:,.2f}</b> <span style="color: #666;">({})</span>', 
+                    float(avg_cost), count
+                )
+            
+            # 3. ถ้าติ๊ก BOM แต่ยังไม่มีสูตร
+            if getattr(obj, 'has_bom', False):
+                return format_html('<span style="color: #999;">0.00 (0)</span>')
+
+        except Exception:
+            pass
+
+        return "-"
 
     get_production_cost.short_description = "ต้นทุนผลิตเฉลี่ย (BOM)"
 
