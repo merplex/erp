@@ -116,33 +116,30 @@ class ProductAdmin(admin.ModelAdmin):
 
     # 🛠️ จุดที่แก้เพื่อเลิกล่ม: ดัก Error การจัดรูปแบบตัวเลข
     def get_production_cost(self, obj):
-        try:
-            # ดึงค่าเดิมมาก่อน
-            count = getattr(obj, 'bom_count', 0)
-            avg_cost = getattr(obj, 'production_cost_avg', 0)
-
-            # 👇 1. เพิ่ม 2 บรรทัดนี้ "คั่นกลาง" ก่อนจะเข้า if
-            # (เพื่อบังคับแปลงข้อความให้เป็นตัวเลข price_val)
-            if avg_cost is None: avg_cost = 0.0
-            price_val = float(avg_cost)
-
-            # 👇 2. แก้เงื่อนไข if ให้รัดกุมขึ้น
-            if count and count > 0:
-                return format_html(
-                    '<b style="color: #28a745;">{:,.2f}</b> <span style="color: #666;">({})</span>', 
-                    price_val,  # 👈 3. เปลี่ยนตรงนี้! จาก avg_cost เป็น price_val
-                    count
-                )
+        # 1. ดึงค่าดิบๆ ออกมาก่อน
+        raw_val = getattr(obj, 'production_cost_avg', None)
+        
+        # 2. แฉทันที! ถ้าไม่ใช่ตัวเลข ให้โชว์หน้าเว็บเลยว่ามันคือ Type อะไร
+        # (วิธีนี้จะทำให้เว็บไม่ล่ม และเราจะเห็น "ตัวการ" ทันที)
+        if not isinstance(raw_val, (int, float)):
+            return format_html(
+                '<span style="color:red; font-weight:bold;">'
+                'ไม่ใช่ตัวเลข!<br>'
+                'Type: {}<br>'
+                'Value: {}'
+                '</span>',
+                type(raw_val).__name__,
+                str(raw_val)
+            )
             
-            # (ส่วนล่างนี้เหมือนเดิม)
-            if getattr(obj, 'has_bom', False):
-                return format_html('<span style="color: #999;">0.00 (0)</span>')
-
+        # 3. ถ้ารอดมาถึงตรงนี้ แสดงว่าเป็นตัวเลขจริง ค่อยโชว์สวยๆ
+        try:
+            return format_html(
+                '<b style="color: #28a745;">{:,.2f}</b>', 
+                float(raw_val)
+            )
         except Exception as e:
-            # (ส่วนดัก Error เหมือนเดิม)
-            return format_html('<span style="color:red; font-size:10px;">Err: {}</span>', str(e))
-
-        return "-"
+            return f"Err: {e}"
 
     get_production_cost.short_description = "ต้นทุนผลิตเฉลี่ย (BOM)"
 
