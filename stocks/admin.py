@@ -127,26 +127,30 @@ class ProductAdmin(admin.ModelAdmin):
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
 
     def get_production_cost(self, obj):
-        # ดึงจำนวน BOM มาเช็กก่อน
+        # 1. เช็กจำนวน BOM ก่อน
         count = obj.bom_count
         
-        # กรณีที่ 1: ถ้ามีการสร้างสูตร BOM ไว้แล้ว (ไม่ว่าจะกี่สูตรก็ตาม)
+        # 2. ถ้ามีการสร้างสูตรไว้แล้ว
         if count > 0:
-            avg_price = obj.production_cost_avg
-            return format_html(
-                '<b style="color: #28a745;">{:,.2f}</b> <span style="color: #666;">({})</span>', 
-                avg_price, 
-                count
-            )
-        
-        # กรณีที่ 2: ถ้าติ๊ก "สินค้าผลิตเอง" แล้ว แต่ยังไม่มีสูตรโผล่มาเลย
+            try:
+                # บังคับให้เป็น float ก่อนใส่ทศนิยม .2f เพื่อป้องกัน ValueError
+                avg_cost = float(obj.production_cost_avg)
+                return format_html(
+                    '<b style="color: #28a745;">{:,.2f}</b> <span style="color: #666;">({})</span>', 
+                    avg_cost, 
+                    count
+                )
+            except (ValueError, TypeError):
+                pass
+
+        # 3. ถ้าติ๊ก BOM แล้วแต่ยังไม่มีสูตร
         if obj.has_bom:
             return format_html('<span style="color: #999;">0.00 (0)</span>')
             
-        # กรณีที่ 3: ไม่ได้ติ๊ก และไม่มีสูตร (คือสินค้าซื้อมาขายไปปกติ)
+        # 4. กรณีอื่นๆ ให้โชว์ขีด (ส่งกลับเป็น String ปกติ ไม่ผ่านตัวจัดฟอร์แมตเลข)
         return "-"
-
-    get_production_cost.short_description = "ต้นทุนผลิตเฉลี่ย (จำนวน BOM)"
+    
+    get_production_cost.short_description = "ต้นทุนผลิตเฉลี่ย (BOM)"
 
     # Logic: บันทึก User อัตโนมัติ (ใครพิมพ์คนนั้นเป็นคนสร้าง/แก้)
     def save_model(self, request, obj, form, change):
