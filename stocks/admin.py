@@ -12,7 +12,7 @@ from django.utils.html import format_html
 # ---------------------------------------------------------
 class ProductInCategoryInline(admin.TabularInline):
     model = Product
-    fields = ['barcode', 'buy_price', 'sale_price', 'stock_quantity', 'unit']
+    fields = ['get_barcode', 'buy_price', 'sale_price', 'stock_quantity', 'unit']
     readonly_fields = fields # ให้ดูอย่างเดียว ไม่ให้แก้จากหน้านี้เพื่อความปลอดภัย
     extra = 0
     can_delete = False
@@ -20,6 +20,14 @@ class ProductInCategoryInline(admin.TabularInline):
     verbose_name_plural = "📦 รายการสินค้าทั้งหมดในกลุ่ม"
 
     def has_add_permission(self, request, obj=None): return False
+
+    # ✅ เพิ่มฟังก์ชันนี้เพื่อดึงบาร์โค้ดมาแสดงในตาราง
+    def get_barcode(self, obj):
+        return obj.latest_barcode # ใช้ property ที่เราเขียนไว้ใน models.py
+    get_barcode.short_description = "บาร์โค้ด (ล่าสุด)"
+
+    def has_add_permission(self, request, obj=None): 
+        return False
 
 # ---------------------------------------------------------
 # 1. รายการสั่งซื้อ (ค้างรับ) -> ใช้ po_number และติดลบ

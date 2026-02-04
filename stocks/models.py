@@ -109,14 +109,12 @@ class Product(models.Model):
         return last_entry.code if last_entry else "-"
 
 class ProductBarcode(models.Model):
-    product = models.ForeignKey(Product, on_extended_modules=True, related_name='barcodes', on_delete=models.CASCADE)
+    product = models.ForeignKey(Product, related_name='barcodes', on_delete=models.CASCADE)
     code = models.CharField(max_length=100, unique=True, verbose_name="บาร์โค้ด")
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return self.code
-
-
 
     class Meta: verbose_name_plural = "A4. รายการสินค้า"
 
