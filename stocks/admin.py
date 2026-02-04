@@ -57,6 +57,7 @@ class PurchaseReceiptLogInline(admin.TabularInline):
 class SalesItemInline(admin.TabularInline):
     model = SalesItem
     extra = 1
+    readonly_fields = ('quantity_shipped',)
 
 class SalesDeliveryLogInline(admin.TabularInline):
     model = SalesDeliveryLog
@@ -171,7 +172,7 @@ class SalesOrderAdmin(admin.ModelAdmin):
     search_fields = ('so_number', 'po_no_customer', 'customer__company_name')
     inlines = [SalesItemInline, SalesDeliveryLogInline]
     readonly_fields = ('created_by',) 
-
+    
     # เพิ่มฟังก์ชันนี้เพื่อดึงชื่อคนล็อกอินมาบันทึกอัตโนมัติ
     def save_model(self, request, obj, form, change):
         if not change: # ถ้าเป็นการสร้างใหม่

@@ -190,6 +190,12 @@ class SalesOrder(models.Model):
         if not self.so_number: self.so_number = generate_number('SO', SalesOrder, 'so_number')
         super().save(*args, **kwargs)
     class Meta: verbose_name_plural = "B2. ใบสั่งขาย (Sales)"
+    def delete(self, *args, **kwargs):
+        if self.status == 'Draft':
+            super().delete(*args, **kwargs) # ถ้าเป็น Draft ลบทิ้งจริงๆ ได้
+        else:
+            self.status = 'Cancelled' # ถ้าสถานะอื่น เปลี่ยนเป็น 'ยกเลิก' แทน
+            self.save()
 
 class SalesItem(models.Model):
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='items')
@@ -205,14 +211,43 @@ class SalesDeliveryLog(models.Model):
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     shipped_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่ส่ง")
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
+
     def save(self, *args, **kwargs):
-        if not self.pk:
+        is_new = self.pk is None
+        if is_new:
+            # 1. สมองกล: ลดสต็อกจริง
             self.product.stock_quantity -= self.quantity_shipped
             self.product.save()
+            # 2. สมองกล: สะสมยอดส่งในใบ SO
             item = SalesItem.objects.get(sales_order=self.sales_order, product=self.product)
             item.quantity_shipped += self.quantity_shipped
             item.save()
+            
+            # 🤖 2) ออโต้สถานะ: เปลี่ยนเป็น 'ส่งบางส่วน' (Shipped)
+            so = self.sales_order
+            if so.status in ['Draft', 'Confirmed']:
+                so.status = 'Shipped'
+                so.save()
         super().save(*args, **kwargs)
+        
+@receiver(post_delete, sender=SalesDeliveryLog)
+def handle_delivery_deletion(sender, instance, **kwargs):
+    # 1. คืนสต็อกสินค้า
+    instance.product.stock_quantity += instance.quantity_shipped
+    instance.product.save()
+    # 2. หักยอดส่งสะสมใน SO
+    try:
+        item = SalesItem.objects.get(sales_order=instance.sales_order, product=instance.product)
+        item.quantity_shipped -= instance.quantity_shipped
+        item.save()
+    except: pass
+    
+    # 🤖 ออโต้สถานะ: ถ้าลบจนไม่เหลือประวัติส่งเลย ให้กลับไปเป็น 'ยืนยัน'
+    so = instance.sales_order
+    if not so.delivery_logs.exists() and so.status == 'Shipped':
+        so.status = 'Confirmed'
+        so.save()
+
 
 # 8. ระบบเอกสารสั่งผลิต
 class ProductionOrder(models.Model):
