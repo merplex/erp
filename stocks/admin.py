@@ -115,25 +115,32 @@ class ProductAdmin(admin.ModelAdmin):
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
 
     # 🛠️ จุดที่แก้เพื่อเลิกล่ม: ดัก Error การจัดรูปแบบตัวเลข
-    def get_production_cost(self, obj):
+        def get_production_cost(self, obj):
         try:
-            # 1. ดึงค่า (ตอนนี้ bom_count จะมาแล้ว)
+            # 1. ดึงค่า (ที่เปรมพิสูจน์แล้วว่ามีอยู่จริง)
             count = getattr(obj, 'bom_count', 0)
             avg_cost = getattr(obj, 'production_cost_avg', 0)
 
-            # 2. ถ้ามีสูตร (Count > 0)
+            # 2. แปลงค่าให้ชัวร์ (เผื่อหลุด)
+            if avg_cost is None: avg_cost = 0.0
+            price_val = float(avg_cost) # ถ้าแปลงไม่ได้ มันจะฟ้อง Error ตรงนี้
+
+            # 3. ถ้ามีสูตร (Count > 0)
             if count and count > 0:
+                # จุดวัดใจ: ถ้า format_html ผิด มันจะฟ้องตรงนี้
                 return format_html(
                     '<b style="color: #28a745;">{:,.2f}</b> <span style="color: #666;">({})</span>', 
-                    float(avg_cost), count
+                    price_val, 
+                    count
                 )
             
-            # 3. ถ้าติ๊ก BOM แต่ยังไม่มีสูตร
+            # 4. ถ้าติ๊ก BOM แต่ยังไม่มีสูตร
             if getattr(obj, 'has_bom', False):
                 return format_html('<span style="color: #999;">0.00 (0)</span>')
 
-        except Exception:
-            pass
+        except Exception as e:
+            # 🚨 จับโจร! ถ้ามี Error ให้โชว์ออกมาเลย
+            return format_html('<span style="color:red; font-weight:bold;">Err: {}</span>', str(e))
 
         return "-"
 
