@@ -34,6 +34,7 @@ class ProductTag(models.Model):
     class Meta:
         verbose_name = "แท็กสินค้า"
         verbose_name_plural = "แท็กสินค้าทั้งหมด"
+    class Meta: verbose_name_plural = "T1. แท็กสินค้า (Product Tag)"
 
 # 2. ผู้จำหน่าย
 class Supplier(models.Model):
