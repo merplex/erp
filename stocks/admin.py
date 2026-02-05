@@ -415,22 +415,30 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
         queryset.update(status='Completed')
         self.message_user(request, f"ปิดงานสำเร็จ {queryset.count()} รายการแล้วค่ะ")
 
+    # 1. จัดการ Logic เมื่อมีการกดปุ่ม
     def response_change(self, request, obj):
         if "_complete_order" in request.POST:
             obj.status = 'Completed'
             obj.save()
-            self.message_user(request, "ปิดงานใบสั่งซื้อเรียบร้อยแล้วค่ะ")
+            self.message_user(request, f"ปิดงานใบสั่งซื้อ {obj.po_number} เรียบร้อยแล้ว")
             return HttpResponseRedirect(".")
         return super().response_change(request, obj)
 
-    class Media:
-        js = ('admin/js/vendor/jquery/jquery.js', 'admin/js/jquery.init.js')
-        # ฉีดปุ่ม Complete ไว้ข้างๆ ปุ่ม Save
-        ext_js = """<script>
-            (function($) { $(document).ready(function() {
-                $('.submit-row').prepend('<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer;">');
-            }); })(django.jQuery);
-        </script>"""
+    # 2. ฉีดปุ่มเข้าไปในหน้าจอแก้ไข
+    def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
+        # สร้าง Script เพื่อเพิ่มปุ่มในแถบด้านล่าง
+        script = mark_safe("""
+            <script>
+                django.jQuery(document).ready(function() {
+                    var container = django.jQuery('.submit-row');
+                    var btn = '<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
+                    container.prepend(btn);
+                });
+            </script>
+        """)
+        # ใส่สคริปต์ลงใน context เพื่อให้ Django เรนเดอร์ออกมา
+        context['adminform'].form.help_text = script 
+        return super().render_change_form(request, context, add, change, form_url, obj)
 
     def save_model(self, request, obj, form, change):
         if not change:
@@ -469,18 +477,21 @@ class SalesOrderAdmin(admin.ModelAdmin):
         if "_complete_order" in request.POST:
             obj.status = 'Completed'
             obj.save()
-            self.message_user(request, "ปิดงานใบสั่งขายเรียบร้อยแล้วค่ะ")
+            self.message_user(request, f"ปิดงานใบสั่งขาย {obj.so_number} เรียบร้อยแล้ว")
             return HttpResponseRedirect(".")
         return super().response_change(request, obj)
 
-    # ก๊อป Media มาใส่เพื่อให้ปุ่มโผล่ในหน้า SO ด้วยครับ
-    class Media:
-        js = ('admin/js/vendor/jquery/jquery.js', 'admin/js/jquery.init.js')
-        ext_js = """<script>
-            (function($) { $(document).ready(function() {
-                $('.submit-row').prepend('<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer;">');
-            }); })(django.jQuery);
-        </script>"""
+    def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
+        script = mark_safe("""
+            <script>
+                django.jQuery(document).ready(function() {
+                    var btn = '<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #218838; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
+                    django.jQuery('.submit-row').prepend(btn);
+                });
+            </script>
+        """)
+        context['title'] = mark_safe(f"{context['title']} {script}")
+        return super().render_change_form(request, context, add, change, form_url, obj)
     
     def save_model(self, request, obj, form, change):
         if not change:
@@ -559,17 +570,22 @@ class ProductionOrderAdmin(admin.ModelAdmin):
         if "_complete_order" in request.POST:
             obj.status = 'Completed'
             obj.save()
-            self.message_user(request, "ปิดงานผลิตเรียบร้อยแล้วค่ะ")
+            self.message_user(request, f"ปิดงานผลิต {obj.pd_number} เรียบร้อยแล้ว")
             return HttpResponseRedirect(".")
         return super().response_change(request, obj)
 
-    class Media:
-        js = ('admin/js/vendor/jquery/jquery.js', 'admin/js/jquery.init.js')
-        ext_js = """<script>
-            (function($) { $(document).ready(function() {
-                $('.submit-row').prepend('<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer;">');
-            }); })(django.jQuery);
-        </script>"""
+    def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
+        script = mark_safe("""
+            <script>
+                django.jQuery(document).ready(function() {
+                    var btn = '<input type="submit" value="ปิดงานผลิต (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
+                    django.jQuery('.submit-row').prepend(btn);
+                });
+            </script>
+        """)
+        context['title'] = mark_safe(f"{context['title']} {script}")
+        return super().render_change_form(request, context, add, change, form_url, obj)
+
 
     def save_model(self, request, obj, form, change):
         if not change:
