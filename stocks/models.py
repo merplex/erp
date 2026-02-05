@@ -343,9 +343,12 @@ class ProductionLog(models.Model):
             prod_order.product.stock_quantity += self.quantity_finished
             prod_order.product.save()
             if prod_order.product.has_bom:
-                for ing in prod_order.product.bom_formula.ingredients.all():
-                    ing.material.stock_quantity -= (ing.quantity * self.quantity_finished)
-                    ing.material.save()
+                # ใช้ .bom_set.first() เพื่อดึงสูตรผลิต (BOM) อันแรกของสินค้านั้นออกมา
+                bom = prod_order.product.bom_set.first()
+                if bom:
+                    for ing in bom.ingredients.all():
+                        ing.material.stock_quantity -= (ing.quantity * self.quantity_finished)
+                        ing.material.save()
             prod_order.quantity_actual += self.quantity_finished
             prod_order.save()
         super().save(*args, **kwargs)
