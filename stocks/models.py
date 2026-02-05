@@ -327,9 +327,19 @@ class ProductionOrder(models.Model):
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     def save(self, *args, **kwargs):
-        if not self.pd_number: self.pd_number = generate_number('PD', ProductionOrder, 'pd_number')
+        if not self.pd_number: 
+            self.pd_number = generate_number('PD', ProductionOrder, 'pd_number')
+        
+        # ✅ เพิ่มจุดที่ 1: ตรรกะการเปลี่ยนสถานะอัตโนมัติ
+        if self.status not in ['Completed', 'Cancelled']: # ไม่แก้สถานะถ้าปิดงานหรือยกเลิกไปแล้ว
+            if self.quantity_actual <= 0:
+                self.status = 'Draft'
+            elif self.quantity_actual < self.quantity_planned:
+                self.status = 'Started'
+            elif self.quantity_actual >= self.quantity_planned:
+                self.status = 'Finished'
+        
         super().save(*args, **kwargs)
-    class Meta: verbose_name_plural = "B3. ใบสั่งผลิต (Production)"
 
 class ProductionLog(models.Model):
     production_order = models.ForeignKey(ProductionOrder, on_delete=models.CASCADE, related_name='production_logs')
@@ -340,18 +350,43 @@ class ProductionLog(models.Model):
     def save(self, *args, **kwargs):
         if not self.pk:
             prod_order = self.production_order
+            # เพิ่มสต็อกสินค้าสำเร็จรูป
             prod_order.product.stock_quantity += self.quantity_finished
             prod_order.product.save()
-            if prod_order.product.has_bom:
-                # ใช้ .bom_formulas.first() เพื่อดึงสูตรผลิต (BOM) อันแรกของสินค้านั้นออกมา
-                bom = prod_order.product.bom_formulas.first()
-                if bom:
-                    for ing in bom.ingredients.all():
-                        ing.material.stock_quantity -= (ing.quantity * self.quantity_finished)
-                        ing.material.save()
+
+            # ตัดสต็อกวัตถุดิบ (BOM)
+            bom = prod_order.product.bom_formulas.first()
+            if bom:
+                for ing in bom.ingredients.all():
+                    ing.material.stock_quantity -= (ing.quantity * self.quantity_finished)
+                    ing.material.save()
+
+            # อัปเดตยอดสะสมในใบสั่งผลิต
             prod_order.quantity_actual += self.quantity_finished
-            prod_order.save()
+            prod_order.save() # การ save ตรงนี้จะไปกระตุ้นสถานะใน ProductionOrder เองครับ
+            
         super().save(*args, **kwargs)
+
+    # ✅ เพิ่มจุดที่ 2: ฟังก์ชันสำหรับจัดการตอน "ลบ" รายการผลิต
+    def delete(self, *args, **kwargs):
+        prod_order = self.production_order
+        
+        # 1. คืนสต็อกสินค้า (หักออก)
+        prod_order.product.stock_quantity -= self.quantity_finished
+        prod_order.product.save()
+
+        # 2. คืนสต็อกวัตถุดิบ (บวกกลับเข้าสต็อก)
+        bom = prod_order.product.bom_formulas.first()
+        if bom:
+            for ing in bom.ingredients.all():
+                ing.material.stock_quantity += (ing.quantity * self.quantity_finished)
+                ing.material.save()
+
+        # 3. หักยอดผลิตสะสมคืน
+        prod_order.quantity_actual -= self.quantity_finished
+        prod_order.save()
+
+        super().delete(*args, **kwargs)
 
 class StockPlanning(Product):
     class Meta:
