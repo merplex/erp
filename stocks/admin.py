@@ -904,7 +904,7 @@ class FinanceReportAdmin(admin.ModelAdmin):
 
     def get_grand_total_display(self, obj):
         # ✅ แก้ไข: จัดรูปแบบตัวเลขก่อนส่งเข้า HTML
-        return format_html('<b style="font-size:16px; color:#007bff;">{}</b>', f"{obj.grand_total:,.2f}")
+        return format_html('<b style="color:#007bff;">{}</b>', f"{obj.grand_total:,.2f}")
     get_grand_total_display.short_description = "💰 ยอดสุทธิ (Grand Total)"
 
     def get_total_paid_display(self, obj):
@@ -917,7 +917,7 @@ class FinanceReportAdmin(admin.ModelAdmin):
         balance = obj.balance_due
         color = "red" if balance > 0 else "green"
         text = f"{balance:,.2f}"
-        return format_html('<b style="font-size:18px; color:{};">{}</b>', color, text)
+        return format_html('<b style="color:{};">{}</b>', color, text)
     get_balance_due_display.short_description = "❗️ ยอดค้างจ่าย"
 
     # --- List Display Functions (หน้ารวม) ---
