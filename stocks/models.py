@@ -33,7 +33,7 @@ class ProductCategory(models.Model):
 class ProductTag(models.Model):
     name = models.CharField(max_length=50, unique=True, verbose_name="ชื่อแท็ก")
     color = models.CharField(max_length=7, default=get_random_color, verbose_name="สีแท็ก (Hex)")
-    created_at = models.DateTimeField(auto_now_add=True, verbose_name="วันที่สร้าง")
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True, verbose_name="วันที่สร้าง")
 
     def __str__(self):
         return self.name
