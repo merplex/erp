@@ -292,42 +292,42 @@ class ProductAdmin(admin.ModelAdmin):
         # ✅ ปรับ CSS ใหม่ ให้รองรับโครงสร้าง Checkbox ของเปรมครับ
         style = mark_safe("""
             <style>
-                /* บังคับให้ Container ของแท็กจัดเรียงแบบ Flex (แนวนอน) */
-                .field-tags div.readonly, 
                 .field-tags .related-widget-wrapper,
-                .field-tags ul { 
-                    display: flex !important; 
-                    flex-wrap: wrap !important; 
-                    gap: 15px !important; 
+                .field-tags ul,
+                .field-tags div {
+                    display: flex !important;
+                    flex-direction: row !important;
+                    flex-wrap: wrap !important;
+                    gap: 10px !important;
                     align-items: center !important;
                 }
 
-                /* จัดระเบียบแต่ละ Tag ให้เป็นก้อน (Pill) */
-                .field-tags label { 
+                .field-tags ul li {
+                    display: inline-block !important;
+                    margin: 0 !important;
+                    padding: 0 !important;
+                }
+
+                .field-tags label {
                     display: inline-flex !important;
+                    flex-direction: row !important;
                     align-items: center !important;
-                    background: #f0f2f5 !important;
-                    padding: 4px 12px !important;
+                    background: #e9ecef !important;
+                    border: 1px solid #ced4da !important;
                     border-radius: 20px !important;
-                    border: 1px solid #d1d5db !important;
+                    padding: 4px 15px !important;
                     margin: 0 !important;
                     cursor: pointer;
-                    white-space: nowrap;
-                    font-weight: normal !important;
+                    white-space: nowrap !important; 
                 }
 
-                /* เว้นระยะห่างระหว่าง Checkbox กับตัวอักษร */
                 .field-tags input[type="checkbox"] {
-                    margin: 0 6px 0 0 !important;
-                    cursor: pointer;
+                    margin: 0 8px 0 0 !important;
+                    vertical-align: middle !important;
                 }
 
-                /* ซ่อนจุด (Bullet) ถ้ามี */
-                .field-tags ul li { list-style: none !important; padding: 0 !important; margin: 0 !important; }
                 .field-tags ul li:before { content: none !important; }
-                
-                /* ขยายความกว้างให้เต็มพื้นที่ */
-                .field-tags .flex-container { display: block !important; }
+                .field-tags br { display: none !important; } 
             </style>
         """)
 
