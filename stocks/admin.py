@@ -524,6 +524,8 @@ class SalesOrderAdmin(admin.ModelAdmin):
     
     # ✅ ฟังก์ชันสร้างใบผลิตอัตโนมัติ
     def save_formset(self, request, form, formset, change):
+        created_count = 0
+
         if formset.model == SalesItem:
             instances = formset.save(commit=False)
             created_count = 0
@@ -539,7 +541,7 @@ class SalesOrderAdmin(admin.ModelAdmin):
                         instance.save()
                         created_count += 1
             formset.save_m2m()
-            if created_count > 0:
+            
                 messages.success(request, f"ระบบสร้างใบผลิตอัตโนมัติสำเร็จ {created_count} รายการ")
         else:
             # ✅ บรรทัดนี้สำคัญมาก! ถ้าไม่ใช่ SalesItem (เช่นเป็น DeliveryLog) ให้เซฟปกติ
