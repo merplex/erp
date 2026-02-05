@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.contrib import messages
 from django.utils.html import format_html
 from django.core.exceptions import ValidationError
 from django.forms import TextInput
@@ -7,7 +8,6 @@ from .models import *
 from django import forms # ✅ เพิ่มบรรทัดนี้ครับ ทำระบบ tag checkbox
 from django.db.models import F
 from django.utils.safestring import mark_safe # ✅ ต้องมีบรรทัดนี้ครับ
-from django.utils.html import format_html
 from django import forms # สำหรับปรับแต่งฟอร์ม tag
 
 # ---------------------------------------------------------
@@ -183,8 +183,10 @@ class PurchaseReceiptLogInline(admin.TabularInline):
 
 class SalesItemInline(admin.TabularInline):
     model = SalesItem
-    extra = 1
+    # ✅ เพิ่ม 'auto_produce' เข้าไปในหน้าจอ
+    fields = ['product', 'quantity_ordered', 'quantity_shipped', 'auto_produce']
     readonly_fields = ('quantity_shipped',)
+    extra = 1
 
 class SalesDeliveryLogInline(admin.TabularInline):
     model = SalesDeliveryLog
@@ -394,13 +396,31 @@ class SalesOrderAdmin(admin.ModelAdmin):
         shipped = sum(l.quantity_shipped for l in obj.delivery_logs.all())
         return color_diff(shipped - ordered)
     get_diff.short_description = "สถานะส่งของ"
-
+    
+    # ✅ ฟังก์ชันสร้างใบผลิตอัตโนมัติ
     def save_formset(self, request, form, formset, change):
         instances = formset.save(commit=False)
+        created_count = 0
+
         for instance in instances:
-            if hasattr(instance, 'user'): instance.user = request.user
-            instance.save()
+            if isinstance(instance, SalesItem):
+                # บันทึกข้อมูลรายการปกติ
+                if hasattr(instance, 'user'): instance.user = request.user
+                instance.save()
+                
+                # ✅ Logic สร้างใบผลิต (PD) อัตโนมัติ
+                # เงื่อนไข: ติ๊กผลิตทันที + มี BOM + ยังไม่เคยสร้างใบผลิตจากรายการนี้
+                if instance.auto_produce and instance.product.has_bom and not instance.is_produced:
+                    self.create_auto_production_order(instance, request.user)
+                    instance.is_produced = True # มาร์คไว้ว่าสร้างแล้ว
+                    instance.save()
+                    created_count += 1
+                    
         formset.save_m2m()
+
+        if created_count > 0:
+            messages.success(request, f"ระบบได้สร้างใบผลิต (PD) ให้โดยอัตโนมัติจำนวน {created_count} รายการแล้วค่ะ")
+
 
 @admin.register(ProductionOrder)
 class ProductionOrderAdmin(admin.ModelAdmin):
