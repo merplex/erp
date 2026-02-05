@@ -854,6 +854,8 @@ class ProductTagAdmin(admin.ModelAdmin):
         return obj.product_set.count()
     get_product_count.short_description = "จำนวนสินค้าที่ใช้"
 
+# admin.py
+
 @admin.register(FinanceReport)
 class FinanceReportAdmin(admin.ModelAdmin):
     # หน้ารวม: ดูง่ายๆ ว่าใบไหนค้างจ่าย
@@ -861,7 +863,7 @@ class FinanceReportAdmin(admin.ModelAdmin):
     list_filter = ('status', 'supplier')
     search_fields = ('po_number', 'supplier__company_name')
     
-    # จัดหน้าตาฟอร์ม: สรุปยอดเงินไว้บนสุด (Summary Board)
+    # จัดหน้าตาฟอร์ม
     fieldsets = (
         ('📊 สรุปยอดเงิน (Financial Summary)', {
             'fields': (
@@ -885,13 +887,15 @@ class FinanceReportAdmin(admin.ModelAdmin):
 
     inlines = [PurchaseItemReadOnlyInline, PurchasePaymentInline]
 
-    # --- Display Functions (โชว์ตัวเลขสวยๆ) ---
+    # --- ส่วนที่แก้ไข: ใช้ f-string จัดตัวเลขก่อนส่งไป format_html ทุกตัว ---
+
     def get_total_items_display(self, obj):
         return f"{sum(i.quantity_ordered for i in obj.items.all()):,}"
     get_total_items_display.short_description = "📦 รวมจำนวนสินค้า"
 
     def get_subtotal_display(self, obj):
-        return format_html('<span style="font-size:14px;">{:,.2f}</span>', obj.total_items_price)
+        # ✅ แก้ไข: จัดรูปแบบตัวเลขก่อนส่งเข้า HTML
+        return format_html('<span style="font-size:14px;">{}</span>', f"{obj.total_items_price:,.2f}")
     get_subtotal_display.short_description = "💵 ราคารวม (ก่อน VAT)"
 
     def get_vat_amount_display(self, obj):
@@ -899,34 +903,34 @@ class FinanceReportAdmin(admin.ModelAdmin):
     get_vat_amount_display.short_description = "ภาษีมูลค่าเพิ่ม (VAT)"
 
     def get_grand_total_display(self, obj):
-        return format_html('<b style="font-size:16px; color:#007bff;">{:,.2f}</b>', obj.grand_total)
+        # ✅ แก้ไข: จัดรูปแบบตัวเลขก่อนส่งเข้า HTML
+        return format_html('<b style="font-size:16px; color:#007bff;">{}</b>', f"{obj.grand_total:,.2f}")
     get_grand_total_display.short_description = "💰 ยอดสุทธิ (Grand Total)"
 
     def get_total_paid_display(self, obj):
-        return format_html('<b style="color:#28a745;">{:,.2f}</b>', obj.total_paid)
+        # ✅ แก้ไข
+        return format_html('<b style="color:#28a745;">{}</b>', f"{obj.total_paid:,.2f}")
     get_total_paid_display.short_description = "✅ จ่ายแล้ว"
 
     def get_balance_due_display(self, obj):
+        # ✅ แก้ไข
         balance = obj.balance_due
         color = "red" if balance > 0 else "green"
-        return format_html('<b style="font-size:18px; color:{};">{:,.2f}</b>', color, balance)
+        text = f"{balance:,.2f}"
+        return format_html('<b style="font-size:18px; color:{};">{}</b>', color, text)
     get_balance_due_display.short_description = "❗️ ยอดค้างจ่าย"
 
     # --- List Display Functions (หน้ารวม) ---
-    def get_grand_total_list(self, obj): return f"{obj.grand_total:,.2f}"
+    def get_grand_total_list(self, obj): 
+        return f"{obj.grand_total:,.2f}"
     get_grand_total_list.short_description = "ยอดสุทธิ"
 
-    # admin.py
-
     def get_balance_due_list(self, obj):
+        # ✅ แก้ไข (อันนี้ที่เราแก้กันไปตะกี้ครับ รวมมาให้แล้ว)
         bal = obj.balance_due
-        
         if bal <= 0: 
             return format_html('<span style="color:green; font-weight:bold;">{}</span>', "ครบถ้วน")
-            
-        # ✅ แก้ไข: ใช้ f-string จัดตัวเลขให้เสร็จก่อนส่งไปแสดงผล
         return format_html('<span style="color:red; font-weight:bold;">-{}</span>', f"{bal:,.2f}")
-    
     get_balance_due_list.short_description = "ค้างจ่าย"
 
 
