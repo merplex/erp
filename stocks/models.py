@@ -337,18 +337,37 @@ class ProductionLog(models.Model):
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     finished_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่เสร็จ")
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
-    def save(self, *args, **kwargs):
-        if not self.pk:
+        def save(self, *args, **kwargs):
+        if not self.pk:  # ทำเฉพาะตอนสร้าง Record ใหม่
             prod_order = self.production_order
+            
+            # 1. อัปเดตสต็อกสินค้าสำเร็จรูป (FG)
             prod_order.product.stock_quantity += self.quantity_finished
             prod_order.product.save()
+
+            # 2. ตัดสต็อกวัตถุดิบ (RM) ตาม BOM
             if prod_order.product.has_bom:
                 for ing in prod_order.product.bom_formula.ingredients.all():
+                    # คำนวณดิบ: ปริมาณที่ต้องใช้ต่อชิ้น * จำนวนที่ผลิตได้จริง
                     ing.material.stock_quantity -= (ing.quantity * self.quantity_finished)
                     ing.material.save()
+
+            # 3. อัปเดตจำนวนที่ผลิตได้สะสมในใบสั่งผลิต
             prod_order.quantity_actual += self.quantity_finished
+
+            # 🌟 [เพิ่มใหม่] Logic อัปเดตสถานะใบสั่งผลิต (Production Order)
+            # ถ้าผลิตได้ครบหรือเกินยอดที่ตั้งไว้ ให้เป็น Completed
+            if prod_order.quantity_actual >= prod_order.quantity:
+                prod_order.status = 'Completed'  # หรือชื่อสถานะที่เปรมใช้ เช่น 'Finished'
+            # ถ้าเริ่มผลิตแล้วแต่ยังไม่ครบ ให้เป็น Processing
+            elif prod_order.quantity_actual > 0:
+                prod_order.status = 'Processing'
+
+            # 4. บันทึกความเปลี่ยนแปลงใน Production Order
             prod_order.save()
+
         super().save(*args, **kwargs)
+
 
 class StockPlanning(Product):
     class Meta:
