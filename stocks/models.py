@@ -337,7 +337,7 @@ class ProductionLog(models.Model):
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     finished_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่เสร็จ")
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
-        def save(self, *args, **kwargs):
+    def save(self, *args, **kwargs):
         if not self.pk:  # ทำเฉพาะตอนสร้าง Record ใหม่
             prod_order = self.production_order
             
