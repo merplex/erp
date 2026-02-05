@@ -8,9 +8,8 @@ from .models import *
 from django import forms # ✅ เพิ่มบรรทัดนี้ครับ ทำระบบ tag checkbox
 from django.db.models import F
 from django.utils.safestring import mark_safe # ✅ ต้องมีบรรทัดนี้ครับ
-from django import forms # สำหรับปรับแต่งฟอร์ม tag
 # เพิ่มที่บรรทัดบนสุดของไฟล์ครับ
-from django.http import HttpResponseRedirect 
+from django.http import HttpResponseRedirect
 
 # ---------------------------------------------------------
 # Inline แสดงรายการสินค้าในหน้ากลุ่มสินค้า (Category)
@@ -285,44 +284,43 @@ class ProductAdmin(admin.ModelAdmin):
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
 
-    # ✅ 1. ส่วน Media: ฉีด CSS เข้าไปทำลายสไตล์แนวตั้งของ Django
-    class Media:
-        # เราจะใช้เทคนิคสร้าง CSS "ปลอม" เพื่อหลอกให้ Django ยอมฉีดสไตล์ที่เราต้องการเข้าไปในหน้า
-        css = {
-            'all': ('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css',)
-        }
-        # 🔥 นี่คือไม้ตายครับ ฉีดสไตล์เข้าไปที่หน้าแก้ไขโดยตรง
-        # เราจะใส่ไว้ใน widget แทนเพื่อให้ทำงานได้ 100%
-        
-    # ✅ 2. ส่วนจัดการ Tag: ใส่สี + เรียงแนวนอนแบบบังคับพิเศษ
-    def formfield_for_manytomany(self, db_field, request, **kwargs):
-        if db_field.name == "tags":
-            from django.db.models import Count
-            from django.utils.safestring import mark_safe
-            
-            # ดึง Tag เรียงตามความนิยม
-            qs = ProductTag.objects.annotate(num_products=Count('products')).order_by('-num_products', '-id')
-            
-            for tag in qs:
-                # ใส่สีให้ Tag ตอนเลือก
-                tag.name = mark_safe(
-                    f'<span style="background:{tag.color}; color:white; padding:2px 10px; border-radius:10px; font-size:12px; font-weight:bold; display:inline-block;">'
-                    f'{tag.name}</span>'
-                )
-            
-            kwargs["queryset"] = qs
-            # ✅ บังคับ Style ที่ตัวรายการภายใน (li) ให้เป็นแนวนอน
-            kwargs["widget"] = forms.CheckboxSelectMultiple(attrs={
-                'style': '''
-                    display: flex !important;
-                    flex-wrap: wrap !important;
+    formfield_overrides = {
+        models.ManyToManyField: {'widget': forms.CheckboxSelectMultiple},
+    }
+
+    def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
+        # ✅ ฉีดสไตล์ CSS จัดระเบียบ Tag ให้เป็นแนวนอน
+        style = mark_safe("""
+            <style>
+                /* บังคับให้รายการ ul เรียงแนวนอน */
+                .field-tags ul { 
+                    display: flex !important; 
+                    flex-wrap: wrap !important; 
                     flex-direction: row !important;
-                    gap: 15px !important;
-                    padding: 10px !important;
-                    list-style: none !important;
-                '''
-            })
-        return super().formfield_for_manytomany(db_field, request, **kwargs)
+                    list-style: none !important; 
+                    padding: 0 !important; 
+                    margin: 0 !important; 
+                    gap: 15px !important; 
+                }
+                /* จัดระเบียบตัว Checkbox กับข้อความ */
+                .field-tags ul li { 
+                    margin: 0 !important; 
+                    display: flex !important; 
+                    align-items: center !important; 
+                    background: #f8f9fa; /* ใส่สีพื้นหลังอ่อนๆ ให้พอดูเป็นก้อนๆ */
+                    padding: 5px 12px !important;
+                    border-radius: 15px !important;
+                    border: 1px solid #dee2e6 !important;
+                }
+                .field-tags ul li label { 
+                    margin-left: 5px !important; 
+                    font-weight: normal !important; 
+                    cursor: pointer;
+                }
+                /* ซ่อนจุดหน้ารายการของ Django */
+                .field-tags ul li:before { content: none !important; }
+            </style>
+        """)
 
     # ✅ 3. ตัวโชว์ Tag ในหน้ารวมรายการสินค้า
     def display_tags(self, obj):
