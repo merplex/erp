@@ -340,6 +340,21 @@ class ProductionOrder(models.Model):
                 self.status = 'Finished'
         
         super().save(*args, **kwargs)
+    def update_actual_and_status(self):
+        # ✅ คำนวณยอดผลิตจริงใหม่จาก Log ทั้งหมดที่มีอยู่จริงใน DB
+        from django.db.models import Sum
+        total = self.production_logs.aggregate(Sum('quantity_finished'))['quantity_finished__sum'] or 0
+        self.quantity_actual = total
+        
+        # ✅ ตรรกะสถานะ: ถ้าเป็น 0 ให้กลับเป็นร่าง (ตามคำใบ้เปรม!)
+        if self.status not in ['Completed', 'Cancelled']:
+            if self.quantity_actual <= 0:
+                self.status = 'Draft'
+            elif self.quantity_actual < self.quantity_planned:
+                self.status = 'Started'
+            else:
+                self.status = 'Finished'
+        self.save()
 
 class ProductionLog(models.Model):
     production_order = models.ForeignKey(ProductionOrder, on_delete=models.CASCADE, related_name='production_logs')
