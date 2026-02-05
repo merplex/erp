@@ -8,9 +8,8 @@ from .models import *
 from django import forms # ✅ เพิ่มบรรทัดนี้ครับ ทำระบบ tag checkbox
 from django.db.models import F
 from django.utils.safestring import mark_safe # ✅ ต้องมีบรรทัดนี้ครับ
-from django import forms # สำหรับปรับแต่งฟอร์ม tag
 # เพิ่มที่บรรทัดบนสุดของไฟล์ครับ
-from django.http import HttpResponseRedirect 
+from django.http import HttpResponseRedirect
 
 # ---------------------------------------------------------
 # Inline แสดงรายการสินค้าในหน้ากลุ่มสินค้า (Category)
@@ -285,46 +284,59 @@ class ProductAdmin(admin.ModelAdmin):
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
 
-    # ✅ 1. ส่วน Media: ฉีด CSS เข้าไปทำลายสไตล์แนวตั้งของ Django
-    class Media:
-        # เราจะใช้เทคนิคสร้าง CSS "ปลอม" เพื่อหลอกให้ Django ยอมฉีดสไตล์ที่เราต้องการเข้าไปในหน้า
-        css = {
-            'all': ('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css',)
-        }
-        # 🔥 นี่คือไม้ตายครับ ฉีดสไตล์เข้าไปที่หน้าแก้ไขโดยตรง
-        # เราจะใส่ไว้ใน widget แทนเพื่อให้ทำงานได้ 100%
-        
-    # ✅ 2. ส่วนจัดการ Tag: ใส่สี + เรียงแนวนอนแบบบังคับพิเศษ
-    def formfield_for_manytomany(self, db_field, request, **kwargs):
-        if db_field.name == "tags":
-            from django.db.models import Count
-            from django.utils.safestring import mark_safe
-            
-            # ดึง Tag เรียงตามความนิยม
-            qs = ProductTag.objects.annotate(num_products=Count('products')).order_by('-num_products', '-id')
-            
-            for tag in qs:
-                # ใส่สีให้ Tag ตอนเลือก
-                tag.name = mark_safe(
-                    f'<span style="background:{tag.color}; color:white; padding:2px 10px; border-radius:10px; font-size:12px; font-weight:bold; display:inline-block;">'
-                    f'{tag.name}</span>'
-                )
-            
-            kwargs["queryset"] = qs
-            # ✅ บังคับ Style ที่ตัวรายการภายใน (li) ให้เป็นแนวนอน
-            kwargs["widget"] = forms.CheckboxSelectMultiple(attrs={
-                'style': '''
-                    display: flex !important;
-                    flex-wrap: wrap !important;
-                    flex-direction: row !important;
-                    gap: 15px !important;
-                    padding: 10px !important;
-                    list-style: none !important;
-                '''
-            })
-        return super().formfield_for_manytomany(db_field, request, **kwargs)
+    formfield_overrides = {
+        models.ManyToManyField: {'widget': forms.CheckboxSelectMultiple},
+    }
 
-    # ✅ 3. ตัวโชว์ Tag ในหน้ารวมรายการสินค้า
+    def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
+        # ✅ ปรับ CSS ใหม่ ให้รองรับโครงสร้าง Checkbox ของเปรมครับ
+        style = mark_safe("""
+            <style>
+                .field-tags .related-widget-wrapper,
+                .field-tags ul,
+                .field-tags div {
+                    display: flex !important;
+                    flex-direction: row !important;
+                    flex-wrap: wrap !important;
+                    gap: 10px !important;
+                    align-items: center !important;
+                }
+
+                .field-tags ul li {
+                    display: inline-block !important;
+                    margin: 0 !important;
+                    padding: 0 !important;
+                }
+
+                .field-tags label {
+                    display: inline-flex !important;
+                    flex-direction: row !important;
+                    align-items: center !important;
+                    background: #e9ecef !important;
+                    border: 1px solid #ced4da !important;
+                    border-radius: 20px !important;
+                    padding: 4px 15px !important;
+                    margin: 0 !important;
+                    cursor: pointer;
+                    white-space: nowrap !important; 
+                }
+
+                .field-tags input[type="checkbox"] {
+                    margin: 0 8px 0 0 !important;
+                    vertical-align: middle !important;
+                }
+
+                .field-tags ul li:before { content: none !important; }
+                .field-tags br { display: none !important; } 
+            </style>
+        """)
+
+        context['title'] = mark_safe(f"{context['title']} {style}")
+        
+        # อย่าลืมคำว่า return นะครับ เดี๋ยวพังแบบมะกี้
+        return super().render_change_form(request, context, add, change, form_url, obj)
+
+    # ✅ 3. ตัวโชว์ Tag ในหน้ารวมรายการสินค้า (โค้ดเปรมดีอยู่แล้วครับ)
     def display_tags(self, obj):
         tags = obj.tags.all()
         if not tags: return "-"
@@ -415,7 +427,6 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
         queryset.update(status='Completed')
         self.message_user(request, f"ปิดงานสำเร็จ {queryset.count()} รายการแล้วค่ะ")
 
-    # 1. จัดการ Logic เมื่อมีการกดปุ่ม
     def response_change(self, request, obj):
         if "_complete_order" in request.POST:
             obj.status = 'Completed'
@@ -424,22 +435,35 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
             return HttpResponseRedirect(".")
         return super().response_change(request, obj)
 
-    # 2. ฉีดปุ่มเข้าไปในหน้าจอแก้ไข
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
-        # สร้าง Script เพื่อเพิ่มปุ่มในแถบด้านล่าง
         script = mark_safe("""
             <script>
                 django.jQuery(document).ready(function() {
-                    var container = django.jQuery('.submit-row');
                     var btn = '<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
-                    container.prepend(btn);
+                    django.jQuery('.submit-row').prepend(btn);
                 });
             </script>
         """)
-        # ใส่สคริปต์ลงใน context เพื่อให้ Django เรนเดอร์ออกมา
-        context['adminform'].form.help_text = script 
+        # ✅ เปลี่ยนจาก help_text มาเป็นฉีดที่ Title แทน ปุ่มจะขึ้นแน่นอน
+        context['title'] = mark_safe(f"{context['title']} {script}")
         return super().render_change_form(request, context, add, change, form_url, obj)
 
+    # ✅ แก้ไขตรงนี้: เพื่อให้บันทึก PurchaseReceiptLog ได้
+    # ✅ ปรับโครงสร้างให้เหมือน SalesOrderAdmin เป๊ะๆ
+    def save_formset(self, request, form, formset, change):
+        if formset.model == PurchaseItem:
+            # ส่วนของรายการสินค้า (Items) - ทำเหมือน SO
+            instances = formset.save(commit=False)
+            for instance in instances:
+                instance.save()
+            formset.save_m2m()
+        else:
+            # ✅ ส่วนของประวัติการรับของ (ReceiptLog) 
+            # ใช้ท่าเดียวกับ SO คือ formset.save()
+            # Django จะจัดการเรื่อง "ลบรายการที่ถูกติ๊ก Delete" ให้เอง 100% ครับ
+            formset.save()
+
+    # (ฟังก์ชันอื่นคงเดิมได้เลยค่ะ)
     def save_model(self, request, obj, form, change):
         if not change:
             obj.created_by = request.user
@@ -449,15 +473,7 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
         ordered = sum(i.quantity_ordered for i in obj.items.all())
         received = sum(l.quantity_received for l in obj.receipt_logs.all())
         return color_diff(received - ordered)
-    get_diff.short_description = "สถานะรับของ"
-
-    def save_formset(self, request, form, formset, change):
-        instances = formset.save(commit=False)
-        for instance in instances:
-            if hasattr(instance, 'user'): instance.user = request.user
-            instance.save()
-        formset.save_m2m()
-
+    
 @admin.register(SalesOrder)
 class SalesOrderAdmin(admin.ModelAdmin):
     list_display = ('so_number', 'customer', 'order_date', 'status', 'get_diff')
@@ -490,7 +506,7 @@ class SalesOrderAdmin(admin.ModelAdmin):
                 });
             </script>
         """)
-        context['adminform'].form.help_text = script
+        context['title'] = mark_safe(f"{context['title']} {script}")
         return super().render_change_form(request, context, add, change, form_url, obj)
     
     def save_model(self, request, obj, form, change):
@@ -524,27 +540,28 @@ class SalesOrderAdmin(admin.ModelAdmin):
     
     # ✅ ฟังก์ชันสร้างใบผลิตอัตโนมัติ
     def save_formset(self, request, form, formset, change):
-        instances = formset.save(commit=False)
         created_count = 0
 
-        for instance in instances:
-            if isinstance(instance, SalesItem):
-                # ✅ จุดสำคัญ: ต้องเชื่อมรายการนี้เข้ากับ "ใบสั่งขายหลัก" ก่อนเสมอ
-                # ไม่งั้นมันจะหา sales_order ไม่เจอและ Error ครับ
-                instance.sales_order = formset.instance 
-                # บันทึกข้อมูลรายการปกติ
-                if hasattr(instance, 'user'): instance.user = request.user
-                instance.save()
-                
-                # ✅ Logic สร้างใบผลิต (PD) อัตโนมัติ
-                # เงื่อนไข: ติ๊กผลิตทันที + มี BOM + ยังไม่เคยสร้างใบผลิตจากรายการนี้
-                if instance.auto_produce and instance.product.has_bom and not instance.is_produced:
-                    self.create_auto_production_order(instance, request.user)
-                    instance.is_produced = True # มาร์คไว้ว่าสร้างแล้ว
+        if formset.model == SalesItem:
+            instances = formset.save(commit=False)
+            created_count = 0
+            for instance in instances:
+                if isinstance(instance, SalesItem):
+                    instance.sales_order = formset.instance 
+                    if hasattr(instance, 'user'): instance.user = request.user
                     instance.save()
-                    created_count += 1
                     
-        formset.save_m2m()
+                    if instance.auto_produce and instance.product.has_bom and not instance.is_produced:
+                        self.create_auto_production_order(instance, request.user)
+                        instance.is_produced = True 
+                        instance.save()
+                        created_count += 1
+            formset.save_m2m()
+            
+            messages.success(request, f"ระบบสร้างใบผลิตอัตโนมัติสำเร็จ {created_count} รายการ")
+        else:
+            # ✅ บรรทัดนี้สำคัญมาก! ถ้าไม่ใช่ SalesItem (เช่นเป็น DeliveryLog) ให้เซฟปกติ
+            formset.save()
 
         if created_count > 0:
             messages.success(request, f"ระบบได้สร้างใบผลิต (PD) ให้โดยอัตโนมัติจำนวน {created_count} รายการแล้วค่ะ")
@@ -583,7 +600,7 @@ class ProductionOrderAdmin(admin.ModelAdmin):
                 });
             </script>
         """)
-        context['adminform'].form.help_text = script
+        context['title'] = mark_safe(f"{context['title']} {script}")
         return super().render_change_form(request, context, add, change, form_url, obj)
 
 
@@ -599,12 +616,32 @@ class ProductionOrderAdmin(admin.ModelAdmin):
     get_diff.short_description = "สถานะผลิต"
 
     def save_formset(self, request, form, formset, change):
-        instances = formset.save(commit=False)
-        for instance in instances:
-            if hasattr(instance, 'user'): instance.user = request.user
-            instance.save()
-        formset.save_m2m()
+        if formset.model == ProductionLog:
+            # ✅ 1. จัดการเรื่องลบ (เพื่อให้ลบประวัติผลิตแล้วยอดสต็อก/สถานะเด้งคืน)
+            if hasattr(formset, 'deleted_objects'):
+                for obj in formset.deleted_objects:
+                    obj.delete()
 
+            # ✅ 2. จัดการบันทึกยอดผลิตใหม่/แก้ไข
+            instances = formset.save(commit=False)
+            for instance in instances:
+                if hasattr(instance, 'user') and not instance.user_id:
+                    instance.user = request.user
+                instance.save()
+            formset.save_m2m()
+
+            # ✅ 3. ไม้ตายแก้บัคสถานะ: คำนวณยอดผลิตจริงใหม่จาก Log ทั้งหมด
+            # วิธีนี้จะทำให้ quantity_actual อัปเดตล่าสุดเสมอ สถานะถึงจะเปลี่ยนค่ะ
+            from django.db.models import Sum
+            obj = formset.instance
+            total_finished = obj.production_logs.aggregate(Sum('quantity_finished'))['quantity_finished__sum'] or 0
+            
+            # อัปเดตยอดจริงเข้าที่ตัวใบผลิตหลัก
+            obj.quantity_actual = total_finished
+            obj.save() # สั่ง Save ตรงนี้ สถานะใน models.py จะถูกคำนวณใหม่ทันที
+        else:
+            formset.save()
+            
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "product":
             kwargs["queryset"] = Product.objects.filter(has_bom=True)

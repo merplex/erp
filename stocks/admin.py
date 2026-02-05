@@ -48,7 +48,34 @@ class ProductInTagInline(admin.TabularInline):
     
     def has_add_permission(self, request, obj=None): 
         return False
+    
+    # ✅ แสดงฟิลด์ตามที่เปรมต้องการ
+    fields = ('get_product_name', 'get_barcode', 'get_buy_price', 'get_sale_price', 'get_stock')
+    readonly_fields = ('get_product_name', 'get_barcode', 'get_buy_price', 'get_sale_price', 'get_stock')
 
+    def get_product_name(self, obj):
+        # ใน ManyToMany Inline ต้องเข้าผ่าน obj.product นะครับ
+        return obj.product.name
+    get_product_name.short_description = "ชื่อสินค้า"
+
+    def get_barcode(self, obj):
+        # ✅ ดึงบาร์โค้ดล่าสุด (Last ID) ตามที่เปรมออกแบบไว้
+        barcode = obj.product.barcodes.order_by('-id').first()
+        return barcode.code if barcode else "-"
+    get_barcode.short_description = "บาร์โค้ดล่าสุด"
+
+    def get_buy_price(self, obj):
+        return f"{obj.product.buy_price:,.2f}"
+    get_buy_price.short_description = "ราคาทุน"
+
+    def get_sale_price(self, obj):
+        return f"{obj.product.sale_price:,.2f}"
+    get_sale_price.short_description = "ราคาขาย"
+
+    def get_stock(self, obj):
+        # ✅ แสดงสต็อกปัจจุบันพร้อมหน่วย
+        return f"{obj.product.stock_quantity} {obj.product.unit}"
+    get_stock.short_description = "สต็อกปัจจุบัน"
 # ---------------------------------------------------------
 # 1. รายการสั่งซื้อ (ค้างรับ) -> ใช้ po_number และติดลบ
 # ---------------------------------------------------------
@@ -767,10 +794,20 @@ class ProductCategoryAdmin(admin.ModelAdmin):
 @admin.register(ProductTag)
 class ProductTagAdmin(admin.ModelAdmin):
     # แสดงชื่อแท็กและตัวอย่างสีในหน้า List
-    list_display = ('name', 'color_display')
+    list_display = ('display_name_with_count', 'color', 'created_at')
     search_fields = ('name',)
     # ✅ เพิ่ม Inline เข้าไปที่นี่ค่ะ
     inlines = [ProductInTagInline]
+
+    def get_queryset(self, request):
+        # ใช้ annotate นับจำนวนสินค้าที่เชื่อมกับ Tag นี้
+        qs = super().get_queryset(request)
+        return qs.annotate(product_count=models.Count('products'))
+
+    def display_name_with_count(self, obj):
+        # เอาชื่อ Tag มาต่อด้วยจำนวนสินค้า
+        return f"{obj.name} ({obj.product_count})"
+    display_name_with_count.short_description = "ชื่อแท็ก (จำนวนสินค้า)"
 
     def color_display(self, obj):
         # แสดงเป็นกล่องสีสวยๆ ให้เห็นในหน้า Admin เลยครับ
