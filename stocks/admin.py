@@ -396,6 +396,24 @@ class SalesOrderAdmin(admin.ModelAdmin):
         shipped = sum(l.quantity_shipped for l in obj.delivery_logs.all())
         return color_diff(shipped - ordered)
     get_diff.short_description = "สถานะส่งของ"
+
+    # ❗ ต้องเพิ่มฟังก์ชันนี้เข้าไปด้วย ระบบถึงจะหาตัวสร้างใบ PD เจอครับ
+    def create_auto_production_order(self, sales_item, user):
+        import datetime
+        from .models import ProductionOrder
+        today_str = datetime.date.today().strftime('%Y%m%d')
+        count = ProductionOrder.objects.filter(pd_number__contains=today_str).count() + 1
+        pd_no = f"PD-{today_str}-{count:03d}"
+
+        return ProductionOrder.objects.create(
+            pd_number=pd_no,
+            product=sales_item.product,
+            quantity_planned=sales_item.quantity_ordered,
+            status='Draft',
+            order_date=datetime.date.today(),
+            created_by=user,
+            notes=f"สร้างอัตโนมัติจาก SO: {sales_item.sales_order.so_number}"
+        )
     
     # ✅ ฟังก์ชันสร้างใบผลิตอัตโนมัติ
     def save_formset(self, request, form, formset, change):
