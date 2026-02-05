@@ -477,7 +477,7 @@ class SalesOrderAdmin(admin.ModelAdmin):
         if "_complete_order" in request.POST:
             obj.status = 'Completed'
             obj.save()
-            self.message_user(request, f"ปิดงานใบสั่งขาย {obj.so_number} เรียบร้อยแล้ว")
+            self.message_user(request, f"ปิดงานใบสั่งซื้อ {obj.po_number} เรียบร้อยแล้ว")
             return HttpResponseRedirect(".")
         return super().response_change(request, obj)
 
@@ -485,13 +485,26 @@ class SalesOrderAdmin(admin.ModelAdmin):
         script = mark_safe("""
             <script>
                 django.jQuery(document).ready(function() {
-                    var btn = '<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #218838; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
+                    var btn = '<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
                     django.jQuery('.submit-row').prepend(btn);
                 });
             </script>
         """)
+        # ✅ เปลี่ยนจาก help_text มาเป็นฉีดที่ Title แทน ปุ่มจะขึ้นแน่นอน
         context['title'] = mark_safe(f"{context['title']} {script}")
         return super().render_change_form(request, context, add, change, form_url, obj)
+
+    # ✅ แก้ไขตรงนี้: เพื่อให้บันทึก PurchaseReceiptLog ได้
+    def save_formset(self, request, form, formset, change):
+        if formset.model == PurchaseItem:
+            instances = formset.save(commit=False)
+            for instance in instances:
+                if hasattr(instance, 'user'): instance.user = request.user
+                instance.save()
+            formset.save_m2m()
+        else:
+            # สำหรับ PurchaseReceiptLog และ Inline อื่นๆ ให้เซฟปกติ
+            formset.save()
     
     def save_model(self, request, obj, form, change):
         if not change:
