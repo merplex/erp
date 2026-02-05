@@ -148,9 +148,18 @@ class PurchaseItemInline(admin.TabularInline):
             if resolved and 'object_id' in resolved.kwargs:
                 po_id = resolved.kwargs['object_id']
                 try:
+                    from django.db.models import Q # ✅ ต้อง Import Q มาด้วยครับ
                     po = PurchaseOrder.objects.get(pk=po_id)
-                    kwargs["queryset"] = Product.objects.filter(product_suppliers__supplier=po.supplier)
-                except: pass
+                    
+                    # ✅ เงื่อนไขใหม่: 
+                    # 1. เป็นสินค้าที่ Supplier รายนี้ขาย (is_product=True และมีชื่อใน list)
+                    # 2. หรือ เป็นรายการ "ไม่ใช่สินค้า" (is_product=False) ซึ่งใครก็ซื้อได้
+                    kwargs["queryset"] = Product.objects.filter(
+                        Q(product_suppliers__supplier=po.supplier) | Q(is_product=False)
+                    ).distinct()
+                    
+                except Exception as e:
+                    print(f"Error filtering PO products: {e}")
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 class PurchaseReceiptLogInline(admin.TabularInline):
@@ -221,7 +230,7 @@ class SupplierAdmin(admin.ModelAdmin):
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
     list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit', 'has_bom', 'created_by')
-    list_filter = ('category', 'tags', 'has_bom', 'suppliers')
+    list_filter = ('category','is_product', 'tags', 'has_bom', 'suppliers')
     search_fields = ('name', 'barcodes__code','tags__name')
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')

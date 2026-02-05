@@ -77,6 +77,8 @@ class Customer(models.Model):
 class Product(models.Model):
     name = models.CharField(max_length=255, verbose_name="ชื่อสินค้า")
     category = models.ForeignKey(ProductCategory, on_delete=models.SET_NULL, null=True, blank=True)
+    # ✅ เพิ่มฟิลด์แยกประเภท (True = สินค้ามีสต็อก, False = บริการ/ค่าใช้จ่าย)
+    is_product = models.BooleanField(default=True, verbose_name="เป็นสินค้า (สต็อก)")
     tags = models.ManyToManyField(ProductTag, blank=True, related_name='products', verbose_name="แท็ก")
     suppliers = models.ManyToManyField(Supplier, through='ProductSupplier', related_name='products')
     has_bom = models.BooleanField(default=False, verbose_name="สินค้าผลิตเอง (BOM)")
