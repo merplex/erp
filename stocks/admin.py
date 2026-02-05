@@ -437,17 +437,23 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
         return super().render_change_form(request, context, add, change, form_url, obj)
 
     # ✅ แก้ไขตรงนี้: เพื่อให้บันทึก PurchaseReceiptLog ได้
+    # ✅ รวมร่างเป็นอันเดียว: จัดการทั้งการลบ, การบันทึก Item และการบันทึก Log
     def save_formset(self, request, form, formset, change):
-        if formset.model == PurchaseItem:
-            instances = formset.save(commit=False)
-            for instance in instances:
-                if hasattr(instance, 'user'): instance.user = request.user
-                instance.save()
-            formset.save_m2m()
-        else:
-            # สำหรับ PurchaseReceiptLog และ Inline อื่นๆ ให้เซฟปกติ
-            formset.save()
+        # 1. จัดการเรื่องการลบ (ติ๊ก Delete แล้วต้องหายจริง)
+        for obj in formset.deleted_objects:
+            obj.delete()
 
+        # 2. จัดการเรื่องการบันทึก (commit=False เพื่อจัดการข้อมูลแฝง)
+        instances = formset.save(commit=False)
+        for instance in instances:
+            # ถ้าเป็นฟิลด์ที่มีให้เก็บชื่อ User และยังไม่มีข้อมูล ให้ใส่ชื่อคนทำปัจจุบันลงไป
+            if hasattr(instance, 'user') and not instance.user_id:
+                instance.user = request.user
+            instance.save()
+            
+        formset.save_m2m()
+
+    # (ฟังก์ชันอื่นคงเดิมได้เลยค่ะ)
     def save_model(self, request, obj, form, change):
         if not change:
             obj.created_by = request.user
@@ -457,15 +463,7 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
         ordered = sum(i.quantity_ordered for i in obj.items.all())
         received = sum(l.quantity_received for l in obj.receipt_logs.all())
         return color_diff(received - ordered)
-    get_diff.short_description = "สถานะรับของ"
-
-    def save_formset(self, request, form, formset, change):
-        instances = formset.save(commit=False)
-        for instance in instances:
-            if hasattr(instance, 'user'): instance.user = request.user
-            instance.save()
-        formset.save_m2m()
-
+    
 @admin.register(SalesOrder)
 class SalesOrderAdmin(admin.ModelAdmin):
     list_display = ('so_number', 'customer', 'order_date', 'status', 'get_diff')
