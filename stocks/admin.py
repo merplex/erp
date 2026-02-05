@@ -289,40 +289,51 @@ class ProductAdmin(admin.ModelAdmin):
     }
 
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
-        # ✅ 1. เตรียม CSS สำหรับ Tag
+        # ✅ ปรับ CSS ใหม่ ให้รองรับโครงสร้าง Checkbox ของเปรมครับ
         style = mark_safe("""
             <style>
+                /* บังคับให้ Container ของแท็กจัดเรียงแบบ Flex (แนวนอน) */
+                .field-tags div.readonly, 
+                .field-tags .related-widget-wrapper,
                 .field-tags ul { 
                     display: flex !important; 
                     flex-wrap: wrap !important; 
-                    flex-direction: row !important;
-                    list-style: none !important; 
-                    padding: 0 !important; 
-                    margin: 0 !important; 
                     gap: 15px !important; 
+                    align-items: center !important;
                 }
-                .field-tags ul li { 
-                    margin: 0 !important; 
-                    display: flex !important; 
-                    align-items: center !important; 
-                    background: #f8f9fa;
-                    padding: 5px 12px !important;
-                    border-radius: 15px !important;
-                    border: 1px solid #dee2e6 !important;
+
+                /* จัดระเบียบแต่ละ Tag ให้เป็นก้อน (Pill) */
+                .field-tags label { 
+                    display: inline-flex !important;
+                    align-items: center !important;
+                    background: #f0f2f5 !important;
+                    padding: 4px 12px !important;
+                    border-radius: 20px !important;
+                    border: 1px solid #d1d5db !important;
+                    margin: 0 !important;
+                    cursor: pointer;
+                    white-space: nowrap;
+                    font-weight: normal !important;
                 }
-                .field-tags ul li label { 
-                    margin-left: 5px !important; 
-                    font-weight: normal !important; 
+
+                /* เว้นระยะห่างระหว่าง Checkbox กับตัวอักษร */
+                .field-tags input[type="checkbox"] {
+                    margin: 0 6px 0 0 !important;
                     cursor: pointer;
                 }
+
+                /* ซ่อนจุด (Bullet) ถ้ามี */
+                .field-tags ul li { list-style: none !important; padding: 0 !important; margin: 0 !important; }
                 .field-tags ul li:before { content: none !important; }
+                
+                /* ขยายความกว้างให้เต็มพื้นที่ */
+                .field-tags .flex-container { display: block !important; }
             </style>
         """)
 
-        # ✅ 2. ฉีด Style เข้าไปใน Title (ปุ่ม Complete ถ้ามีก็ใส่พ่วงไปตรงนี้ได้ครับ)
         context['title'] = mark_safe(f"{context['title']} {style}")
-
-        # 🔥 จุดตาย: ต้องมี return super() แบบนี้เท่านั้นครับ!
+        
+        # อย่าลืมคำว่า return นะครับ เดี๋ยวพังแบบมะกี้
         return super().render_change_form(request, context, add, change, form_url, obj)
 
     # ✅ 3. ตัวโชว์ Tag ในหน้ารวมรายการสินค้า (โค้ดเปรมดีอยู่แล้วครับ)
