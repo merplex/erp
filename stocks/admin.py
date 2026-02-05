@@ -449,23 +449,38 @@ class StockPlanningAdmin(admin.ModelAdmin):
     list_filter = ('category', 'suppliers', BuyPriceRangeFilter)
     search_fields = ('name', 'barcode__code')
 
+    # 1. แก้ไขแผนรับ (PO): รวมสถานะ Draft และรายการที่ยังได้รับไม่ครบ
     def get_pending_in(self, obj):
-        items = obj.purchaseitem_set.filter(purchase_order__status__in=['Confirmed', 'Received'])
+        # รวมสถานะ Draft เข้าไปด้วย เพื่อให้เห็นยอดที่จะเข้าในอนาคต
+        items = obj.purchaseitem_set.filter(
+            purchase_order__status__in=['Draft', 'Confirmed', 'Received']
+        )
+        # คำนวณส่วนต่าง: ถ้าสั่ง 10 รับแล้ว 0 ก็ต้องโชว์ 10 (ค้างรับ)
         total = sum((i.quantity_ordered - i.quantity_received) for i in items)
         return total if total > 0 else 0
     get_pending_in.short_description = "แผนรับ (PO)"
 
+    # 2. แก้ไขแผนส่ง (SO): รวมสถานะ Draft และรายการที่ยังส่งไม่ครบ (แม้ยังไม่เคยส่งเลยก็ตาม)
     def get_pending_out(self, obj):
-        items = obj.salesitem_set.filter(sales_order__status__in=['Confirmed', 'Shipped'])
+        # รวมสถานะ Draft และรายการที่กุมยอดจองไว้
+        items = obj.salesitem_set.filter(
+            sales_order__status__in=['Draft', 'Confirmed', 'Shipped']
+        )
+        # คำนวณส่วนต่าง: ถ้าสั่ง 5 ส่งแล้ว 0 ก็ต้องโชว์ 5 (ค้างส่ง)
         total = sum((i.quantity_ordered - i.quantity_shipped) for i in items)
         return total if total > 0 else 0
     get_pending_out.short_description = "แผนส่ง (SO)"
 
+    # 3. แก้ไขแผนผลิต (PD): ให้ครอบคลุมทุกสถานะที่ยังผลิตไม่เสร็จ
     def get_pending_prod(self, obj):
-        orders = obj.productionorder_set.filter(status__in=['Started', 'Finished'])
+        orders = obj.productionorder_set.filter(
+            status__in=['Draft', 'Started', 'Finished']
+        )
         total = sum((o.quantity_planned - o.quantity_actual) for o in orders)
         return total if total > 0 else 0
     get_pending_prod.short_description = "แผนผลิต (PD)"
+
+    # ... (get_available และส่วนอื่นๆ เหมือนเดิม) ...
 
     def get_available(self, obj):
         on_hand = obj.stock_quantity
