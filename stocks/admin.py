@@ -604,26 +604,32 @@ class ProductionOrderAdmin(admin.ModelAdmin):
     get_diff.short_description = "สถานะผลิต"
 
     def save_formset(self, request, form, formset, change):
-        # ✅ 1. เพิ่ม Logic การลบ (เพื่อให้ลบประวัติผลิตแล้วยอดสต็อก/สถานะเด้งคืน)
-        if hasattr(formset, 'deleted_objects'):
-            for obj in formset.deleted_objects:
-                obj.delete()
-
-        # ✅ 2. จัดการบันทึกยอดผลิต
         if formset.model == ProductionLog:
+            # ✅ 1. จัดการเรื่องลบ (เพื่อให้ลบประวัติผลิตแล้วยอดสต็อก/สถานะเด้งคืน)
+            if hasattr(formset, 'deleted_objects'):
+                for obj in formset.deleted_objects:
+                    obj.delete()
+
+            # ✅ 2. จัดการบันทึกยอดผลิตใหม่/แก้ไข
             instances = formset.save(commit=False)
             for instance in instances:
                 if hasattr(instance, 'user') and not instance.user_id:
                     instance.user = request.user
                 instance.save()
             formset.save_m2m()
+
+            # ✅ 3. ไม้ตายแก้บัคสถานะ: คำนวณยอดผลิตจริงใหม่จาก Log ทั้งหมด
+            # วิธีนี้จะทำให้ quantity_actual อัปเดตล่าสุดเสมอ สถานะถึงจะเปลี่ยนค่ะ
+            from django.db.models import Sum
+            obj = formset.instance
+            total_finished = obj.production_logs.aggregate(Sum('quantity_finished'))['quantity_finished__sum'] or 0
+            
+            # อัปเดตยอดจริงเข้าที่ตัวใบผลิตหลัก
+            obj.quantity_actual = total_finished
+            obj.save() # สั่ง Save ตรงนี้ สถานะใน models.py จะถูกคำนวณใหม่ทันที
         else:
             formset.save()
-
-        # ✅ 3. หัวใจสำคัญ: สั่งให้ใบผลิตหลัก Save อีกรอบเพื่ออัปเดตสถานะ
-        # (จาก Draft -> Started -> Finished ตามยอดจริงที่คีย์เข้าไป)
-        formset.instance.save()
-
+            
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "product":
             kwargs["queryset"] = Product.objects.filter(has_bom=True)
