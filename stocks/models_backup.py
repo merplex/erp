@@ -3,7 +3,12 @@ from django.utils import timezone
 from django.contrib.auth.models import User
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
+import random # ✅ เพิ่มไว้บนสุดของไฟล์
 import datetime
+
+def get_random_color():
+    # สุ่มรหัสสี Hex เช่น #a1b2c3
+    return "#{:06x}".format(random.randint(0, 0xFFFFFF))
 
 # --- ฟังก์ชันช่วยรันเลขที่เอกสาร ---
 def generate_number(prefix, model_class, field_name):
@@ -24,6 +29,18 @@ class ProductCategory(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, null=True)
     def __str__(self): return self.name
     class Meta: verbose_name_plural = "A1. กลุ่มสินค้า"
+
+class ProductTag(models.Model):
+    name = models.CharField(max_length=50, unique=True, verbose_name="ชื่อแท็ก")
+    color = models.CharField(max_length=7, default=get_random_color, verbose_name="สีแท็ก (Hex)")
+
+    def __str__(self):
+        return self.name
+    
+    class Meta:
+        verbose_name = "แท็กสินค้า"
+        verbose_name_plural = "แท็กสินค้าทั้งหมด"
+    class Meta: verbose_name_plural = "T1. แท็กสินค้า (Product Tag)"
 
 # 2. ผู้จำหน่าย
 class Supplier(models.Model):
@@ -59,8 +76,10 @@ class Customer(models.Model):
 # 4. รายการสินค้า
 class Product(models.Model):
     name = models.CharField(max_length=255, verbose_name="ชื่อสินค้า")
-    barcode = models.CharField(max_length=100, unique=True)
     category = models.ForeignKey(ProductCategory, on_delete=models.SET_NULL, null=True, blank=True)
+    # ✅ เพิ่มฟิลด์แยกประเภท (True = สินค้ามีสต็อก, False = บริการ/ค่าใช้จ่าย)
+    is_product = models.BooleanField(default=True, verbose_name="เป็นสินค้า (สต็อก)")
+    tags = models.ManyToManyField(ProductTag, blank=True, related_name='products', verbose_name="แท็ก")
     suppliers = models.ManyToManyField(Supplier, through='ProductSupplier', related_name='products')
     has_bom = models.BooleanField(default=False, verbose_name="สินค้าผลิตเอง (BOM)")
     buy_price = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="ราคาทุน")
@@ -73,11 +92,53 @@ class Product(models.Model):
     updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="prod_updated")
     created_at = models.DateTimeField(auto_now_add=True, null=True)
     updated_at = models.DateTimeField(auto_now=True, null=True)
+
     def save(self, *args, **kwargs):
         if not self.sale_price: self.sale_price = self.buy_price
         super().save(*args, **kwargs)
     def __str__(self): return self.name
-    class Meta: verbose_name_plural = "A4. รายการสินค้า"
+
+    @property
+    def production_cost_avg(self):
+        if not self.has_bom:
+            return 0.0
+        try:
+            boms = self.bom_formulas.all()
+            if boms.exists():
+                total_sum = sum(float(bom.total_cost) for bom in boms)
+                # ส่งค่าเป็นตัวเลข float ธรรมดา ห้ามมี html
+                return float(total_sum / boms.count()) 
+        except:
+            return 0.0
+        return 0.0
+        # เติมตัวนี้เข้าไปครับ แอดมินถึงจะเห็นว่ามี BOM กี่ใบ
+    @property
+    def bom_count(self):
+        if not self.has_bom:
+            return 0
+        try:
+            # ใช้ related_name ตัวเดียวกับที่คำนวณราคานั่นแหละ
+            return self.bom_formulas.count()
+        except:
+            return 0
+
+    @property
+    def latest_barcode(self):
+        # ดึงบาร์โค้ดตัวล่าสุด (ลำดับสุดท้ายที่เพิ่มเข้าไป)
+        last_entry = self.barcodes.all().last()
+        return last_entry.code if last_entry else "-"
+
+    class Meta: verbose_name_plural = "A4. รายการสินค้า (Product)"
+
+class ProductBarcode(models.Model):
+    product = models.ForeignKey(Product, related_name='barcodes', on_delete=models.CASCADE)
+    code = models.CharField(max_length=100, unique=True, verbose_name="บาร์โค้ด")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.code
+
+
 
 class ProductSupplier(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='product_suppliers')
@@ -88,7 +149,8 @@ class ProductSupplier(models.Model):
 
 # 5. สูตรการผลิต (BOM)
 class BOM(models.Model):
-    product = models.OneToOneField(Product, on_delete=models.CASCADE, related_name='bom_formula')
+    # แก้ไขจาก OneToOneField เป็น ForeignKey และเปลี่ยน related_name เป็นพหูพจน์
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='bom_formulas')
     name = models.CharField(max_length=255, verbose_name="ชื่อสูตร")
     sale_price = models.DecimalField(max_digits=10, decimal_places=2)
     unit = models.CharField(max_length=50, default="ชิ้น", verbose_name="หน่วยผลิต")
@@ -202,6 +264,10 @@ class SalesItem(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
     quantity_ordered = models.PositiveIntegerField(verbose_name="จำนวนที่สั่งขาย")
     quantity_shipped = models.PositiveIntegerField(default=0, verbose_name="ส่งสะสม")
+    # ✅ เพิ่ม 2 ฟิลด์นี้เพื่อทำ auto production ค่ะ
+    auto_produce = models.BooleanField(default=False, verbose_name="ผลิตทันที (Auto PD)")
+    is_produced = models.BooleanField(default=False, editable=False) # เก็บไว้หลังบ้านกันสร้างซ้ำ
+
 
 class SalesDeliveryLog(models.Model):
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='delivery_logs')

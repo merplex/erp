@@ -31,6 +31,22 @@ class ProductInCategoryInline(admin.TabularInline):
 
     def has_add_permission(self, request, obj=None): 
         return False
+# ---------------------------------------------------------
+# 1. สร้าง Inline สำหรับแสดงสินค้าที่ใช้แท็กนี้
+# ---------------------------------------------------------
+class ProductInTagInline(admin.TabularInline):
+    # ใช้ table กลางของ ManyToMany ระหว่าง Product และ Tags
+    model = Product.tags.through 
+    extra = 0
+    verbose_name = "สินค้าที่ใช้แท็กนี้"
+    verbose_name_plural = "รายการสินค้าทั้งหมดที่ใช้แท็กนี้"
+    
+    # ปรับให้ดูอย่างเดียว (Read-only) เพื่อความปลอดภัย ไม่ให้เผลอลบสินค้าจากหน้านี้
+    readonly_fields = ('product',)
+    can_delete = False
+    
+    def has_add_permission(self, request, obj=None): 
+        return False
 
 # ---------------------------------------------------------
 # 1. รายการสั่งซื้อ (ค้างรับ) -> ใช้ po_number และติดลบ
@@ -596,6 +612,8 @@ class ProductTagAdmin(admin.ModelAdmin):
     # แสดงชื่อแท็กและตัวอย่างสีในหน้า List
     list_display = ('name', 'color_display')
     search_fields = ('name',)
+    # ✅ เพิ่ม Inline เข้าไปที่นี่ค่ะ
+    inlines = [ProductInTagInline]
 
     def color_display(self, obj):
         # แสดงเป็นกล่องสีสวยๆ ให้เห็นในหน้า Admin เลยครับ
@@ -604,6 +622,11 @@ class ProductTagAdmin(admin.ModelAdmin):
             obj.color, obj.name
         )
     color_display.short_description = "ตัวอย่างสี"
+
+    # ✅ แถม: เพิ่มฟังก์ชันนับจำนวนสินค้าในหน้า List ให้ดูง่ายๆ ค่ะ
+    def get_product_count(self, obj):
+        return obj.product_set.count()
+    get_product_count.short_description = "จำนวนสินค้าที่ใช้"
 
 
 admin.site.register(Customer)
