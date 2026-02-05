@@ -916,16 +916,17 @@ class FinanceReportAdmin(admin.ModelAdmin):
     def get_grand_total_list(self, obj): return f"{obj.grand_total:,.2f}"
     get_grand_total_list.short_description = "ยอดสุทธิ"
 
+    # admin.py
+
     def get_balance_due_list(self, obj):
         bal = obj.balance_due
-        # ❌ แบบเดิม (พังเพราะไม่มีตัวแปร): 
-        # if bal <= 0: return format_html('<span style="color:green; font-weight:bold;">ครบถ้วน</span>')
-
-        # ✅ แบบใหม่ (แก้โดยย้ายคำว่า "ครบถ้วน" ออกมาเป็นตัวแปร):
+        
         if bal <= 0: 
             return format_html('<span style="color:green; font-weight:bold;">{}</span>', "ครบถ้วน")
             
-        return format_html('<span style="color:red; font-weight:bold;">-{:,.2f}</span>', bal)
+        # ✅ แก้ไข: ใช้ f-string จัดตัวเลขให้เสร็จก่อนส่งไปแสดงผล
+        return format_html('<span style="color:red; font-weight:bold;">-{}</span>', f"{bal:,.2f}")
+    
     get_balance_due_list.short_description = "ค้างจ่าย"
 
 
