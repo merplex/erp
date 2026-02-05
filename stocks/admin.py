@@ -53,7 +53,7 @@ class ProductInTagInline(admin.TabularInline):
 # ---------------------------------------------------------
 class PendingPurchaseInline(admin.TabularInline):
     model = PurchaseItem
-    fields = ['get_ref_no', 'quantity_ordered', 'quantity_received', 'get_pending']
+    fields = ['quantity_ordered', 'quantity_received', 'get_pending']
     readonly_fields = fields
     extra = 0
     can_delete = False
@@ -61,7 +61,11 @@ class PendingPurchaseInline(admin.TabularInline):
     verbose_name_plural = "🛒 รายการสั่งซื้อค้างรับ"
 
     def get_queryset(self, request):
-        return super().get_queryset(request).filter(quantity_ordered__gt=F('quantity_received'))
+        return super().get_queryset(request).filter(
+            quantity_ordered__gt=F('quantity_received')
+        ).exclude(
+            purchase_order__status__in=['Received', 'Completed', 'Cancelled']
+        )
 
     def get_ref_no(self, obj):
         # ✅ แก้จาก obj.order เป็น obj.purchase_order ตามโครงสร้างเปรม
@@ -88,7 +92,11 @@ class PendingProductionInline(admin.TabularInline):
     verbose_name_plural = "🔨 รายการผลิตค้างผลิต"
 
     def get_queryset(self, request):
-        return super().get_queryset(request).filter(quantity_planned__gt=F('quantity_actual'))
+        return super().get_queryset(request).filter(
+            quantity_planned__gt=F('quantity_actual') # ✅ ยังไม่ครบจำนวน
+        ).exclude(
+            status__in=['Finished', 'Completed', 'Cancelled'] # ✅ และยังไม่จบงาน/ยกเลิก
+        )
 
     def get_pending(self, obj):
         diff = obj.quantity_planned - obj.quantity_actual
@@ -102,7 +110,7 @@ class PendingProductionInline(admin.TabularInline):
 # ---------------------------------------------------------
 class PendingSaleInline(admin.TabularInline):
     model = SalesItem
-    fields = ['get_ref_no', 'quantity_ordered', 'quantity_shipped', 'get_pending']
+    fields = ['quantity_ordered', 'quantity_shipped', 'get_pending']
     readonly_fields = fields
     extra = 0
     can_delete = False
@@ -110,12 +118,14 @@ class PendingSaleInline(admin.TabularInline):
     verbose_name_plural = "📦 รายการขายค้างส่ง"
 
     def get_queryset(self, request):
-        return super().get_queryset(request).filter(quantity_ordered__gt=F('quantity_shipped'))
-
-    def get_ref_no(self, obj):
-        # ✅ แก้จาก obj.order เป็น obj.sales_order ตามโครงสร้างเปรม
-        return obj.sales_order.so_number
-    get_ref_no.short_description = "SO No."
+        # ✅ กรองเฉพาะ:
+        # 1. ยอดที่สั่งซื้อต้อง "มากกว่า" ยอดที่ส่งไปแล้ว (ยังมีของค้างส่ง)
+        # 2. สถานะใบสั่งขายต้องไม่ใช่ 'Shipped' (ส่งครบ), 'Completed' (ปิดงาน), หรือ 'Cancelled' (ยกเลิก)
+        return super().get_queryset(request).filter(
+            quantity_ordered__gt=F('quantity_shipped')
+        ).exclude(
+            sales_order__status__in=['Shipped', 'Completed', 'Cancelled']
+        )
 
     def get_pending(self, obj):
         diff = obj.quantity_ordered - obj.quantity_shipped
@@ -123,6 +133,26 @@ class PendingSaleInline(admin.TabularInline):
     get_pending.short_description = "ขาดส่ง"
 
     def has_add_permission(self, request, obj=None): return False
+
+
+    # ✅ แถม: ฟังก์ชันโชว์สถานะของใบสั่งขายในตาราง
+    def order_status(self, obj):
+        status = obj.sales_order.status
+        colors = {
+            'Draft': '#6c757d',
+            'Confirmed': '#007bff',
+            'Partially Shipped': '#ffc107',
+        }
+        color = colors.get(status, '#000')
+        return format_html('<b style="color: {};">{}</b>', color, status)
+    order_status.short_description = "สถานะใบสั่ง"
+
+    # ✅ แถม: ฟังก์ชันคลิกที่เลขที่ใบสั่งแล้วกระโดดไปหน้าแก้ไขได้เลย
+    def sales_order_link(self, obj):
+        from django.urls import reverse
+        url = reverse("admin:stocks_salesorder_change", args=[obj.sales_order.id])
+        return format_html('<a href="{}">{}</a>', url, obj.sales_order.so_number)
+    sales_order_link.short_description = "เลขที่ใบสั่งขาย"
 
 # --- Inlines ---
 # ---------------------------------------------------------
@@ -375,6 +405,35 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
     search_fields = ('po_number', 'invoice_no_supplier', 'supplier__company_name')
     inlines = [PurchaseItemInline, PurchaseReceiptLogInline]
     readonly_fields = ('created_by', 'status')
+
+    actions = ['mark_as_completed']
+
+    @admin.action(description="✅ เปลี่ยนสถานะเป็น: เสร็จงาน/ปิดงาน")
+    def mark_as_completed(self, request, queryset):
+        queryset.update(status='Completed')
+        self.message_user(request, f"ปิดงานสำเร็จ {queryset.count()} รายการแล้วค่ะ")
+
+    # ✅ 1. เพิ่มปุ่ม "เสร็จงาน" เข้าไปในหน้าแก้ไข
+    def response_change(self, request, obj):
+        # ตรวจสอบว่าถ้ามีการกดปุ่มที่ชื่อ "_complete_order" (ที่เราจะสร้าง)
+        if "_complete_order" in request.POST:
+            obj.status = 'Completed'
+            obj.save()
+            self.message_user(request, "ปิดงานใบสั่งซื้อเรียบร้อยแล้ว รายการจะถูกซ่อนจากหน้าสินค้า")
+            return HttpResponseRedirect(".") # รีเฟรชหน้าเดิม
+        return super().response_change(request, obj)
+
+    # ✅ 2. แสดงผลปุ่มในหน้า Admin (ใช้เทคนิคฉีด HTML เข้าไปเบาๆ)
+    def change_view(self, request, object_id, form_url='', extra_context=None):
+        extra_context = extra_context or {}
+        # ส่งค่าไปบอกหน้าจอว่าให้โชว์ปุ่ม "ปิดงาน" ถ้าสถานะยังไม่เป็น Completed
+        extra_context['show_complete_button'] = True 
+        return super().change_view(request, object_id, form_url, extra_context=extra_context)
+
+    # ✅ 3. ปรับแต่ง CSS/JS เล็กน้อยเพื่อให้ปุ่มปรากฏข้างๆ ปุ่ม Save
+    class Media:
+        js = ('admin/js/vendor/jquery/jquery.js', 'admin/js/jquery.init.js')
+        # เราจะเขียน Script สั้นๆ เพื่อสร้างปุ่มเสร็จงานครับ
 
     def save_model(self, request, obj, form, change):
         if not change:
