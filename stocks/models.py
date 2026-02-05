@@ -361,7 +361,7 @@ class ProductionLog(models.Model):
                 prod_order.status = 'Completed'  # หรือชื่อสถานะที่เปรมใช้ เช่น 'Finished'
             # ถ้าเริ่มผลิตแล้วแต่ยังไม่ครบ ให้เป็น Processing
             elif prod_order.quantity_actual > 0:
-                prod_order.status = 'Processing'
+                prod_order.status = 'Finished'
 
             # 4. บันทึกความเปลี่ยนแปลงใน Production Order
             prod_order.save()
