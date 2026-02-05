@@ -228,43 +228,39 @@ class ProductAdmin(admin.ModelAdmin):
     
     class Media:
         css = {
-            'all': ('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css',)
+            'all': (
+                'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css',
+            )
         }
-        # ใส่สไตล์เพิ่มเติมให้ตัว Checkbox ดูห่างกันและอ่านง่าย
+        # เพิ่มเติม: เปรมสามารถใส่ CSS เพื่อบังคับให้รายการ li ไม่กระโดดบรรทัดได้ที่นี่
         js = []
 
-    formfield_overrides = {
-        models.ManyToManyField: {
-            'widget': forms.CheckboxSelectMultiple(attrs={
-                'style': '''
-                    display: flex; 
-                    flex-wrap: wrap; 
-                    gap: 12px; 
-                    padding: 10px; 
-                    background: #f8f9fa; 
-                    border-radius: 5px; 
-                    border: 1px solid #ddd;
-                    list-style-type: none;
-                '''
-            })
-        },
-    }
 
-
-    # ✅ 3. สั่งเรียงลำดับความนิยมเหมือนเดิม แต่คราวนี้จะขึ้นในรูปแบบ Checkbox
+    # ✅ 1. ย้ายการตั้งค่า Widget และการเรียงลำดับมาไว้ที่นี่ที่เดียว (จบ ไม่ซ้ำซ้อน)
     def formfield_for_manytomany(self, db_field, request, **kwargs):
         if db_field.name == "tags":
             from django.db.models import Count
-            kwargs["queryset"] = ProductTag.objects.annotate(
-                num_products=Count('products')
-            ).order_by('-num_products', '-id')
+            # ดึงแท็กมาเรียงตามความนิยม
+            qs = ProductTag.objects.annotate(num_products=Count('products')).order_by('-num_products', '-id')
+            
+            # 🔥 ใส่สีให้ Tag ตอนเลือกเลย (เปรมจะได้เห็นสีในหน้าแก้ไขด้วย)
+            for tag in qs:
+                tag.name = mark_safe(
+                    f'<span style="background:{tag.color}; color:white; padding:1px 8px; border-radius:10px; font-size:11px; margin-left:5px;">'
+                    f'{tag.name}</span>'
+                )
+            
+            kwargs["queryset"] = qs
+            # ✅ บังคับเรียงแนวนอนด้วย Style ตรงนี้เลยครับ ชัวร์ที่สุด
+            kwargs["widget"] = forms.CheckboxSelectMultiple(attrs={
+                'style': 'display: flex; flex-wrap: wrap; gap: 15px; list-style: none; padding: 10px; background: #fdfdfd; border: 1px solid #eee; border-radius: 5px;'
+            })
         return super().formfield_for_manytomany(db_field, request, **kwargs)
 
-    # ... (ส่วน display_tags และ Inlines อื่นๆ เหมือนเดิม) ...
+    # ✅ 2. ตัวโชว์ Tag ในหน้ารวมรายการสินค้า (อันเดิมของเปรม ถูกต้องแล้วครับ)
     def display_tags(self, obj):
         tags = obj.tags.all()
         if not tags: return "-"
-        # สร้างกล่องสีสำหรับแต่ละ Tag
         html = "".join([
             f'<span style="background:{t.color}; color:white; padding:2px 8px; '
             f'border-radius:12px; margin-right:4px; font-size:11px; font-weight:bold;">'
