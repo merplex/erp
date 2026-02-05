@@ -918,9 +918,15 @@ class FinanceReportAdmin(admin.ModelAdmin):
 
     def get_balance_due_list(self, obj):
         bal = obj.balance_due
-        if bal <= 0: return format_html('<span style="color:green; font-weight:bold;">ครบถ้วน</span>')
+        # ❌ แบบเดิม (พังเพราะไม่มีตัวแปร): 
+        # if bal <= 0: return format_html('<span style="color:green; font-weight:bold;">ครบถ้วน</span>')
+
+        # ✅ แบบใหม่ (แก้โดยย้ายคำว่า "ครบถ้วน" ออกมาเป็นตัวแปร):
+        if bal <= 0: 
+            return format_html('<span style="color:green; font-weight:bold;">{}</span>', "ครบถ้วน")
+            
         return format_html('<span style="color:red; font-weight:bold;">-{:,.2f}</span>', bal)
     get_balance_due_list.short_description = "ค้างจ่าย"
 
-    
+
 admin.site.register(Customer)
