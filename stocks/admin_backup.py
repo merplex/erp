@@ -490,7 +490,7 @@ class SalesOrderAdmin(admin.ModelAdmin):
                 });
             </script>
         """)
-        context['title'] = mark_safe(f"{context['title']} {script}")
+        context['adminform'].form.help_text = script
         return super().render_change_form(request, context, add, change, form_url, obj)
     
     def save_model(self, request, obj, form, change):
@@ -583,7 +583,7 @@ class ProductionOrderAdmin(admin.ModelAdmin):
                 });
             </script>
         """)
-        context['title'] = mark_safe(f"{context['title']} {script}")
+        context['adminform'].form.help_text = script
         return super().render_change_form(request, context, add, change, form_url, obj)
 
 

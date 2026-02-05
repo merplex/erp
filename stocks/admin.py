@@ -490,7 +490,7 @@ class SalesOrderAdmin(admin.ModelAdmin):
                 });
             </script>
         """)
-        context['title'] = mark_safe(f"{context['title']} {script}")
+        context['adminform'].form.help_text = script
         return super().render_change_form(request, context, add, change, form_url, obj)
     
     def save_model(self, request, obj, form, change):
@@ -523,32 +523,27 @@ class SalesOrderAdmin(admin.ModelAdmin):
         )
     
     # ✅ ฟังก์ชันสร้างใบผลิตอัตโนมัติ
+    # ✅ แก้ไขฟังก์ชัน save_formset ใน SalesOrderAdmin (ประมาณบรรทัดที่ 362)
     def save_formset(self, request, form, formset, change):
-        instances = formset.save(commit=False)
-        created_count = 0
+        # 1. สั่งให้ Django บันทึกข้อมูลตามปกติก่อน (สำคัญมาก!)
+        # ตัวนี้จะจัดการเซฟทั้ง SalesItem และ SalesDeliveryLog ให้เราเอง
+        super().save_formset(request, form, formset, change)
 
-        for instance in instances:
-            if isinstance(instance, SalesItem):
-                # ✅ จุดสำคัญ: ต้องเชื่อมรายการนี้เข้ากับ "ใบสั่งขายหลัก" ก่อนเสมอ
-                # ไม่งั้นมันจะหา sales_order ไม่เจอและ Error ครับ
-                instance.sales_order = formset.instance 
-                # บันทึกข้อมูลรายการปกติ
-                if hasattr(instance, 'user'): instance.user = request.user
-                instance.save()
-                
-                # ✅ Logic สร้างใบผลิต (PD) อัตโนมัติ
-                # เงื่อนไข: ติ๊กผลิตทันที + มี BOM + ยังไม่เคยสร้างใบผลิตจากรายการนี้
-                if instance.auto_produce and instance.product.has_bom and not instance.is_produced:
+        # 2. หลังจากเซฟลง DB แล้ว เราค่อยมาทำ Logic สร้างใบผลิต (PD) อัตโนมัติ
+        # ตรวจสอบว่าเป็น Formset ของ SalesItem หรือไม่
+        if formset.model == SalesItem:
+            created_count = 0
+            # ดึงรายการที่ถูกเซฟไปแล้วในรอบนี้ขึ้นมาตรวจ
+            for instance in formset.queryset.filter(auto_produce=True, is_produced=False):
+                # ตรวจเงื่อนไข: ต้องมี BOM และยังไม่ได้สร้างใบผลิต
+                if instance.product.has_bom:
                     self.create_auto_production_order(instance, request.user)
-                    instance.is_produced = True # มาร์คไว้ว่าสร้างแล้ว
+                    instance.is_produced = True
                     instance.save()
                     created_count += 1
-                    
-        formset.save_m2m()
-
-        if created_count > 0:
-            messages.success(request, f"ระบบได้สร้างใบผลิต (PD) ให้โดยอัตโนมัติจำนวน {created_count} รายการแล้วค่ะ")
-
+            
+            if created_count > 0:
+                messages.success(request, f"ระบบได้สร้างใบผลิต (PD) ให้โดยอัตโนมัติจำนวน {created_count} รายการแล้วค่ะ")
 
 @admin.register(ProductionOrder)
 class ProductionOrderAdmin(admin.ModelAdmin):
@@ -583,7 +578,7 @@ class ProductionOrderAdmin(admin.ModelAdmin):
                 });
             </script>
         """)
-        context['title'] = mark_safe(f"{context['title']} {script}")
+        context['adminform'].form.help_text = script
         return super().render_change_form(request, context, add, change, form_url, obj)
 
 
