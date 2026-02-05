@@ -33,14 +33,14 @@ class ProductCategory(models.Model):
 class ProductTag(models.Model):
     name = models.CharField(max_length=50, unique=True, verbose_name="ชื่อแท็ก")
     color = models.CharField(max_length=7, default=get_random_color, verbose_name="สีแท็ก (Hex)")
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True, verbose_name="วันที่สร้าง")
 
     def __str__(self):
         return self.name
     
     class Meta:
         verbose_name = "แท็กสินค้า"
-        verbose_name_plural = "แท็กสินค้าทั้งหมด"
-    class Meta: verbose_name_plural = "T1. แท็กสินค้า (Product Tag)"
+        verbose_name_plural = "T1. แท็กสินค้า (Product Tag)"
 
 # 2. ผู้จำหน่าย
 class Supplier(models.Model):
@@ -327,9 +327,20 @@ class ProductionOrder(models.Model):
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     def save(self, *args, **kwargs):
-        if not self.pd_number: self.pd_number = generate_number('PD', ProductionOrder, 'pd_number')
+        if not self.pd_number: 
+            self.pd_number = generate_number('PD', ProductionOrder, 'pd_number')
+        
+        # ✅ เพิ่มจุดที่ 1: ตรรกะการเปลี่ยนสถานะอัตโนมัติ
+        if self.status not in ['Completed', 'Cancelled']: # ไม่แก้สถานะถ้าปิดงานหรือยกเลิกไปแล้ว
+            if self.quantity_actual <= 0:
+                self.status = 'Draft'
+            elif self.quantity_actual < self.quantity_planned:
+                self.status = 'Started'
+            elif self.quantity_actual >= self.quantity_planned:
+                self.status = 'Finished'
+        
         super().save(*args, **kwargs)
-    class Meta: verbose_name_plural = "B3. ใบสั่งผลิต (Production)"
+    class Meta: verbose_name_plural = "B3. ใบสั่งผลิต (Productions)"
 
 class ProductionLog(models.Model):
     production_order = models.ForeignKey(ProductionOrder, on_delete=models.CASCADE, related_name='production_logs')
@@ -340,15 +351,43 @@ class ProductionLog(models.Model):
     def save(self, *args, **kwargs):
         if not self.pk:
             prod_order = self.production_order
+            # เพิ่มสต็อกสินค้าสำเร็จรูป
             prod_order.product.stock_quantity += self.quantity_finished
             prod_order.product.save()
-            if prod_order.product.has_bom:
-                for ing in prod_order.product.bom_formula.ingredients.all():
+
+            # ตัดสต็อกวัตถุดิบ (BOM)
+            bom = prod_order.product.bom_formulas.first()
+            if bom:
+                for ing in bom.ingredients.all():
                     ing.material.stock_quantity -= (ing.quantity * self.quantity_finished)
                     ing.material.save()
+
+            # อัปเดตยอดสะสมในใบสั่งผลิต
             prod_order.quantity_actual += self.quantity_finished
-            prod_order.save()
+            prod_order.save() # การ save ตรงนี้จะไปกระตุ้นสถานะใน ProductionOrder เองครับ
+            
         super().save(*args, **kwargs)
+
+    # ✅ เพิ่มจุดที่ 2: ฟังก์ชันสำหรับจัดการตอน "ลบ" รายการผลิต
+    def delete(self, *args, **kwargs):
+        prod_order = self.production_order
+        
+        # 1. คืนสต็อกสินค้า (หักออก)
+        prod_order.product.stock_quantity -= self.quantity_finished
+        prod_order.product.save()
+
+        # 2. คืนสต็อกวัตถุดิบ (บวกกลับเข้าสต็อก)
+        bom = prod_order.product.bom_formulas.first()
+        if bom:
+            for ing in bom.ingredients.all():
+                ing.material.stock_quantity += (ing.quantity * self.quantity_finished)
+                ing.material.save()
+
+        # 3. หักยอดผลิตสะสมคืน
+        prod_order.quantity_actual -= self.quantity_finished
+        prod_order.save()
+
+        super().delete(*args, **kwargs)
 
 class StockPlanning(Product):
     class Meta:
