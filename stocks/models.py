@@ -343,7 +343,7 @@ class ProductionLog(models.Model):
             prod_order.product.stock_quantity += self.quantity_finished
             prod_order.product.save()
             if prod_order.product.has_bom:
-                for ing in prod_order.product.bom_formula.ingredients.all():
+                for ing in prod_order.product.bom_formulas.first().ingredients.all():
                     ing.material.stock_quantity -= (ing.quantity * self.quantity_finished)
                     ing.material.save()
             prod_order.quantity_actual += self.quantity_finished
