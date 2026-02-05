@@ -404,6 +404,9 @@ class SalesOrderAdmin(admin.ModelAdmin):
 
         for instance in instances:
             if isinstance(instance, SalesItem):
+                # ✅ จุดสำคัญ: ต้องเชื่อมรายการนี้เข้ากับ "ใบสั่งขายหลัก" ก่อนเสมอ
+                # ไม่งั้นมันจะหา sales_order ไม่เจอและ Error ครับ
+                instance.sales_order = formset.instance 
                 # บันทึกข้อมูลรายการปกติ
                 if hasattr(instance, 'user'): instance.user = request.user
                 instance.save()
