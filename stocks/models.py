@@ -182,7 +182,28 @@ class PurchaseOrder(models.Model):
     order_date = models.DateField(default=datetime.date.today)
     status = models.CharField(max_length=20, default='Draft', choices=STATUS_CHOICES)
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
+    vat_percent = models.DecimalField(max_digits=5, decimal_places=2, default=7.00, verbose_name="VAT (%)")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    
+    # --- สูตรคำนวณเงิน (ใช้แสดงผลใน Admin) ---
+    @property
+    def total_items_price(self):
+        # ยอดรวมสินค้า (Quantity * Unit Price)
+        return sum(item.total_price for item in self.items.all())
+    @property
+    def vat_amount(self):
+        return self.total_items_price * (self.vat_percent / 100)
+    @property
+    def grand_total(self):
+        return self.total_items_price + self.vat_amount
+    @property
+    def total_paid(self):
+        # ยอดที่จ่ายไปแล้ว (ดึงจากตาราง PaymentLog)
+        return sum(log.amount for log in self.payment_logs.all())
+    @property
+    def balance_due(self):
+        return self.grand_total - self.total_paid
+    
     def save(self, *args, **kwargs):
         if not self.po_number: self.po_number = generate_number('PO', PurchaseOrder, 'po_number')
         super().save(*args, **kwargs)
@@ -199,6 +220,40 @@ class PurchaseItem(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
     quantity_ordered = models.PositiveIntegerField(verbose_name="จำนวนที่สั่งซื้อ")
     quantity_received = models.PositiveIntegerField(default=0, verbose_name="รับสะสม")
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name="ราคา/หน่วย")
+    
+    @property
+    def total_price(self):
+        return self.quantity_ordered * self.unit_price
+
+    def save(self, *args, **kwargs):
+        # 🔥 Logic: ถ้าไม่ได้ระบุราคา (ใส่ 0) ให้วิ่งไปดูราคาทุนจาก Supplier
+        if self.unit_price == 0:
+            try:
+                # ค้นหาว่า Supplier เจ้านี้ ขายสินค้านี้ราคาเท่าไหร่
+                match = ProductSupplier.objects.filter(
+                    supplier=self.purchase_order.supplier,
+                    product=self.product
+                ).first()
+                
+                if match and match.latest_buy_price > 0:
+                    self.unit_price = match.latest_buy_price # เจอ! ใช้ราคาจาก Supplier
+                else:
+                    self.unit_price = self.product.buy_price # ไม่เจอ ใช้ราคากลาง
+            except:
+                pass
+        super().save(*args, **kwargs)
+        
+# ✅ 3. เพิ่ม Class ใหม่: PurchasePaymentLog (บันทึกการจ่ายเงิน)
+# (วางต่อท้าย PurchaseItem ได้เลยครับ)
+class PurchasePaymentLog(models.Model):
+    purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='payment_logs')
+    amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="ยอดที่จ่าย")
+    payment_date = models.DateTimeField(auto_now_add=True, verbose_name="วันที่จ่าย")
+    notes = models.CharField(max_length=200, blank=True, verbose_name="หมายเหตุ/เลขที่สลิป")
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
+
+    def __str__(self): return f"{self.amount}"
 
 class PurchaseReceiptLog(models.Model):
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='receipt_logs')
