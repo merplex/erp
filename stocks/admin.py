@@ -461,6 +461,13 @@ class SalesOrderAdmin(admin.ModelAdmin):
     inlines = [SalesItemInline, SalesDeliveryLogInline]
     readonly_fields = ('created_by', 'status') # ล็อค status ให้ระบบจัดการออโต้
     
+    actions = ['mark_as_completed']
+
+    @admin.action(description="✅ เปลี่ยนสถานะเป็น: เสร็จงาน/ปิดงาน")
+    def mark_as_completed(self, request, queryset):
+        queryset.update(status='Completed')
+        self.message_user(request, f"ปิดงานสำเร็จ {queryset.count()} รายการแล้วค่ะ")
+    
     def save_model(self, request, obj, form, change):
         if not change:
             obj.created_by = request.user
@@ -525,6 +532,13 @@ class ProductionOrderAdmin(admin.ModelAdmin):
     search_fields = ('pd_number', 'product__name')
     inlines = [ProductionLogInline]
     readonly_fields = ('created_by', 'status') 
+    
+    actions = ['mark_as_completed']
+
+    @admin.action(description="✅ เปลี่ยนสถานะเป็น: เสร็จงาน/ปิดงาน")
+    def mark_as_completed(self, request, queryset):
+        queryset.update(status='Completed')
+        self.message_user(request, f"ปิดงานสำเร็จ {queryset.count()} รายการแล้วค่ะ")
 
     def save_model(self, request, obj, form, change):
         if not change:
