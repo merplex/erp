@@ -225,45 +225,53 @@ class ProductAdmin(admin.ModelAdmin):
     search_fields = ('name', 'barcodes__code','tags__name')
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
-    
+
+    # ✅ 1. ส่วน Media: ฉีด CSS เข้าไปทำลายสไตล์แนวตั้งของ Django
     class Media:
+        # เราจะใช้เทคนิคสร้าง CSS "ปลอม" เพื่อหลอกให้ Django ยอมฉีดสไตล์ที่เราต้องการเข้าไปในหน้า
         css = {
-            'all': (
-                'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css',
-            )
+            'all': ('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css',)
         }
-        # เพิ่มเติม: เปรมสามารถใส่ CSS เพื่อบังคับให้รายการ li ไม่กระโดดบรรทัดได้ที่นี่
-        js = []
-
-
-    # ✅ 1. ย้ายการตั้งค่า Widget และการเรียงลำดับมาไว้ที่นี่ที่เดียว (จบ ไม่ซ้ำซ้อน)
+        # 🔥 นี่คือไม้ตายครับ ฉีดสไตล์เข้าไปที่หน้าแก้ไขโดยตรง
+        # เราจะใส่ไว้ใน widget แทนเพื่อให้ทำงานได้ 100%
+        
+    # ✅ 2. ส่วนจัดการ Tag: ใส่สี + เรียงแนวนอนแบบบังคับพิเศษ
     def formfield_for_manytomany(self, db_field, request, **kwargs):
         if db_field.name == "tags":
             from django.db.models import Count
-            # ดึงแท็กมาเรียงตามความนิยม
+            from django.utils.safestring import mark_safe
+            
+            # ดึง Tag เรียงตามความนิยม
             qs = ProductTag.objects.annotate(num_products=Count('products')).order_by('-num_products', '-id')
             
-            # 🔥 ใส่สีให้ Tag ตอนเลือกเลย (เปรมจะได้เห็นสีในหน้าแก้ไขด้วย)
             for tag in qs:
+                # ใส่สีให้ Tag ตอนเลือก
                 tag.name = mark_safe(
-                    f'<span style="background:{tag.color}; color:white; padding:1px 8px; border-radius:10px; font-size:11px; margin-left:5px;">'
+                    f'<span style="background:{tag.color}; color:white; padding:2px 10px; border-radius:10px; font-size:12px; font-weight:bold; display:inline-block;">'
                     f'{tag.name}</span>'
                 )
             
             kwargs["queryset"] = qs
-            # ✅ บังคับเรียงแนวนอนด้วย Style ตรงนี้เลยครับ ชัวร์ที่สุด
+            # ✅ บังคับ Style ที่ตัวรายการภายใน (li) ให้เป็นแนวนอน
             kwargs["widget"] = forms.CheckboxSelectMultiple(attrs={
-                'style': 'display: flex; flex-wrap: wrap; gap: 15px; list-style: none; padding: 10px; background: #fdfdfd; border: 1px solid #eee; border-radius: 5px;'
+                'style': '''
+                    display: flex !important;
+                    flex-wrap: wrap !important;
+                    flex-direction: row !important;
+                    gap: 15px !important;
+                    padding: 10px !important;
+                    list-style: none !important;
+                '''
             })
         return super().formfield_for_manytomany(db_field, request, **kwargs)
 
-    # ✅ 2. ตัวโชว์ Tag ในหน้ารวมรายการสินค้า (อันเดิมของเปรม ถูกต้องแล้วครับ)
+    # ✅ 3. ตัวโชว์ Tag ในหน้ารวมรายการสินค้า
     def display_tags(self, obj):
         tags = obj.tags.all()
         if not tags: return "-"
         html = "".join([
             f'<span style="background:{t.color}; color:white; padding:2px 8px; '
-            f'border-radius:12px; margin-right:4px; font-size:11px; font-weight:bold;">'
+            f'border-radius:12px; margin-right:4px; font-size:11px; font-weight:bold; display:inline-block; margin-bottom:2px;">'
             f'{t.name}</span>' for t in tags
         ])
         return mark_safe(html)
