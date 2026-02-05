@@ -415,36 +415,22 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
         queryset.update(status='Completed')
         self.message_user(request, f"ปิดงานสำเร็จ {queryset.count()} รายการแล้วค่ะ")
 
-    # ✅ 1. เพิ่มปุ่ม "เสร็จงาน" เข้าไปในหน้าแก้ไข
     def response_change(self, request, obj):
-        # ตรวจสอบว่าถ้ามีการกดปุ่มที่ชื่อ "_complete_order" (ที่เราจะสร้าง)
         if "_complete_order" in request.POST:
             obj.status = 'Completed'
             obj.save()
-            self.message_user(request, "ปิดงานใบสั่งซื้อเรียบร้อยแล้ว รายการจะถูกซ่อนจากหน้าสินค้า")
-            return HttpResponseRedirect(".") # รีเฟรชหน้าเดิม
+            self.message_user(request, "ปิดงานใบสั่งซื้อเรียบร้อยแล้วค่ะ")
+            return HttpResponseRedirect(".")
         return super().response_change(request, obj)
 
-    # ✅ 2. แสดงผลปุ่มในหน้า Admin (ใช้เทคนิคฉีด HTML เข้าไปเบาๆ)
-    def change_view(self, request, object_id, form_url='', extra_context=None):
-        extra_context = extra_context or {}
-        # ส่งค่าไปบอกหน้าจอว่าให้โชว์ปุ่ม "ปิดงาน" ถ้าสถานะยังไม่เป็น Completed
-        extra_context['show_complete_button'] = True 
-        return super().change_view(request, object_id, form_url, extra_context=extra_context)
-
-    # ✅ 3. ปรับแต่ง CSS/JS เล็กน้อยเพื่อให้ปุ่มปรากฏข้างๆ ปุ่ม Save
     class Media:
         js = ('admin/js/vendor/jquery/jquery.js', 'admin/js/jquery.init.js')
-        # ✅ เพิ่มจุดนี้เข้าไปเพื่อให้ปุ่ม Complete โผล่มาข้างๆ ปุ่ม Save ครับ
-        ext_js = """
-            <script>
-            (function($) {
-                $(document).ready(function() {
-                    $('.submit-row').prepend('<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer;">');
-                });
-            })(django.jQuery);
-            </script>
-        """
+        # ฉีดปุ่ม Complete ไว้ข้างๆ ปุ่ม Save
+        ext_js = """<script>
+            (function($) { $(document).ready(function() {
+                $('.submit-row').prepend('<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer;">');
+            }); })(django.jQuery);
+        </script>"""
 
     def save_model(self, request, obj, form, change):
         if not change:
@@ -478,6 +464,23 @@ class SalesOrderAdmin(admin.ModelAdmin):
     def mark_as_completed(self, request, queryset):
         queryset.update(status='Completed')
         self.message_user(request, f"ปิดงานสำเร็จ {queryset.count()} รายการแล้วค่ะ")
+
+    def response_change(self, request, obj):
+        if "_complete_order" in request.POST:
+            obj.status = 'Completed'
+            obj.save()
+            self.message_user(request, "ปิดงานใบสั่งขายเรียบร้อยแล้วค่ะ")
+            return HttpResponseRedirect(".")
+        return super().response_change(request, obj)
+
+    # ก๊อป Media มาใส่เพื่อให้ปุ่มโผล่ในหน้า SO ด้วยครับ
+    class Media:
+        js = ('admin/js/vendor/jquery/jquery.js', 'admin/js/jquery.init.js')
+        ext_js = """<script>
+            (function($) { $(document).ready(function() {
+                $('.submit-row').prepend('<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer;">');
+            }); })(django.jQuery);
+        </script>"""
     
     def save_model(self, request, obj, form, change):
         if not change:
@@ -546,10 +549,27 @@ class ProductionOrderAdmin(admin.ModelAdmin):
     
     actions = ['mark_as_completed']
 
+    # ✅ ต้องมีฟังก์ชันนี้ และ Indent (ย่อหน้า) ให้ตรงกับฟังก์ชันอื่นในคลาสครับ
     @admin.action(description="✅ เปลี่ยนสถานะเป็น: เสร็จงาน/ปิดงาน")
     def mark_as_completed(self, request, queryset):
         queryset.update(status='Completed')
-        self.message_user(request, f"ปิดงานสำเร็จ {queryset.count()} รายการแล้วค่ะ")
+        self.message_user(request, f"ปิดงานผลิตสำเร็จ {queryset.count()} รายการแล้วค่ะ")
+
+    def response_change(self, request, obj):
+        if "_complete_order" in request.POST:
+            obj.status = 'Completed'
+            obj.save()
+            self.message_user(request, "ปิดงานผลิตเรียบร้อยแล้วค่ะ")
+            return HttpResponseRedirect(".")
+        return super().response_change(request, obj)
+
+    class Media:
+        js = ('admin/js/vendor/jquery/jquery.js', 'admin/js/jquery.init.js')
+        ext_js = """<script>
+            (function($) { $(document).ready(function() {
+                $('.submit-row').prepend('<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer;">');
+            }); })(django.jQuery);
+        </script>"""
 
     def save_model(self, request, obj, form, change):
         if not change:
