@@ -340,7 +340,8 @@ class ProductionOrder(models.Model):
                 self.status = 'Finished'
         
         super().save(*args, **kwargs)
-
+    class Meta: verbose_name_plural = "B3. ใบสั่งผลิต (Productions)"
+    
 class ProductionLog(models.Model):
     production_order = models.ForeignKey(ProductionOrder, on_delete=models.CASCADE, related_name='production_logs')
     quantity_finished = models.PositiveIntegerField(verbose_name="จำนวนที่เสร็จครั้งนี้")
