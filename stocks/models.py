@@ -33,6 +33,7 @@ class ProductCategory(models.Model):
 class ProductTag(models.Model):
     name = models.CharField(max_length=50, unique=True, verbose_name="ชื่อแท็ก")
     color = models.CharField(max_length=7, default=get_random_color, verbose_name="สีแท็ก (Hex)")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="วันที่สร้าง")
 
     def __str__(self):
         return self.name
@@ -341,7 +342,7 @@ class ProductionOrder(models.Model):
         
         super().save(*args, **kwargs)
     class Meta: verbose_name_plural = "B3. ใบสั่งผลิต (Productions)"
-    
+
 class ProductionLog(models.Model):
     production_order = models.ForeignKey(ProductionOrder, on_delete=models.CASCADE, related_name='production_logs')
     quantity_finished = models.PositiveIntegerField(verbose_name="จำนวนที่เสร็จครั้งนี้")

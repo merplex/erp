@@ -794,7 +794,7 @@ class ProductCategoryAdmin(admin.ModelAdmin):
 @admin.register(ProductTag)
 class ProductTagAdmin(admin.ModelAdmin):
     # แสดงชื่อแท็กและตัวอย่างสีในหน้า List
-    list_display = ('display_name_with_count', 'color', 'created_at')
+    list_display = ('display_name_with_count', 'color')
     search_fields = ('name',)
     # ✅ เพิ่ม Inline เข้าไปที่นี่ค่ะ
     inlines = [ProductInTagInline]
