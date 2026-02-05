@@ -542,7 +542,7 @@ class SalesOrderAdmin(admin.ModelAdmin):
                         created_count += 1
             formset.save_m2m()
             
-                messages.success(request, f"ระบบสร้างใบผลิตอัตโนมัติสำเร็จ {created_count} รายการ")
+            messages.success(request, f"ระบบสร้างใบผลิตอัตโนมัติสำเร็จ {created_count} รายการ")
         else:
             # ✅ บรรทัดนี้สำคัญมาก! ถ้าไม่ใช่ SalesItem (เช่นเป็น DeliveryLog) ให้เซฟปกติ
             formset.save()
