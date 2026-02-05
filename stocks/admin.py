@@ -450,7 +450,7 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
             # ใช้ท่าเดียวกับ SO คือ formset.save()
             # Django จะจัดการเรื่อง "ลบรายการที่ถูกติ๊ก Delete" ให้เอง 100% ครับ
             formset.save()
-            
+
     # (ฟังก์ชันอื่นคงเดิมได้เลยค่ะ)
     def save_model(self, request, obj, form, change):
         if not change:
@@ -604,15 +604,25 @@ class ProductionOrderAdmin(admin.ModelAdmin):
     get_diff.short_description = "สถานะผลิต"
 
     def save_formset(self, request, form, formset, change):
-        # ✅ เช็คก่อนว่าถ้าเป็น ProductionLog ให้เซฟปกติ ข้อมูลถึงจะเข้าสต็อก
+        # ✅ 1. เพิ่ม Logic การลบ (เพื่อให้ลบประวัติผลิตแล้วยอดสต็อก/สถานะเด้งคืน)
+        if hasattr(formset, 'deleted_objects'):
+            for obj in formset.deleted_objects:
+                obj.delete()
+
+        # ✅ 2. จัดการบันทึกยอดผลิต
         if formset.model == ProductionLog:
             instances = formset.save(commit=False)
             for instance in instances:
-                if hasattr(instance, 'user'): instance.user = request.user
+                if hasattr(instance, 'user') and not instance.user_id:
+                    instance.user = request.user
                 instance.save()
             formset.save_m2m()
         else:
             formset.save()
+
+        # ✅ 3. หัวใจสำคัญ: สั่งให้ใบผลิตหลัก Save อีกรอบเพื่ออัปเดตสถานะ
+        # (จาก Draft -> Started -> Finished ตามยอดจริงที่คีย์เข้าไป)
+        formset.instance.save()
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "product":
