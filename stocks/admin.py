@@ -437,23 +437,20 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
         return super().render_change_form(request, context, add, change, form_url, obj)
 
     # ✅ แก้ไขตรงนี้: เพื่อให้บันทึก PurchaseReceiptLog ได้
-    # ✅ รวมร่างเป็นอันเดียว: จัดการทั้งการลบ, การบันทึก Item และการบันทึก Log
+    # ✅ ปรับโครงสร้างให้เหมือน SalesOrderAdmin เป๊ะๆ
     def save_formset(self, request, form, formset, change):
-        # ✅ 1. ใช้ getattr เพื่อป้องกัน Error กรณีที่ Inline นั้นตั้งค่าห้ามลบไว้
-        deleted_objects = getattr(formset, 'deleted_objects', [])
-        for obj in deleted_objects:
-            obj.delete()
-
-        # 2. จัดการบันทึกรายการที่เหลือหรือเพิ่มใหม่
-        instances = formset.save(commit=False)
-        for instance in instances:
-            # บันทึก User คนที่ทำรายการ (สำหรับ Receipt Log)
-            if hasattr(instance, 'user') and not instance.user_id:
-                instance.user = request.user
-            instance.save()
+        if formset.model == PurchaseItem:
+            # ส่วนของรายการสินค้า (Items) - ทำเหมือน SO
+            instances = formset.save(commit=False)
+            for instance in instances:
+                instance.save()
+            formset.save_m2m()
+        else:
+            # ✅ ส่วนของประวัติการรับของ (ReceiptLog) 
+            # ใช้ท่าเดียวกับ SO คือ formset.save()
+            # Django จะจัดการเรื่อง "ลบรายการที่ถูกติ๊ก Delete" ให้เอง 100% ครับ
+            formset.save()
             
-        formset.save_m2m()
-
     # (ฟังก์ชันอื่นคงเดิมได้เลยค่ะ)
     def save_model(self, request, obj, form, change):
         if not change:
