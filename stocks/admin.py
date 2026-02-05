@@ -289,10 +289,9 @@ class ProductAdmin(admin.ModelAdmin):
     }
 
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
-        # ✅ ฉีดสไตล์ CSS จัดระเบียบ Tag ให้เป็นแนวนอน
+        # ✅ 1. เตรียม CSS สำหรับ Tag
         style = mark_safe("""
             <style>
-                /* บังคับให้รายการ ul เรียงแนวนอน */
                 .field-tags ul { 
                     display: flex !important; 
                     flex-wrap: wrap !important; 
@@ -302,12 +301,11 @@ class ProductAdmin(admin.ModelAdmin):
                     margin: 0 !important; 
                     gap: 15px !important; 
                 }
-                /* จัดระเบียบตัว Checkbox กับข้อความ */
                 .field-tags ul li { 
                     margin: 0 !important; 
                     display: flex !important; 
                     align-items: center !important; 
-                    background: #f8f9fa; /* ใส่สีพื้นหลังอ่อนๆ ให้พอดูเป็นก้อนๆ */
+                    background: #f8f9fa;
                     padding: 5px 12px !important;
                     border-radius: 15px !important;
                     border: 1px solid #dee2e6 !important;
@@ -317,12 +315,17 @@ class ProductAdmin(admin.ModelAdmin):
                     font-weight: normal !important; 
                     cursor: pointer;
                 }
-                /* ซ่อนจุดหน้ารายการของ Django */
                 .field-tags ul li:before { content: none !important; }
             </style>
         """)
 
-    # ✅ 3. ตัวโชว์ Tag ในหน้ารวมรายการสินค้า
+        # ✅ 2. ฉีด Style เข้าไปใน Title (ปุ่ม Complete ถ้ามีก็ใส่พ่วงไปตรงนี้ได้ครับ)
+        context['title'] = mark_safe(f"{context['title']} {style}")
+
+        # 🔥 จุดตาย: ต้องมี return super() แบบนี้เท่านั้นครับ!
+        return super().render_change_form(request, context, add, change, form_url, obj)
+
+    # ✅ 3. ตัวโชว์ Tag ในหน้ารวมรายการสินค้า (โค้ดเปรมดีอยู่แล้วครับ)
     def display_tags(self, obj):
         tags = obj.tags.all()
         if not tags: return "-"
