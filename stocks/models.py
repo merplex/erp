@@ -363,45 +363,43 @@ class ProductionLog(models.Model):
     finished_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่เสร็จ")
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
     def save(self, *args, **kwargs):
-        if not self.pk:
-            prod_order = self.production_order
-            # เพิ่มสต็อกสินค้าสำเร็จรูป
-            prod_order.product.stock_quantity += self.quantity_finished
-            prod_order.product.save()
+        # ✅ จัดการเรื่องสต็อก (คิดจากส่วนต่าง)
+        if self.pk:
+            old_qty = ProductionLog.objects.get(pk=self.pk).quantity_finished
+            diff = self.quantity_finished - old_qty
+        else:
+            diff = self.quantity_finished
 
-            # ตัดสต็อกวัตถุดิบ (BOM)
-            bom = prod_order.product.bom_formulas.first()
-            if bom:
-                for ing in bom.ingredients.all():
-                    ing.material.stock_quantity -= (ing.quantity * self.quantity_finished)
-                    ing.material.save()
-
-            # อัปเดตยอดสะสมในใบสั่งผลิต
-            prod_order.quantity_actual += self.quantity_finished
-            prod_order.save() # การ save ตรงนี้จะไปกระตุ้นสถานะใน ProductionOrder เองครับ
-            
-        super().save(*args, **kwargs)
-
-    # ✅ เพิ่มจุดที่ 2: ฟังก์ชันสำหรับจัดการตอน "ลบ" รายการผลิต
-    def delete(self, *args, **kwargs):
+        # อัปเดตสต็อกสินค้าและวัตถุดิบ (ใช้ diff ในการบวก/ลบ)
         prod_order = self.production_order
-        
-        # 1. คืนสต็อกสินค้า (หักออก)
+        prod_order.product.stock_quantity += diff
+        prod_order.product.save()
+
+        bom = prod_order.product.bom_formulas.first()
+        if bom:
+            for ing in bom.ingredients.all():
+                ing.material.stock_quantity -= (ing.quantity * diff)
+                ing.material.save()
+
+        super().save(*args, **kwargs)
+        # ✅ สั่งให้ "แม่" อัปเดตยอดรวมและสถานะ
+        prod_order.update_actual_and_status()
+
+    def delete(self, *args, **kwargs):
+        # ✅ ตอนลบ ให้หักสต็อกคืนก่อนหายไปจริง
+        prod_order = self.production_order
         prod_order.product.stock_quantity -= self.quantity_finished
         prod_order.product.save()
 
-        # 2. คืนสต็อกวัตถุดิบ (บวกกลับเข้าสต็อก)
         bom = prod_order.product.bom_formulas.first()
         if bom:
             for ing in bom.ingredients.all():
                 ing.material.stock_quantity += (ing.quantity * self.quantity_finished)
                 ing.material.save()
 
-        # 3. หักยอดผลิตสะสมคืน
-        prod_order.quantity_actual -= self.quantity_finished
-        prod_order.save()
-
         super().delete(*args, **kwargs)
+        # ✅ สั่งให้ "แม่" คำนวณยอดใหม่หลังจากลบแล้ว
+        prod_order.update_actual_and_status()
 
 class StockPlanning(Product):
     class Meta:
