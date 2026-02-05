@@ -415,7 +415,6 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
         queryset.update(status='Completed')
         self.message_user(request, f"ปิดงานสำเร็จ {queryset.count()} รายการแล้วค่ะ")
 
-    # 1. จัดการ Logic เมื่อมีการกดปุ่ม
     def response_change(self, request, obj):
         if "_complete_order" in request.POST:
             obj.status = 'Completed'
@@ -424,21 +423,30 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
             return HttpResponseRedirect(".")
         return super().response_change(request, obj)
 
-    # 2. ฉีดปุ่มเข้าไปในหน้าจอแก้ไข
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
-        # สร้าง Script เพื่อเพิ่มปุ่มในแถบด้านล่าง
         script = mark_safe("""
             <script>
                 django.jQuery(document).ready(function() {
-                    var container = django.jQuery('.submit-row');
                     var btn = '<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
-                    container.prepend(btn);
+                    django.jQuery('.submit-row').prepend(btn);
                 });
             </script>
         """)
-        # ใส่สคริปต์ลงใน context เพื่อให้ Django เรนเดอร์ออกมา
-        context['adminform'].form.help_text = script 
+        # ✅ เปลี่ยนจาก help_text มาเป็นฉีดที่ Title แทน ปุ่มจะขึ้นแน่นอน
+        context['title'] = mark_safe(f"{context['title']} {script}")
         return super().render_change_form(request, context, add, change, form_url, obj)
+
+    # ✅ แก้ไขตรงนี้: เพื่อให้บันทึก PurchaseReceiptLog ได้
+    def save_formset(self, request, form, formset, change):
+        if formset.model == PurchaseItem:
+            instances = formset.save(commit=False)
+            for instance in instances:
+                if hasattr(instance, 'user'): instance.user = request.user
+                instance.save()
+            formset.save_m2m()
+        else:
+            # สำหรับ PurchaseReceiptLog และ Inline อื่นๆ ให้เซฟปกติ
+            formset.save()
 
     def save_model(self, request, obj, form, change):
         if not change:
@@ -477,7 +485,7 @@ class SalesOrderAdmin(admin.ModelAdmin):
         if "_complete_order" in request.POST:
             obj.status = 'Completed'
             obj.save()
-            self.message_user(request, f"ปิดงานใบสั่งซื้อ {obj.po_number} เรียบร้อยแล้ว")
+            self.message_user(request, f"ปิดงานใบสั่งขาย {obj.so_number} เรียบร้อยแล้ว")
             return HttpResponseRedirect(".")
         return super().response_change(request, obj)
 
@@ -485,26 +493,13 @@ class SalesOrderAdmin(admin.ModelAdmin):
         script = mark_safe("""
             <script>
                 django.jQuery(document).ready(function() {
-                    var btn = '<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
+                    var btn = '<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #218838; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
                     django.jQuery('.submit-row').prepend(btn);
                 });
             </script>
         """)
-        # ✅ เปลี่ยนจาก help_text มาเป็นฉีดที่ Title แทน ปุ่มจะขึ้นแน่นอน
         context['title'] = mark_safe(f"{context['title']} {script}")
         return super().render_change_form(request, context, add, change, form_url, obj)
-
-    # ✅ แก้ไขตรงนี้: เพื่อให้บันทึก PurchaseReceiptLog ได้
-    def save_formset(self, request, form, formset, change):
-        if formset.model == PurchaseItem:
-            instances = formset.save(commit=False)
-            for instance in instances:
-                if hasattr(instance, 'user'): instance.user = request.user
-                instance.save()
-            formset.save_m2m()
-        else:
-            # สำหรับ PurchaseReceiptLog และ Inline อื่นๆ ให้เซฟปกติ
-            formset.save()
     
     def save_model(self, request, obj, form, change):
         if not change:
