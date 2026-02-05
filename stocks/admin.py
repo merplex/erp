@@ -439,14 +439,15 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
     # ✅ แก้ไขตรงนี้: เพื่อให้บันทึก PurchaseReceiptLog ได้
     # ✅ รวมร่างเป็นอันเดียว: จัดการทั้งการลบ, การบันทึก Item และการบันทึก Log
     def save_formset(self, request, form, formset, change):
-        # 1. จัดการเรื่องการลบ (ติ๊ก Delete แล้วต้องหายจริง)
-        for obj in formset.deleted_objects:
+        # ✅ 1. ใช้ getattr เพื่อป้องกัน Error กรณีที่ Inline นั้นตั้งค่าห้ามลบไว้
+        deleted_objects = getattr(formset, 'deleted_objects', [])
+        for obj in deleted_objects:
             obj.delete()
 
-        # 2. จัดการเรื่องการบันทึก (commit=False เพื่อจัดการข้อมูลแฝง)
+        # 2. จัดการบันทึกรายการที่เหลือหรือเพิ่มใหม่
         instances = formset.save(commit=False)
         for instance in instances:
-            # ถ้าเป็นฟิลด์ที่มีให้เก็บชื่อ User และยังไม่มีข้อมูล ให้ใส่ชื่อคนทำปัจจุบันลงไป
+            # บันทึก User คนที่ทำรายการ (สำหรับ Receipt Log)
             if hasattr(instance, 'user') and not instance.user_id:
                 instance.user = request.user
             instance.save()
