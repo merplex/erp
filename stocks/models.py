@@ -3,7 +3,12 @@ from django.utils import timezone
 from django.contrib.auth.models import User
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
+import random # ✅ เพิ่มไว้บนสุดของไฟล์
 import datetime
+
+def get_random_color():
+    # สุ่มรหัสสี Hex เช่น #a1b2c3
+    return "#{:06x}".format(random.randint(0, 0xFFFFFF))
 
 # --- ฟังก์ชันช่วยรันเลขที่เอกสาร ---
 def generate_number(prefix, model_class, field_name):
@@ -27,10 +32,11 @@ class ProductCategory(models.Model):
 
 class ProductTag(models.Model):
     name = models.CharField(max_length=50, unique=True, verbose_name="ชื่อแท็ก")
-    color = models.CharField(max_length=7, default="#6c757d", verbose_name="สีแท็ก (Hex)")
+    color = models.CharField(max_length=7, default=get_random_color, verbose_name="สีแท็ก (Hex)")
 
     def __str__(self):
         return self.name
+    
     class Meta:
         verbose_name = "แท็กสินค้า"
         verbose_name_plural = "แท็กสินค้าทั้งหมด"
