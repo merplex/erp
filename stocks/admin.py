@@ -994,20 +994,20 @@ class FinanceReportAdmin(admin.ModelAdmin):
 
     # --- ส่วนที่แก้ไข: ใช้ f-string จัดตัวเลขก่อนส่งไป format_html ทุกตัว ---
         # บันทึก User คนจ่ายเงินอัตโนมัติ
-def save_formset(self, request, form, formset, change):
-    # 1. บันทึกข้อมูลที่กรอกในตารางก่อน
-    formset.save()
+    def save_formset(self, request, form, formset, change):
+        # 1. บันทึกข้อมูลที่กรอกในตารางก่อน
+        formset.save()
     
-    # 2. ดึงใบสั่งซื้อใบนี้ออกมา
-    obj = formset.instance
+        # 2. ดึงใบสั่งซื้อใบนี้ออกมา
+        obj = formset.instance
     
-    # 3. เช็คว่าถ้าเป็นการเซฟตาราง "บันทึกการจ่ายเงิน" ให้คำนวณสถานะใหม่
-    if formset.model == PurchasePaymentLog:
-        from django.db.models import Sum
+        # 3. เช็คว่าถ้าเป็นการเซฟตาราง "บันทึกการจ่ายเงิน" ให้คำนวณสถานะใหม่
+        if formset.model == PurchasePaymentLog:
+            from django.db.models import Sum
         
         # ✅ ท่าไม้ตาย: ไม่ต้องง้อ _set แต่สั่งไปที่ Model PurchasePaymentLog โดยตรงเลย
         # กรองเอาเฉพาะรายการที่ฟิลด์ 'order' ตรงกับใบนี้
-        paid_data = PurchasePaymentLog.objects.filter(order=obj).aggregate(Sum('amount'))
+            paid_data = PurchasePaymentLog.objects.filter(order=obj).aggregate(Sum('amount'))
         paid = paid_data['amount__sum'] or 0
         
         # ยอดสุทธิที่ต้องจ่าย
@@ -1024,43 +1024,43 @@ def save_formset(self, request, form, formset, change):
         # บันทึกสถานะลงฐานข้อมูล
         obj.save(update_fields=['payment_status'])
 
-def get_total_items_display(self, obj):
+    def get_total_items_display(self, obj):
         return f"{sum(i.quantity_ordered for i in obj.items.all()):,}"
-get_total_items_display.short_description = "📦 รวมจำนวนสินค้า"
+    get_total_items_display.short_description = "📦 รวมจำนวนสินค้า"
 
-def get_subtotal_display(self, obj):
+    def get_subtotal_display(self, obj):
         # ✅ แก้ไข: จัดรูปแบบตัวเลขก่อนส่งเข้า HTML
         return format_html('<span style="font-size:14px;">{}</span>', f"{obj.total_items_price:,.2f}")
-get_subtotal_display.short_description = "💵 ราคารวม (ก่อน VAT)"
+    get_subtotal_display.short_description = "💵 ราคารวม (ก่อน VAT)"
 
-def get_vat_amount_display(self, obj):
+    def get_vat_amount_display(self, obj):
         return f"{obj.vat_amount:,.2f}"
-get_vat_amount_display.short_description = "ภาษีมูลค่าเพิ่ม (VAT)"
+    get_vat_amount_display.short_description = "ภาษีมูลค่าเพิ่ม (VAT)"
 
-def get_grand_total_display(self, obj):
+    def get_grand_total_display(self, obj):
         # ✅ แก้ไข: จัดรูปแบบตัวเลขก่อนส่งเข้า HTML
         return format_html('<b style="color:#007bff;">{}</b>', f"{obj.grand_total:,.2f}")
-get_grand_total_display.short_description = "💰 ยอดสุทธิ (Grand Total)"
+    get_grand_total_display.short_description = "💰 ยอดสุทธิ (Grand Total)"
 
-def get_total_paid_display(self, obj):
+    def get_total_paid_display(self, obj):
         # ✅ แก้ไข
         return format_html('<b style="color:#28a745;">{}</b>', f"{obj.total_paid:,.2f}")
-get_total_paid_display.short_description = "✅ จ่ายแล้ว"
+    get_total_paid_display.short_description = "✅ จ่ายแล้ว"
 
-def get_balance_due_display(self, obj):
+    def get_balance_due_display(self, obj):
         # ✅ แก้ไข
         balance = obj.balance_due
         color = "red" if balance > 0 else "green"
         text = f"{balance:,.2f}"
         return format_html('<b style="color:{};">{}</b>', color, text)
-get_balance_due_display.short_description = "❗️ ยอดค้างจ่าย"
+    get_balance_due_display.short_description = "❗️ ยอดค้างจ่าย"
 
-# --- List Display Functions (หน้ารวม) ---
-def get_grand_total_list(self, obj): 
+    # --- List Display Functions (หน้ารวม) ---
+    def get_grand_total_list(self, obj): 
         return f"{obj.grand_total:,.2f}"
-get_grand_total_list.short_description = "ยอดสุทธิ"
+    get_grand_total_list.short_description = "ยอดสุทธิ"
 
-def get_balance_due_list(self, obj):
+    def get_balance_due_list(self, obj):
         # ✅ แก้ไข: ไม่ว่าจะเป็น 0 หรือเท่าไหร่ ให้โชว์เป็นตัวเลขเสมอ
         bal = obj.balance_due
         if bal <= 0: 
@@ -1068,7 +1068,7 @@ def get_balance_due_list(self, obj):
             return format_html('<span style="color:green; font-weight:bold;">{}</span>', "0.00")
             # ถ้ายังมียอดค้าง ให้โชว์เลขค้างเป็นสีแดง
         return format_html('<span style="color:red; font-weight:bold;">-{}</span>', f"{bal:,.2f}")
-get_balance_due_list.short_description = "ค้างจ่าย"
+    get_balance_due_list.short_description = "ค้างจ่าย"
 
 # 2. หน้า Admin ของ Income Report
 @admin.register(IncomeReport)
