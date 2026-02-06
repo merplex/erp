@@ -15,35 +15,6 @@ from django.http import HttpResponseRedirect
 from django.template import Template, RequestContext 
 from django.http import HttpResponse, HttpResponseRedirect
 
-def settle_orders_manually(modeladmin, request, queryset):
-    # ✅ ถ้ามีการกดยืนยันจากหน้า intermediate page แล้ว
-    if 'apply' in request.POST:
-        count = queryset.count()
-        # ทำการอัปเดตทุกรายการที่เลือก
-        queryset.update(
-            status='COMPLETED', 
-            payment_status='SETTLED',
-            notes=format_html('{} | ปิดยอด/Settled โดยแอดมิน', "notes") # เพิ่มโน้ตต่อท้ายของเดิม
-        )
-        modeladmin.message_user(request, f"ดำเนินการปิดยอดเป็น 'SETTLED' เรียบร้อยแล้ว {count} รายการค่ะเปรม!", messages.SUCCESS)
-        return None
-
-    # 🚨 ถ้ายังไม่ได้ยืนยัน ให้โชว์หน้า "รายการที่จะปิดยอด" (Pop-up Intermediate Page)
-    opts = modeladmin.model._meta
-    context = {
-        **modeladmin.admin_site.each_context(request),
-        'title': "ยืนยันการปิดยอดกรณีพิเศษ (SETTLED)",
-        'queryset': queryset,
-        'opts': opts,
-        'action_checkbox_name': admin.helpers.ACTION_CHECKBOX_NAME,
-        'media': modeladmin.media,
-    }
-
-    # ใช้ Template มาตรฐานของ Django ในการกดยืนยัน
-    return TemplateResponse(request, "admin/account_settle_confirmation.html", context)
-
-settle_orders_manually.short_description = "🎯 ปิดยอด/จบรายการแบบพิเศษ (SETTLED)"
-
 # ✅ 1. Inline รายการสินค้า (แบบ Read-Only สำหรับหน้าการเงิน)
 class PurchaseItemReadOnlyInline(admin.TabularInline):
     model = PurchaseItem
@@ -1057,7 +1028,6 @@ class FinanceReportAdmin(admin.ModelAdmin):
     # หน้ารวม: ดูง่ายๆ ว่าใบไหนค้างจ่าย
     search_fields = ('po_number', 'supplier__company_name')
     actions = [settle_and_close_orders]
-    actions = [settle_orders_manually]
 
     # จัดหน้าตาฟอร์ม
     # ✅ 1. เปลี่ยน list_display ให้โชว์ Payment Status แทน
@@ -1183,7 +1153,6 @@ class IncomeReportAdmin(admin.ModelAdmin):
     list_filter = ('payment_status', 'status', 'customer', 'order_date')
     search_fields = ('so_number', 'customer__company_name')
     actions = [settle_and_close_orders]
-    actions = [settle_orders_manually]
 
     fieldsets = (
         ('📊 สรุปยอดเงิน (Income Summary)', {
