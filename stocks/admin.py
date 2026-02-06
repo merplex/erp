@@ -37,6 +37,8 @@ class PurchaseItemReadOnlyInline(admin.TabularInline):
 class SalesItemReadOnlyInline(admin.TabularInline):
     model = SalesItem  # ชื่อ Model สินค้าฝั่งขาย (เช็คใน models.py ว่าชื่อนี้ไหม)
     extra = 0
+    fields = ['product', 'quantity', 'price_per_unit', 'total_price', 'auto_pd']
+    readonly_fields = ['product', 'quantity', 'price_per_unit', 'total_price', 'auto_pd']
     can_delete = False
     verbose_name = "📦 รายการสินค้าที่ขาย"
     verbose_name_plural = "รายการสินค้า"
