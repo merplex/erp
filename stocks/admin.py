@@ -1170,15 +1170,28 @@ class IncomeReportAdmin(admin.ModelAdmin):
         return format_html('<b style="color:#28a745;">{}</b>', value)
     get_total_paid_display.short_description = "✅ รับแล้ว"
 
-    def get_balance_due_display(self, obj):
-        bal = obj.balance_due
-        # ✅ แก้ไข: จัด Format ตัวเลขเป็น String ก่อนส่งเข้า format_html
-        formatted_bal = f"{bal:,.2f}"
-        
-        color = "#dc3545" if bal > 0 else "#28a745"
-        prefix = "-" if bal > 0 else ""
-        
-        return format_html('<b style="color:{};">{}{}</b>', color, prefix, formatted_bal)
+    def calculate_balance_due(self, obj):
+        subtotal = getattr(obj, 'total_items_price', 0) or 0
+        vat_p = getattr(obj, 'vat_percent', 0) or 0
+        # ยอดรวมภาษี
+        grand_total = subtotal + (subtotal * vat_p / 100)
+        # หักยอดที่รับเงินมาแล้ว
+        paid = getattr(obj, 'total_paid', 0) or 0
+        return grand_total - paid
 
+    # สำหรับโชว์ในหน้าตาราง (List View)
+    def get_balance_due_list(self, obj):
+        bal = self.calculate_balance_due(obj)
+        if bal <= 0:
+            return format_html('<span style="color:green; font-weight:bold;">0.00</span>')
+        return format_html('<span style="color:red; font-weight:bold;">-{}</span>', f"{bal:,.2f}")
+    get_balance_due_list.short_description = "ยอดคงค้าง"
+
+    # สำหรับโชว์ในหน้าแก้ไข (Detail View / Fieldsets)
+    def get_balance_due_display(self, obj):
+        bal = self.calculate_balance_due(obj)
+        color = "green" if bal <= 0 else "red"
+        return format_html('<b style="color:{}; font-size:1.1em;">{}</b>', color, f"{max(0, bal):,.2f}")
+    get_balance_due_display.short_description = "ยอดเงินคงค้าง (Balance Due)"
 
 admin.site.register(Customer)
