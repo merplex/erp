@@ -43,9 +43,6 @@ class SalesItemReadOnlyInline(admin.TabularInline):
     verbose_name = "📦 รายการสินค้าที่ขาย"
     verbose_name_plural = "รายการสินค้า"
     
-    # ทำให้แก้ไขไม่ได้ (Read Only) เพื่อความปลอดภัยในหน้ารายงาน
-    readonly_fields = ('product', 'quantity_ordered', 'quantity_shipped', 'get_unit_price', 'get_line_total')
-    
     def has_add_permission(self, request, obj):
         return False
     
@@ -61,7 +58,7 @@ class SalesItemReadOnlyInline(admin.TabularInline):
         total = price * obj.quantity_ordered
         return f"{total:,.2f}"
     get_line_total.short_description = "รวมเงิน"
-    
+
     def get_total_display(self, obj):
         # คำนวณ: จำนวน x ราคาขาย
         price = obj.sale_price or 0
