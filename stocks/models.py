@@ -261,6 +261,13 @@ class PurchaseItem(models.Model):
     unit_price = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name="ราคา/หน่วย")
     
     @property
+    def total_paid(self):
+        # ✅ ในเมื่อไม่มี related_name ต้องใช้ชื่อคลาสตัวเล็กตามด้วย _set
+        # และเช็คว่าใน PurchasePaymentLog เปรมใช้ฟิลด์เงินชื่อ 'amount' หรือเปล่านะคะ
+        if hasattr(self, 'purchasepaymentlog_set'):
+            return sum(log.amount for log in self.purchasepaymentlog_set.all())
+        return 0
+    @property
     def total_price(self):
         return self.quantity_ordered * self.unit_price
 
@@ -284,6 +291,7 @@ class PurchaseItem(models.Model):
         
 # ✅ 3. เพิ่ม Class ใหม่: PurchasePaymentLog (บันทึกการจ่ายเงิน)
 # (วางต่อท้าย PurchaseItem ได้เลยครับ)
+
 class PurchasePaymentLog(models.Model):
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='payment_logs')
     amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="ยอดที่จ่าย")
