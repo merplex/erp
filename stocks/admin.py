@@ -1094,7 +1094,7 @@ class IncomeReportAdmin(admin.ModelAdmin):
 
     readonly_fields = (
         'so_number', 'customer', 'order_date', 'status', 'payment_status',
-        'get_total_items_display', 'get_subtotal_display', 'vat_percent',
+        'get_total_items_display', 'get_subtotal_display', 'get_vat_percent_display',
         'get_vat_amount_display', 'get_grand_total_display', 
         'get_total_paid_display', 'get_balance_due_display'
     )
