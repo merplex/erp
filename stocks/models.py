@@ -1,7 +1,9 @@
+from decimal import Decimal
 from django.db import models
+from django.db.models import Sum
+from django.db.models.signals import post_delete
 from django.utils import timezone
 from django.contrib.auth.models import User
-from django.db.models.signals import post_delete
 from django.dispatch import receiver
 import random # ✅ เพิ่มไว้บนสุดของไฟล์
 import datetime
@@ -184,7 +186,43 @@ class PurchaseOrder(models.Model):
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     vat_percent = models.DecimalField(max_digits=5, decimal_places=2, default=7.00, verbose_name="VAT (%)")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
-    
+    # ✅ 1. สถานะเอกสาร (เหมือนเดิม ดูแลเรื่องการสั่งของ/รับของ)
+    status = models.CharField(
+        max_length=20, 
+        choices=[
+            ('Pending', 'รอรับของ'),
+            ('Received', 'รับของบางส่วน'),
+            ('Completed', 'ได้รับสินค้าครบถ้วน'),
+            ('Cancelled', 'ยกเลิก')
+        ],
+        default='Pending',
+        verbose_name="สถานะเอกสาร (PO Status)"
+    )
+
+    # ✅ 2. เพิ่ม: สถานะการเงิน (แยกออกมาต่างหาก)
+    payment_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('Unpaid', '🔴 ยังไม่จ่าย'),
+            ('Partial', '🟠 จ่ายบางส่วน'),
+            ('Paid', '🟢 จ่ายครบแล้ว')
+        ],
+        default='Unpaid',
+        verbose_name="สถานะการจ่ายเงิน"
+    )
+    # ✅ 3. แก้ไขฟังก์ชันคำนวณ ให้ไปอัปเดตที่ payment_status แทน
+    def update_payment_status(self):
+        total_paid = self.payments.aggregate(Sum('amount'))['amount__sum'] or Decimal(0)
+        
+        if total_paid >= self.grand_total:
+            self.payment_status = 'Paid'    # จ่ายครบ
+        elif total_paid > 0:
+            self.payment_status = 'Partial' # จ่ายบางส่วน
+        else:
+            self.payment_status = 'Unpaid'  # ยังไม่จ่าย
+            
+        self.save(update_fields=['payment_status'])
+
     # --- สูตรคำนวณเงิน (ใช้แสดงผลใน Admin) ---
     @property
     def total_items_price(self):
@@ -313,6 +351,54 @@ class SalesOrder(models.Model):
         else:
             self.status = 'Cancelled' # ถ้าสถานะอื่น เปลี่ยนเป็น 'ยกเลิก' แทน
             self.save()
+
+    # ✅ เพิ่มสถานะการเงิน
+    payment_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('Unpaid', '🔴 ยังไม่รับเงิน'),
+            ('Partial', '🟠 รับเงินบางส่วน'),
+            ('Paid', '🟢 รับเงินครบแล้ว')
+        ],
+        default='Unpaid',
+        verbose_name="สถานะการรับเงิน"
+    )
+
+    # ✅ แก้ฟังก์ชันคำนวณ
+    def update_payment_status(self):
+        total_received = self.payments.aggregate(Sum('amount'))['amount__sum'] or Decimal(0)
+        
+        if total_received >= self.grand_total:
+            self.payment_status = 'Paid'
+        elif total_received > 0:
+            self.payment_status = 'Partial'
+        else:
+            self.payment_status = 'Unpaid'
+            
+        self.save(update_fields=['payment_status'])
+
+# --- 3. ตารางประวัติการรับเงิน (SalesPayment) ---
+class SalesPayment(models.Model):
+    order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='payments')
+    payment_date = models.DateField(default=datetime.date.today, verbose_name="วันที่รับเงิน")
+    amount = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="ยอดเงินที่รับ")
+    remark = models.CharField(max_length=200, blank=True, null=True, verbose_name="หมายเหตุ")
+    evidence = models.ImageField(upload_to='payment_evidence/', blank=True, null=True, verbose_name="หลักฐานการโอน")
+
+    def __str__(self):
+        return f"รับเงิน {self.amount:,.2f}"
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # บันทึกเสร็จ ให้ไปอัปเดตสถานะที่ใบสั่งขายทันที
+        self.order.update_payment_status()
+
+# --- 4. Proxy Model สำหรับหน้า C3 (Income Report) ---
+class IncomeReport(SalesOrder):
+    class Meta:
+        proxy = True
+        verbose_name = "C3. สรุปรายรับ (Income Report)"
+        verbose_name_plural = "C3. สรุปรายรับ (Income Report)"
 
 class SalesItem(models.Model):
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='items')
