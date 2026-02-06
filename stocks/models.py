@@ -192,7 +192,7 @@ class PurchaseOrder(models.Model):
         choices=[
             ('Pending', 'รอรับของ'),
             ('Received', 'รับของบางส่วน'),
-            ('Completed', 'ได้รับสินค้าครบถ้วน'),
+            ('Completed', 'ปิดงาน/ครบถ้วน'),
             ('Cancelled', 'ยกเลิก')
         ],
         default='Pending',

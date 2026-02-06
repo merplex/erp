@@ -1008,21 +1008,21 @@ class FinanceReportAdmin(admin.ModelAdmin):
         # ✅ ท่าไม้ตาย: ไม่ต้องง้อ _set แต่สั่งไปที่ Model PurchasePaymentLog โดยตรงเลย
         # กรองเอาเฉพาะรายการที่ฟิลด์ 'order' ตรงกับใบนี้
             paid_data = PurchasePaymentLog.objects.filter(order=obj).aggregate(Sum('amount'))
-        paid = paid_data['amount__sum'] or 0
+            paid = paid_data['amount__sum'] or 0
         
-        # ยอดสุทธิที่ต้องจ่าย
-        total = obj.grand_total
+            # ยอดสุทธิที่ต้องจ่าย
+            total = obj.grand_total
 
-        # 🟢 เปลี่ยนสถานะตาม Choice ที่เปรมมีใน Model
-        if paid <= 0:
-            obj.payment_status = 'Unpaid'
-        elif paid < total:
-            obj.payment_status = 'Partial'  # 🟠 นี่คือ "จ่ายบางส่วน" ที่เปรมต้องการ!
-        else:
-            obj.payment_status = 'Paid'     # 🟢 จ่ายครบแล้ว
+            # 🟢 เปลี่ยนสถานะตาม Choice ที่เปรมมีใน Model
+            if paid <= 0:
+                obj.payment_status = 'Unpaid'
+            elif paid < total:
+                obj.payment_status = 'Partial'  # 🟠 นี่คือ "จ่ายบางส่วน" ที่เปรมต้องการ!
+            else:
+                obj.payment_status = 'Paid'     # 🟢 จ่ายครบแล้ว
             
-        # บันทึกสถานะลงฐานข้อมูล
-        obj.save(update_fields=['payment_status'])
+            # บันทึกสถานะลงฐานข้อมูล
+            obj.save(update_fields=['payment_status'])
 
     def get_total_items_display(self, obj):
         return f"{sum(i.quantity_ordered for i in obj.items.all()):,}"
