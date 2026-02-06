@@ -62,6 +62,15 @@ class SalesItemReadOnlyInline(admin.TabularInline):
         return f"{total:,.2f}"
     get_line_total.short_description = "รวมเงิน"
     
+    def get_total_display(self, obj):
+        # คำนวณ: จำนวน x ราคาขาย
+        price = obj.sale_price or 0
+        qty = obj.quantity_ordered or 0
+        total = price * qty
+        return f"{total:,.2f}"
+    
+    get_total_display.short_description = "ราคารวม"
+    
 # ✅ 2. Inline การจ่ายเงิน และการรับเงิน (บันทึกยอดได้เรื่อยๆ)
 class PurchasePaymentInline(admin.TabularInline):
     model = PurchasePaymentLog
