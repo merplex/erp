@@ -1083,7 +1083,7 @@ class IncomeReportAdmin(admin.ModelAdmin):
         ('📊 สรุปยอดเงิน (Income Summary)', {
             'fields': (
                 ('get_total_items_display', 'get_subtotal_display'), 
-                ('get_vat_amount_display'), 
+                ('get_vat_percent_display','get_vat_amount_display'), 
                 ('get_grand_total_display', 'get_total_paid_display', 'get_balance_due_display')
             ),
         }),
@@ -1132,16 +1132,27 @@ class IncomeReportAdmin(admin.ModelAdmin):
         return format_html('<span style="font-size:14px;">{}</span>', value)
     get_subtotal_display.short_description = "💵 ก่อน VAT"
 
+    # 1. ฟังก์ชันดึง % VAT มาโชว์ (อ่านอย่างเดียว)
+    def get_vat_percent_display(self, obj):
+        return f"{obj.vat_percent}%"
+    get_vat_percent_display.short_description = "อัตราภาษี (%)"
+
+    # 2. ฟังก์ชันคำนวณยอดเงิน VAT (ดึงค่าจากแม่มาคำนวณ)
     def get_vat_amount_display(self, obj):
-        val = getattr(obj, 'vat_amount', 0)
-        return f"{val:,.2f}"
-    get_vat_amount_display.short_description = "VAT"
+        # คำนวณ: (ราคาก่อน VAT * % VAT) / 100
+        subtotal = getattr(obj, 'total_items_price', 0) # สมมติว่าเปรมมี property นี้ใน SalesOrder
+        vat_p = obj.vat_percent or 0
+        vat_amt = (subtotal * vat_p) / 100
+        return f"{vat_amt:,.2f}"
+    get_vat_amount_display.short_description = "ภาษีมูลค่าเพิ่ม (VAT)"
 
     def get_grand_total_display(self, obj):
-        # ✅ แก้จาก {:,.2f} เป็น {} แล้วใช้ f-string ข้างนอกแทน
-        value = f"{obj.grand_total:,.2f}"
-        return format_html('<b style="color:#007bff;">{}</b>', value)
-    get_grand_total_display.short_description = "💰 ยอดสุทธิ"
+        subtotal = getattr(obj, 'total_items_price', 0)
+        vat_p = obj.vat_percent or 0
+        total = subtotal + ((subtotal * vat_p) / 100)
+        formatted_total = f"{total:,.2f}"
+        return format_html('<b style="color:#007bff;">{}</b>', formatted_total)
+    get_grand_total_display.short_description = "💰 ยอดสุทธิ (Grand Total)"
 
     def get_total_paid_display(self, obj):
         value = f"{obj.total_paid:,.2f}"
