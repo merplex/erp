@@ -415,7 +415,36 @@ class ProductAdmin(admin.ModelAdmin):
     search_fields = ('name', 'barcodes__code','tags__name')
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
+    
+    def get_search_results(self, request, queryset, search_term):
+        queryset, use_distinct = super().get_search_results(request, queryset, search_term)
 
+        # เช็คว่านี่คือการค้นหาจากระบบ Autocomplete หรือไม่
+        if 'autocomplete' in request.path:
+            referer = request.META.get('HTTP_REFERER', '')
+            
+            # ถ้าค้นหามาจากหน้า Purchase Order (ใบสั่งซื้อ)
+            if 'purchaseorder' in referer:
+                import re
+                # แกะรหัส ID ของใบสั่งซื้อจาก URL (เช่น .../purchaseorder/3/change/)
+                match = re.search(r'purchaseorder/(\d+)/change/', referer)
+                if match:
+                    po_id = match.group(1)
+                    from .models import PurchaseOrder, Product
+                    from django.db.models import Q
+                    
+                    try:
+                        po = PurchaseOrder.objects.get(pk=po_id)
+                        if po.supplier:
+                            # 🎯 ล็อคทันที: เอาเฉพาะที่ Supplier นี้ขาย หรือรายการที่ไม่ใช่สินค้า
+                            queryset = queryset.filter(
+                                Q(product_suppliers__supplier=po.supplier) | Q(is_product=False)
+                            )
+                    except PurchaseOrder.DoesNotExist:
+                        pass
+        
+        return queryset, use_distinct
+    
     formfield_overrides = {
         models.ManyToManyField: {'widget': forms.CheckboxSelectMultiple},
     }
