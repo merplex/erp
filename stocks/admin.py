@@ -286,6 +286,7 @@ class BOMIngredientInline(admin.TabularInline):
 
 class PurchaseItemInline(admin.TabularInline):
     model = PurchaseItem
+    autocomplete_fields = ['product'] 
     extra = 1
     readonly_fields = ('quantity_received',) 
 
