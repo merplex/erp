@@ -995,30 +995,33 @@ class FinanceReportAdmin(admin.ModelAdmin):
     # --- ส่วนที่แก้ไข: ใช้ f-string จัดตัวเลขก่อนส่งไป format_html ทุกตัว ---
         # บันทึก User คนจ่ายเงินอัตโนมัติ
     def save_formset(self, request, form, formset, change):
-        # 1. เซฟรายการจ่ายเงินก่อน
-        instances = formset.save(commit=False)
-        for instance in instances:
-            if hasattr(instance, 'user') and not instance.user_id:
-                instance.user = request.user
-            instance.save()
-        formset.save_m2m()
+    # 1. บันทึกข้อมูลที่กรอกในตารางก่อน
+    formset.save()
+    
+    # 2. ดึงใบสั่งซื้อใบนี้ออกมา
+    obj = formset.instance
+    
+    # 3. เช็คว่าถ้าเป็นการเซฟตาราง "บันทึกการจ่ายเงิน" ให้คำนวณสถานะใหม่
+    if formset.model == PurchasePaymentLog:
+        from django.db.models import Sum
         
-        # 2. คำนวณสถานะใหม่ทันทีหลังเซฟเงิน
-        obj = formset.instance # นี่คือตัว FinanceReport (PurchaseOrder)
+        # ✅ ท่าไม้ตาย: ไม่ต้องง้อ _set แต่สั่งไปที่ Model PurchasePaymentLog โดยตรงเลย
+        # กรองเอาเฉพาะรายการที่ฟิลด์ 'order' ตรงกับใบนี้
+        paid_data = PurchasePaymentLog.objects.filter(order=obj).aggregate(Sum('amount'))
+        paid = paid_data['amount__sum'] or 0
         
-        # ดึงยอดที่จ่ายไปแล้วทั้งหมดจาก Log
-        # (ใช้ purchasepaymentlog_set เพราะเปรมไม่ได้ตั้ง related_name)
-        paid = sum(log.amount for log in obj.purchasepaymentlog_set.all())
-        total = obj.grand_total # ยอดที่ต้องจ่ายทั้งหมด
-        
-        # 🟢 Logic เปลี่ยนสถานะ
+        # ยอดสุทธิที่ต้องจ่าย
+        total = obj.grand_total
+
+        # 🟢 เปลี่ยนสถานะตาม Choice ที่เปรมมีใน Model
         if paid <= 0:
-            obj.payment_status = 'Unpaid' # ยังไม่จ่าย
+            obj.payment_status = 'Unpaid'
         elif paid < total:
-            obj.payment_status = 'Partial' # จ่ายบางส่วน (ที่เปรมต้องการ!)
+            obj.payment_status = 'Partial'  # 🟠 นี่คือ "จ่ายบางส่วน" ที่เปรมต้องการ!
         else:
-            obj.payment_status = 'Paid' # จ่ายครบแล้ว
+            obj.payment_status = 'Paid'     # 🟢 จ่ายครบแล้ว
             
+        # บันทึกสถานะลงฐานข้อมูล
         obj.save(update_fields=['payment_status'])
 
     def get_total_items_display(self, obj):
