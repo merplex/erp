@@ -14,7 +14,7 @@ class Migration(migrations.Migration):
             name="FinanceReport",
             fields=[],
             options={
-                "verbose_name_plural": "C2. รายงานสรุปการเงิน",
+                "verbose_name_plural": "C2. สรุปรายจ่าย (Purchase Report)",
                 "proxy": True,
                 "indexes": [],
                 "constraints": [],

@@ -1034,12 +1034,10 @@ class FinanceReportAdmin(admin.ModelAdmin):
     get_grand_total_list.short_description = "ยอดสุทธิ"
 
     def get_balance_due_list(self, obj):
-        # ✅ แก้ไข: ไม่ว่าจะเป็น 0 หรือเท่าไหร่ ให้โชว์เป็นตัวเลขเสมอ
+        # ✅ แก้ไข (อันนี้ที่เราแก้กันไปตะกี้ครับ รวมมาให้แล้ว)
+        bal = obj.balance_due
         if bal <= 0: 
-            # ถ้าเป็น 0 ให้เป็นสีเขียว (หรือสีดำตามใจเปรม) แต่โชว์เลข 0.00
-            return format_html('<span style="color:green; font-weight:bold;">0.00</span>')
-    
-            # ถ้ายังมียอดค้าง ให้โชว์เลขค้างเป็นสีแดง
+            return format_html('<span style="color:green; font-weight:bold;">{}</span>', "ครบถ้วน")
         return format_html('<span style="color:red; font-weight:bold;">-{}</span>', f"{bal:,.2f}")
     get_balance_due_list.short_description = "ค้างจ่าย"
 
