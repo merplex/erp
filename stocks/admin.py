@@ -292,22 +292,37 @@ class PurchaseItemInline(admin.TabularInline):
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "product":
+            # 1. พยายามหา ID จากหลายๆ ช่องทาง (ป้องกันชื่อ ID เปลี่ยน)
             resolved = request.resolver_match
-            if resolved and 'object_id' in resolved.kwargs:
-                po_id = resolved.kwargs['object_id']
+            object_id = None
+            if resolved:
+                object_id = resolved.kwargs.get('object_id') or resolved.kwargs.get('pk')
+
+            if object_id:
                 try:
-                    from django.db.models import Q # ✅ ต้อง Import Q มาด้วยครับ
-                    po = PurchaseOrder.objects.get(pk=po_id)
+                    from django.db.models import Q
+                    # ✅ ใช้ self.parent_model แทนการระบุชื่อตรงๆ จะปลอดภัยกว่าค่ะ
+                    parent_obj = self.parent_model.objects.get(pk=object_id)
                     
-                    # ✅ เงื่อนไขใหม่: 
-                    # 1. เป็นสินค้าที่ Supplier รายนี้ขาย (is_product=True และมีชื่อใน list)
-                    # 2. หรือ เป็นรายการ "ไม่ใช่สินค้า" (is_product=False) ซึ่งใครก็ซื้อได้
-                    kwargs["queryset"] = Product.objects.filter(
-                        Q(product_suppliers__supplier=po.supplier) | Q(is_product=False)
-                    ).distinct()
+                    if parent_obj.supplier:
+                        # ✅ กรองสินค้า: 
+                        # - เป็นสินค้าที่ Supplier นี้ขาย (ผ่าน product_suppliers)
+                        # - หรือ เป็นรายการที่ไม่ใช่สินค้า (is_product=False)
+                        kwargs["queryset"] = Product.objects.filter(
+                            Q(product_suppliers__supplier=parent_obj.supplier) | 
+                            Q(is_product=False)
+                        ).distinct()
                     
                 except Exception as e:
-                    print(f"Error filtering PO products: {e}")
+                    # ถ้ามี Error ให้มันพ่นออกมาใน Console เปรมจะได้เห็นค่ะ
+                    print(f"🚨 Filter Error: {e}")
+            
+            # 💡 ถ้าเป็นหน้า "เพิ่มใหม่" (Add Mode) ซึ่งไม่มี ID 
+            # ปกติ Django จะโชว์หมด เพราะมันยังไม่รู้ว่าเปรมจะเลือก Supplier คนไหน
+            # ถ้าเปรมอยากให้มันว่างไว้ก่อนจนกว่าจะเลือก ให้ใส่บรรทัดนี้ค่ะ (แต่ต้องกด Save รอบนึงก่อนนะ)
+            # elif not object_id:
+            #     kwargs["queryset"] = Product.objects.none()
+
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 class PurchaseReceiptLogInline(admin.TabularInline):
