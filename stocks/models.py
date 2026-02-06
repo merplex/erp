@@ -427,7 +427,7 @@ class IncomeReport(SalesOrder):
         proxy = True
         verbose_name = "C3. สรุปรายรับ (Income Report)"
         verbose_name_plural = "C3. สรุปรายรับ (Income Report)"
-        
+
     @property
     def grand_total(self):
         # คำนวณยอดรวมจากรายการสินค้าทั้งหมด (สมมติว่าใช้ related_name='items')
@@ -455,12 +455,31 @@ class SalesItem(models.Model):
     auto_produce = models.BooleanField(default=False, verbose_name="ผลิตทันที (Auto PD)")
     is_produced = models.BooleanField(default=False, editable=False) # เก็บไว้หลังบ้านกันสร้างซ้ำ
 
+# ✅ 1. เพิ่มฟิลด์จริงลงฐานข้อมูล (เพื่อใช้เก็บราคาที่อาจจะโดนแก้ไข)
+    sale_price = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        default=0.00, 
+        verbose_name="ราคาขายต่อหน่วย"
+    )
+
+    quantity_shipped = models.PositiveIntegerField(default=0, verbose_name="ส่งสะสม")
+    auto_produce = models.BooleanField(default=False, verbose_name="ผลิตทันที (Auto PD)")
+    is_produced = models.BooleanField(default=False, editable=False)
+
+    # ✅ 2. ปรับ Property เดิม: ให้มาดึงจาก self.sale_price ของตัวเองแทน
     @property
     def total_price(self):
-        # ✅ ดึงราคาจาก Product (sale_price) มาคูณกับ จำนวนที่สั่ง (quantity_ordered)
-        price = self.product.sale_price if self.product else 0
+        # ใช้ราคาจากฟิลด์ของตัวเอง (ถ้าเป็น 0 ให้ลองไปหยิบจาก Product มาเผื่อไว้ตอนโชว์หน้า Admin)
+        price = self.sale_price if self.sale_price > 0 else (self.product.sale_price if self.product else 0)
         qty = self.quantity_ordered or 0
         return price * qty
+
+    # ✅ 3. เพิ่มฟังก์ชัน Save: เพื่อดึงราคาจาก Product มาใส่ใน sale_price อัตโนมัติถ้าเราไม่กรอก
+    def save(self, *args, **kwargs):
+        if (not self.sale_price or self.sale_price == 0) and self.product:
+            self.sale_price = self.product.sale_price
+        super().save(*args, **kwargs)
 
 
 class SalesDeliveryLog(models.Model):
