@@ -1149,12 +1149,14 @@ class IncomeReportAdmin(admin.ModelAdmin):
     get_total_paid_display.short_description = "✅ รับแล้ว"
 
     def get_balance_due_display(self, obj):
-        # ✅ รวม Logic สีไว้ที่เดียว คลีนกว่าเดิมเยอะครับเปรม
         bal = obj.balance_due
-        if bal <= 0:
-            return format_html('<b style="color:#28a745;">0.00</b>')
-        return format_html('<b style="color:#dc3545;">-{:,.2f}</b>', bal)
-    get_balance_due_display.short_description = "❗️ ค้างรับ"
+        # ✅ แก้ไข: จัด Format ตัวเลขเป็น String ก่อนส่งเข้า format_html
+        formatted_bal = f"{bal:,.2f}"
+        
+        color = "#dc3545" if bal > 0 else "#28a745"
+        prefix = "-" if bal > 0 else ""
+        
+        return format_html('<b style="color:{};">{}{}</b>', color, prefix, formatted_bal)
 
 
 admin.site.register(Customer)
