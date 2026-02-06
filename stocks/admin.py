@@ -1083,7 +1083,7 @@ class IncomeReportAdmin(admin.ModelAdmin):
         ('📊 สรุปยอดเงิน (Income Summary)', {
             'fields': (
                 ('get_total_items_display', 'get_subtotal_display'), 
-                ('vat_percent', 'get_vat_amount_display'), 
+                ('get_vat_amount_display'), 
                 ('get_grand_total_display', 'get_total_paid_display', 'get_balance_due_display')
             ),
         }),
