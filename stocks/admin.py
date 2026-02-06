@@ -568,7 +568,7 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
     
 @admin.register(SalesOrder)
 class SalesOrderAdmin(admin.ModelAdmin):
-    list_display = ('so_number', 'customer', 'order_date', 'status', 'get_diff')
+    list_display = ('so_number', 'customer', 'order_date', 'status', 'vat_percent','get_diff')
     list_filter = ('status', 'order_date', 'customer')
     search_fields = ('so_number', 'po_no_customer', 'customer__company_name')
     inlines = [SalesItemInline, SalesDeliveryLogInline]
@@ -1094,7 +1094,7 @@ class IncomeReportAdmin(admin.ModelAdmin):
 
     readonly_fields = (
         'so_number', 'customer', 'order_date', 'status', 'payment_status',
-        'get_total_items_display', 'get_subtotal_display', 
+        'get_total_items_display', 'get_subtotal_display', 'vat_percent',
         'get_vat_amount_display', 'get_grand_total_display', 
         'get_total_paid_display', 'get_balance_due_display'
     )

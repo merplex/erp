@@ -345,6 +345,7 @@ class SalesOrder(models.Model):
     so_number = models.CharField(max_length=50, unique=True, editable=False)
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE)
     po_no_customer = models.CharField(max_length=100, blank=True, verbose_name="เลข PO ลูกค้า")
+    vat_percent = models.DecimalField(max_digits=5, decimal_places=2, default=7.00, verbose_name="VAT (%)") 
     order_date = models.DateField(default=datetime.date.today)
     status = models.CharField(max_length=20, default='Draft', choices=STATUS_CHOICES)
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
