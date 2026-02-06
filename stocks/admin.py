@@ -37,8 +37,8 @@ class PurchaseItemReadOnlyInline(admin.TabularInline):
 class SalesItemReadOnlyInline(admin.TabularInline):
     model = SalesItem  # ชื่อ Model สินค้าฝั่งขาย (เช็คใน models.py ว่าชื่อนี้ไหม)
     extra = 0
-    fields = ['product', 'quantity', 'price_per_unit', 'total_price', 'auto_pd']
-    readonly_fields = ['product', 'quantity', 'price_per_unit', 'total_price', 'auto_pd']
+    fields = ['product', 'quantity_ordered', 'sale_price', 'get_total_display', 'auto_produce']
+    readonly_fields = ['product', 'quantity_ordered', 'sale_price', 'get_total_display', 'auto_produce']
     can_delete = False
     verbose_name = "📦 รายการสินค้าที่ขาย"
     verbose_name_plural = "รายการสินค้า"
@@ -324,16 +324,25 @@ class PurchaseReceiptLogInline(admin.TabularInline):
 
 class SalesItemInline(admin.TabularInline):
     model = SalesItem
-    # ✅ เพิ่ม 'auto_produce' เข้าไปในหน้าจอ
+    # 1. เรียงลำดับคอลัมน์จากซ้ายไปขวา
     fields = [
-        'product',      # 1. เอาชื่อสินค้าขึ้นก่อน
-        'quantity',     # 2. จำนวน
-        'price_per_unit', # 3. ราคาต่อหน่วย
-        'total_price',  # 4. ราคารวม
-        'auto_pd',      # ✅ 5. ย้ายเจ้า Checkbox "เปิดสั่งผลิต" มาไว้ตรงนี้แทน!
+        'product', 
+        'quantity_ordered', 
+        'sale_price',        # ✅ ใส่ตรงนี้เพื่อให้ "แก้ไขได้" (ห้ามใส่ใน readonly_fields)
+        'get_total_display', # 🔒 ใส่ตรงนี้เพื่อโชว์ผลลัพธ์ (ต้องใส่ใน readonly_fields ด้วย)
+        'auto_produce',      # 🔘 Checkbox อยู่ท้ายสุดตามที่เปรมต้องการ
     ]
-    readonly_fields = ('quantity_shipped',)
-    extra = 1
+    
+    # 2. ระบุว่าตัวไหน "ห้ามแก้" (เฉพาะตัวที่คำนวณ)
+    readonly_fields = ['get_total_display'] 
+
+    # 3. สร้างฟังก์ชันคำนวณราคารวม (Quantity * Sale Price)
+    def get_total_display(self, obj):
+        if obj.quantity_ordered and obj.sale_price:
+            total = obj.quantity_ordered * obj.sale_price
+            return f"{total:,.2f}"
+        return "0.00"
+    get_total_display.short_description = "ราคารวม"
 
 class SalesDeliveryLogInline(admin.TabularInline):
     model = SalesDeliveryLog
