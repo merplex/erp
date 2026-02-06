@@ -323,7 +323,13 @@ class PurchaseReceiptLogInline(admin.TabularInline):
 class SalesItemInline(admin.TabularInline):
     model = SalesItem
     # ✅ เพิ่ม 'auto_produce' เข้าไปในหน้าจอ
-    fields = ['product', 'quantity_ordered', 'quantity_shipped', 'auto_produce']
+    fields = [
+        'product',      # 1. เอาชื่อสินค้าขึ้นก่อน
+        'quantity',     # 2. จำนวน
+        'price_per_unit', # 3. ราคาต่อหน่วย
+        'total_price',  # 4. ราคารวม
+        'auto_pd',      # ✅ 5. ย้ายเจ้า Checkbox "เปิดสั่งผลิต" มาไว้ตรงนี้แทน!
+    ]
     readonly_fields = ('quantity_shipped',)
     extra = 1
 
@@ -1061,14 +1067,19 @@ class FinanceReportAdmin(admin.ModelAdmin):
     get_grand_total_list.short_description = "ยอดสุทธิ"
 
     def get_balance_due_list(self, obj):
-        # ✅ แก้ไข: ไม่ว่าจะเป็น 0 หรือเท่าไหร่ ให้โชว์เป็นตัวเลขเสมอ
-        bal = obj.balance_due
+        # 1. คำนวณหา Grand Total ที่แท้จริง (รวม VAT แล้ว)
+        subtotal = getattr(obj, 'total_items_price', 0) or 0
+        vat_p = getattr(obj, 'vat_percent', 0) or 0
+        grand_total = subtotal + (subtotal * vat_p / 100)
+        # 2. หักยอดที่จ่ายมาแล้ว
+        paid = getattr(obj, 'total_paid', 0) or 0
+        bal = grand_total - paid
+        # 3. Logic การโชว์สีแบบเดิมที่เปรมต้องการ
         if bal <= 0: 
-            # ถ้าเป็น 0 ให้เป็นสีเขียว (หรือสีดำตามใจเปรม) แต่โชว์เลข 0.00
+            # ถ้าจ่ายครบหรือจ่ายเกิน ให้โชว์ 0.00 สีเขียว
             return format_html('<span style="color:green; font-weight:bold;">{}</span>', "0.00")
-            # ถ้ายังมียอดค้าง ให้โชว์เลขค้างเป็นสีแดง
+        # ถ้ายังค้างชำระ ให้โชว์ยอดค้างเป็นสีแดง (ติดลบตามสไตล์เปรม)
         return format_html('<span style="color:red; font-weight:bold;">-{}</span>', f"{bal:,.2f}")
-    get_balance_due_list.short_description = "ค้างจ่าย"
 
 # 2. หน้า Admin ของ Income Report
 @admin.register(IncomeReport)
