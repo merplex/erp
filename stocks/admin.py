@@ -1038,8 +1038,7 @@ class FinanceReportAdmin(admin.ModelAdmin):
         bal = obj.balance_due
         if bal <= 0: 
             # ถ้าเป็น 0 ให้เป็นสีเขียว (หรือสีดำตามใจเปรม) แต่โชว์เลข 0.00
-            return format_html('<span style="color:green; font-weight:bold;">0.00</span>')
-    
+            return format_html('<span style="color:green; font-weight:bold;">{}</span>', "0.00")
             # ถ้ายังมียอดค้าง ให้โชว์เลขค้างเป็นสีแดง
         return format_html('<span style="color:red; font-weight:bold;">-{}</span>', f"{bal:,.2f}")
     get_balance_due_list.short_description = "ค้างจ่าย"
