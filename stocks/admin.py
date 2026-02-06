@@ -1035,6 +1035,7 @@ class FinanceReportAdmin(admin.ModelAdmin):
 
     def get_balance_due_list(self, obj):
         # ✅ แก้ไข: ไม่ว่าจะเป็น 0 หรือเท่าไหร่ ให้โชว์เป็นตัวเลขเสมอ
+        bal = obj.balance_due
         if bal <= 0: 
             # ถ้าเป็น 0 ให้เป็นสีเขียว (หรือสีดำตามใจเปรม) แต่โชว์เลข 0.00
             return format_html('<span style="color:green; font-weight:bold;">0.00</span>')
