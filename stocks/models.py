@@ -399,6 +399,23 @@ class IncomeReport(SalesOrder):
         proxy = True
         verbose_name = "C3. สรุปรายรับ (Income Report)"
         verbose_name_plural = "C3. สรุปรายรับ (Income Report)"
+    @property
+    def grand_total(self):
+        # คำนวณยอดรวมจากรายการสินค้าทั้งหมด (สมมติว่าใช้ related_name='items')
+        # ถ้าเปรมตั้งชื่อ related_name เป็นอย่างอื่น ให้เปลี่ยนชื่อ .items ตรงนี้ด้วยนะครับ
+        total = sum(item.total_price for item in self.items.all()) if hasattr(self, 'items') else 0
+        return total
+
+    @property
+    def total_paid(self):
+        # คำนวณยอดที่รับชำระมาแล้ว (สมมติว่ามี Model เก็บการรับเงิน)
+        total = sum(p.amount for p in self.payments.all()) if hasattr(self, 'payments') else 0
+        return total
+
+    @property
+    def balance_due(self):
+        # ยอดค้างรับ = ยอดรวมสุทธิ - ยอดที่จ่ายแล้ว
+        return self.grand_total - self.total_paid
 
 class SalesItem(models.Model):
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='items')

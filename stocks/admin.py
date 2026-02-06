@@ -1046,15 +1046,12 @@ class FinanceReportAdmin(admin.ModelAdmin):
 # 2. หน้า Admin ของ Income Report
 @admin.register(IncomeReport)
 class IncomeReportAdmin(admin.ModelAdmin):
-    # หน้ารวม: เน้นดูยอดเงิน และ สถานะการเงิน
-    list_display = ('so_number', 'customer', 'get_grand_total_list', 'get_balance_due_list', 'payment_status')
-    list_filter = ('payment_status', 'status', 'customer', 'order_date') # กรองได้ทั้งสถานะเงินและของ
+    # ✅ ปรับ list_display ให้เอาตัวที่มีสีมาโชว์เลย จะได้ดูง่ายๆ
+    list_display = ('so_number', 'customer', 'get_grand_total_display', 'get_balance_due_display', 'payment_status')
+    list_filter = ('payment_status', 'status', 'customer', 'order_date')
     search_fields = ('so_number', 'customer__company_name')
-    
-    # ใช้ Action เดียวกับฝั่งรายจ่าย (Smart Action)
     actions = [settle_and_close_orders]
 
-    # จัดหน้าตาฟอร์ม
     fieldsets = (
         ('📊 สรุปยอดเงิน (Income Summary)', {
             'fields': (
@@ -1062,67 +1059,54 @@ class IncomeReportAdmin(admin.ModelAdmin):
                 ('vat_percent', 'get_vat_amount_display'), 
                 ('get_grand_total_display', 'get_total_paid_display', 'get_balance_due_display')
             ),
-            'classes': ('wide',), 
         }),
         ('📝 ข้อมูลเอกสาร', {
-            # โชว์ทั้งสถานะของ และ สถานะเงิน ให้บัญชีเห็นภาพรวม
             'fields': ('so_number', 'customer', 'order_date', 'status', 'payment_status')
         }),
     )
 
     readonly_fields = (
-        'so_number', 'customer', 'order_date', 'status', 'payment_status', # <-- ห้ามแก้สถานะมือ
+        'so_number', 'customer', 'order_date', 'status', 'payment_status',
         'get_total_items_display', 'get_subtotal_display', 
         'get_vat_amount_display', 'get_grand_total_display', 
         'get_total_paid_display', 'get_balance_due_display'
     )
 
-    inlines = [SalesItemReadOnlyInline, SalesPaymentInline] # อย่าลืม Inline รายการสินค้าของ SalesOrder นะครับ
+    inlines = [SalesItemReadOnlyInline, SalesPaymentInline]
 
-    # --- Display Methods (จัดสีสวยๆ) ---
+    # --- Methods ที่ปรับปรุงใหม่ (ใช้ได้ทั้ง List และ Detail) ---
 
     def get_total_items_display(self, obj):
-        # เช็กชื่อ field items/quantity ให้ตรงกับ Model จริงนะครับ
-        return f"{sum(i.quantity for i in obj.items.all()):,}" 
+        return f"{sum(i.quantity for i in obj.items.all()):,}" if hasattr(obj, 'items') else "0"
     get_total_items_display.short_description = "📦 รวมสินค้า"
 
     def get_subtotal_display(self, obj):
-        return format_html('<span style="font-size:14px;">{}</span>', f"{obj.total_items_price:,.2f}")
+        val = getattr(obj, 'total_items_price', 0)
+        return format_html('<span style="font-size:14px;">{:,.2f}</span>', val)
     get_subtotal_display.short_description = "💵 ก่อน VAT"
 
     def get_vat_amount_display(self, obj):
-        return f"{obj.vat_amount:,.2f}"
+        val = getattr(obj, 'vat_amount', 0)
+        return f"{val:,.2f}"
     get_vat_amount_display.short_description = "VAT"
 
     def get_grand_total_display(self, obj):
-        # 🔵 ยอดสุทธิ (สีน้ำเงิน)
-        return format_html('<b style="color:#007bff;">{}</b>', f"{obj.grand_total:,.2f}")
+        # ✅ โชว์สีน้ำเงินทั้งใน List และ Detail
+        return format_html('<b style="color:#007bff;">{:,.2f}</b>', obj.grand_total)
     get_grand_total_display.short_description = "💰 ยอดสุทธิ"
 
     def get_total_paid_display(self, obj):
-        # 🟢 รับแล้ว (สีเขียว)
-        return format_html('<b style="color:#28a745;">{}</b>', f"{obj.total_paid:,.2f}")
+        # ✅ โชว์สีเขียวทั้งใน List และ Detail
+        return format_html('<b style="color:#28a745;">{:,.2f}</b>', obj.total_paid)
     get_total_paid_display.short_description = "✅ รับแล้ว"
 
     def get_balance_due_display(self, obj):
-        # 🔴 ค้างรับ (สีแดง)
-        balance = obj.balance_due
-        color = "red" if balance > 0 else "green"
-        text = f"{balance:,.2f}"
-        return format_html('<b style="color:{};">{}</b>', color, text)
-    get_balance_due_display.short_description = "❗️ ยอดค้างรับ"
-
-    # --- List Display (หน้ารวม) ---
-    def get_grand_total_list(self, obj): 
-        return f"{obj.grand_total:,.2f}"
-    get_grand_total_list.short_description = "ยอดสุทธิ"
-
-    def get_balance_due_list(self, obj):
+        # ✅ รวม Logic สีไว้ที่เดียว คลีนกว่าเดิมเยอะครับเปรม
         bal = obj.balance_due
-        if bal <= 0: 
-            return format_html('<span style="color:green; font-weight:bold;">{}</span>', "ครบถ้วน")
-        return format_html('<span style="color:red; font-weight:bold;">-{}</span>', f"{bal:,.2f}")
-    get_balance_due_list.short_description = "ค้างรับ"
+        if bal <= 0:
+            return format_html('<b style="color:#28a745;">0.00</b>')
+        return format_html('<b style="color:#dc3545;">-{:,.2f}</b>', bal)
+    get_balance_due_display.short_description = "❗️ ค้างรับ"
 
 
 admin.site.register(Customer)
