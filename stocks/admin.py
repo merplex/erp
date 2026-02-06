@@ -994,7 +994,7 @@ class FinanceReportAdmin(admin.ModelAdmin):
 
     # --- ส่วนที่แก้ไข: ใช้ f-string จัดตัวเลขก่อนส่งไป format_html ทุกตัว ---
         # บันทึก User คนจ่ายเงินอัตโนมัติ
-    def save_formset(self, request, form, formset, change):
+def save_formset(self, request, form, formset, change):
     # 1. บันทึกข้อมูลที่กรอกในตารางก่อน
     formset.save()
     
