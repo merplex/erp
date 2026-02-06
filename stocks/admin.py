@@ -967,7 +967,7 @@ class FinanceReportAdmin(admin.ModelAdmin):
             'classes': ('wide',), 
         }),
         ('📝 ข้อมูลเอกสาร', {
-            'fields': ('po_number', 'supplier', 'order_date')
+            'fields': ('po_number', 'supplier', 'order_date','status')
         }),
     )
 
