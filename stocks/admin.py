@@ -331,6 +331,7 @@ class PurchaseReceiptLogInline(admin.TabularInline):
 
 class SalesItemInline(admin.TabularInline):
     model = SalesItem
+    autocomplete_fields = ['product'] 
     # 1. เรียงลำดับคอลัมน์จากซ้ายไปขวา
     fields = [
         'product', 
