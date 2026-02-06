@@ -341,6 +341,25 @@ class SalesOrder(models.Model):
     status = models.CharField(max_length=20, default='Draft', choices=STATUS_CHOICES)
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+
+    @property
+    def total_items_price(self):
+        # ✅ ตอนนี้เรียก item.total_price ได้แล้ว เพราะเราสร้างไว้ข้างบน
+        return sum(item.total_price for item in self.items.all())
+
+    @property
+    def grand_total(self):
+        # สมมติ VAT 7% (ถ้าเปรมมีฟิลด์ vat_percent ให้เปลี่ยนเลข 7 เป็น self.vat_percent นะครับ)
+        subtotal = self.total_items_price
+        vat = (subtotal * self.vat_percent) / 100 
+        return subtotal + vat
+
+    @property
+    def balance_due(self):
+        # ยอดค้างรับ = ยอดสุทธิ - ยอดที่รับเงินมาแล้ว
+        total_paid = sum(p.amount for p in self.payments.all()) if hasattr(self, 'payments') else 0
+        return self.grand_total - total_paid
+    
     def save(self, *args, **kwargs):
         if not self.so_number: self.so_number = generate_number('SO', SalesOrder, 'so_number')
         super().save(*args, **kwargs)
@@ -425,6 +444,13 @@ class SalesItem(models.Model):
     # ✅ เพิ่ม 2 ฟิลด์นี้เพื่อทำ auto production ค่ะ
     auto_produce = models.BooleanField(default=False, verbose_name="ผลิตทันที (Auto PD)")
     is_produced = models.BooleanField(default=False, editable=False) # เก็บไว้หลังบ้านกันสร้างซ้ำ
+
+    @property
+    def total_price(self):
+        # ✅ ดึงราคาจาก Product (sale_price) มาคูณกับ จำนวนที่สั่ง (quantity_ordered)
+        price = self.product.sale_price if self.product else 0
+        qty = self.quantity_ordered or 0
+        return price * qty
 
 
 class SalesDeliveryLog(models.Model):
