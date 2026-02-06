@@ -427,6 +427,7 @@ class IncomeReport(SalesOrder):
         proxy = True
         verbose_name = "C3. สรุปรายรับ (Income Report)"
         verbose_name_plural = "C3. สรุปรายรับ (Income Report)"
+        
     @property
     def grand_total(self):
         # คำนวณยอดรวมจากรายการสินค้าทั้งหมด (สมมติว่าใช้ related_name='items')
