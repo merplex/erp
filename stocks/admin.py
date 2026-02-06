@@ -854,7 +854,96 @@ class ProductTagAdmin(admin.ModelAdmin):
         return obj.product_set.count()
     get_product_count.short_description = "จำนวนสินค้าที่ใช้"
 
-# admin.py
+# ✅ Action: ปิดงาน Finance แบบมีหน้ายืนยัน (Confirmation Page)
+@admin.action(description='✅ ปิดงาน/บันทึกบัญชี (มีหน้ายืนยัน/Force Close)')
+def close_finance_job(modeladmin, request, queryset):
+    # --- ส่วนที่ 2: ทำงานเมื่อกดปุ่ม "ยืนยัน" ในหน้าจอ Confirm แล้ว ---
+    if 'apply' in request.POST:
+        is_force = request.POST.get('force_close') == 'on' # เช็กว่าติ๊ก Force ไหม
+        updated = 0
+        skipped = 0
+        
+        for obj in queryset:
+            # ปิดงานได้ถ้า: ยอดเป็น 0 หรือ ติ๊กบังคับปิด (Force)
+            if obj.balance_due <= 0 or is_force:
+                obj.status = 'Completed'
+                obj.save()
+                updated += 1
+            else:
+                skipped += 1
+        
+        # แจ้งผลลัพธ์
+        if updated > 0:
+            modeladmin.message_user(request, f"✅ ปิดงานสำเร็จ {updated} รายการ", messages.SUCCESS)
+        if skipped > 0:
+            modeladmin.message_user(request, f"⚠️ ข้าม {skipped} รายการ (เนื่องจากมียอดค้างและไม่ได้เลือก Force Close)", messages.WARNING)
+            
+        return HttpResponseRedirect(request.get_full_path())
+
+    # --- ส่วนที่ 1: แสดงหน้าจอ Confirm (HTML ฝังใน Python) ---
+    
+    # หาใบที่ยังมียอดค้าง
+    debt_items = [obj for obj in queryset if obj.balance_due > 0]
+    has_debt = len(debt_items) > 0
+    
+    # HTML Template (เขียนสดตรงนี้เลย เพื่อความสะดวก)
+    html_template = """
+    {% extends "admin/base_site.html" %}
+    {% block content %}
+    <div style="max-width: 800px; margin: 20px auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+        <h2 style="color: #333; margin-bottom: 20px;">⚠️ ยืนยันการปิดงานบัญชี ({{ queryset.count }} รายการ)</h2>
+        
+        <form method="post">{% csrf_token %}
+            {% for obj in queryset %}
+                <input type="hidden" name="{{ action_checkbox_name }}" value="{{ obj.pk }}">
+            {% endfor %}
+            <input type="hidden" name="action" value="close_finance_job">
+            <input type="hidden" name="apply" value="1">
+
+            {% if has_debt %}
+                <div style="background-color: #fff3cd; color: #856404; padding: 15px; border: 1px solid #ffeeba; border-radius: 5px; margin-bottom: 20px;">
+                    <h3 style="margin-top:0;">🛑 พบรายการที่ยังมียอดค้างชำระ!</h3>
+                    <ul style="margin-bottom: 15px;">
+                        {% for item in debt_items %}
+                            <li><strong>{{ item.po_number }}</strong> ({{ item.supplier }}) - ค้างจ่าย <span style="color:red;">{{ item.balance_due }}</span></li>
+                        {% endfor %}
+                    </ul>
+                    
+                    <div style="background: white; padding: 10px; border: 1px solid #ddd; display: inline-block;">
+                        <label style="font-size: 16px; cursor: pointer; color: red; font-weight: bold;">
+                            <input type="checkbox" name="force_close" style="transform: scale(1.5); margin-right: 10px;">
+                            ยืนยันบังคับปิดงาน (Force Close)
+                        </label>
+                        <div style="font-size: 12px; color: #666; margin-top: 5px; margin-left: 28px;">* ติ๊กช่องนี้หากต้องการปิดงานทันที โดยไม่สนยอดค้าง</div>
+                    </div>
+                </div>
+            {% else %}
+                <div style="background-color: #d4edda; color: #155724; padding: 15px; border: 1px solid #c3e6cb; border-radius: 5px; margin-bottom: 20px;">
+                    ✅ ทุกรายการชำระเงินครบถ้วนแล้ว พร้อมปิดงานได้เลย
+                </div>
+            {% endif %}
+
+            <div style="margin-top: 30px; border-top: 1px solid #eee; padding-top: 20px;">
+                <button type="submit" style="background: #28a745; color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 4px; cursor: pointer;">
+                    🚀 ยืนยันการปิดงาน
+                </button>
+                <a href="#" onclick="window.history.back();" style="margin-left: 10px; color: #666; text-decoration: none;">ยกเลิก</a>
+            </div>
+        </form>
+    </div>
+    {% endblock %}
+    """
+
+    context = {
+        'queryset': queryset,
+        'debt_items': debt_items,
+        'has_debt': has_debt,
+        'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
+        'opts': modeladmin.model._meta,
+    }
+    
+    # Render หน้าจอ
+    return TemplateResponse(request, Template(html_template), context)
 
 @admin.register(FinanceReport)
 class FinanceReportAdmin(admin.ModelAdmin):
@@ -862,6 +951,7 @@ class FinanceReportAdmin(admin.ModelAdmin):
     list_display = ('po_number', 'supplier', 'get_grand_total_list', 'get_balance_due_list', 'status')
     list_filter = ('status', 'supplier')
     search_fields = ('po_number', 'supplier__company_name')
+    actions = [close_finance_job]
     
     # จัดหน้าตาฟอร์ม
     fieldsets = (
