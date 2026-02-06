@@ -1007,7 +1007,7 @@ class FinanceReportAdmin(admin.ModelAdmin):
         
         # ✅ ท่าไม้ตาย: ไม่ต้องง้อ _set แต่สั่งไปที่ Model PurchasePaymentLog โดยตรงเลย
         # กรองเอาเฉพาะรายการที่ฟิลด์ 'order' ตรงกับใบนี้
-            paid_data = PurchasePaymentLog.objects.filter(order=obj).aggregate(Sum('amount'))
+            paid_data = PurchasePaymentLog.objects.filter(purchase_order=obj).aggregate(Sum('amount'))
             paid = paid_data['amount__sum'] or 0
         
             # ยอดสุทธิที่ต้องจ่าย
