@@ -1110,7 +1110,7 @@ class IncomeReportAdmin(admin.ModelAdmin):
         obj = formset.instance
         # ฝั่งขายใช้ SalesPayment (เปรมต้องเช็ค related_name ใน model นะคะ)
         # ถ้าไม่มีใช้ salespayment_set
-        paid = sum(p.amount for p in obj.salespayment_set.all())
+        paid = sum(p.amount for p in obj.payments.all())
         total = obj.grand_total
         
         if paid <= 0:
