@@ -945,8 +945,8 @@ def close_finance_job(modeladmin, request, queryset):
         'opts': modeladmin.model._meta,
     }
     
-    # Render หน้าจอ
-    return TemplateResponse(request, Template(html_template), context)
+    # ✅ ใช้อันนี้แทนครับ (Render มือเองเลย)
+    return HttpResponse(Template(html_template).render(RequestContext(request, context)))
 
 @admin.register(FinanceReport)
 class FinanceReportAdmin(admin.ModelAdmin):
