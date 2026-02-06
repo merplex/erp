@@ -10,6 +10,10 @@ from django.db.models import F
 from django.utils.safestring import mark_safe # ✅ ต้องมีบรรทัดนี้ครับ
 # เพิ่มที่บรรทัดบนสุดของไฟล์ครับ
 from django.http import HttpResponseRedirect
+from django.template import Template, Context
+from django.template.response import TemplateResponse
+from django.contrib.admin import helpers
+
 
 # ✅ 1. Inline รายการสินค้า (แบบ Read-Only สำหรับหน้าการเงิน)
 class PurchaseItemReadOnlyInline(admin.TabularInline):
@@ -952,7 +956,7 @@ class FinanceReportAdmin(admin.ModelAdmin):
     list_filter = ('status', 'supplier')
     search_fields = ('po_number', 'supplier__company_name')
     actions = [close_finance_job]
-    
+
     # จัดหน้าตาฟอร์ม
     fieldsets = (
         ('📊 สรุปยอดเงิน (Financial Summary)', {
