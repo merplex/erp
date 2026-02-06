@@ -424,6 +424,7 @@ class SalesPayment(models.Model):
 class IncomeReport(SalesOrder):
     vat_percent = models.DecimalField(max_digits=5, decimal_places=2, default=7.00, verbose_name="ภาษีมูลค่าเพิ่ม (%)")
     class Meta:
+        proxy = True
         verbose_name = "C3. สรุปรายรับ (Income Report)"
         verbose_name_plural = "C3. สรุปรายรับ (Income Report)"
     @property
