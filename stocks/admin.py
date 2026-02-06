@@ -1081,8 +1081,9 @@ class IncomeReportAdmin(admin.ModelAdmin):
     get_total_items_display.short_description = "📦 รวมสินค้า"
 
     def get_subtotal_display(self, obj):
-        val = getattr(obj, 'total_items_price', 0)
-        return format_html('<span style="font-size:14px;">{:,.2f}</span>', val)
+        # ✅ จัดรูปแบบด้วย f-string ให้เสร็จก่อน แล้วค่อยส่งเข้า format_html
+        value = f"{obj.total_items_price:,.2f}"
+        return format_html('<span style="font-size:14px;">{}</span>', value)
     get_subtotal_display.short_description = "💵 ก่อน VAT"
 
     def get_vat_amount_display(self, obj):
@@ -1091,13 +1092,14 @@ class IncomeReportAdmin(admin.ModelAdmin):
     get_vat_amount_display.short_description = "VAT"
 
     def get_grand_total_display(self, obj):
-        # ✅ โชว์สีน้ำเงินทั้งใน List และ Detail
-        return format_html('<b style="color:#007bff;">{:,.2f}</b>', obj.grand_total)
+        # ✅ แก้จาก {:,.2f} เป็น {} แล้วใช้ f-string ข้างนอกแทน
+        value = f"{obj.grand_total:,.2f}"
+        return format_html('<b style="color:#007bff;">{}</b>', value)
     get_grand_total_display.short_description = "💰 ยอดสุทธิ"
 
     def get_total_paid_display(self, obj):
-        # ✅ โชว์สีเขียวทั้งใน List และ Detail
-        return format_html('<b style="color:#28a745;">{:,.2f}</b>', obj.total_paid)
+        value = f"{obj.total_paid:,.2f}"
+        return format_html('<b style="color:#28a745;">{}</b>', value)
     get_total_paid_display.short_description = "✅ รับแล้ว"
 
     def get_balance_due_display(self, obj):
