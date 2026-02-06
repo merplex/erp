@@ -69,14 +69,6 @@ class PurchasePaymentInline(admin.TabularInline):
     fields = ('amount', 'notes', 'payment_date', 'user')
     readonly_fields = ('payment_date', 'user')
 
-    # บันทึก User คนจ่ายเงินอัตโนมัติ
-    def save_formset(self, request, form, formset, change):
-        instances = formset.save(commit=False)
-        for instance in instances:
-            if not instance.user_id:
-                instance.user = request.user
-            instance.save()
-        formset.save_m2m()
 
 class SalesPaymentInline(admin.TabularInline):
     model = SalesPayment
@@ -923,7 +915,10 @@ def settle_and_close_orders(modeladmin, request, queryset):
                 # บังคับอัปเดตสถานะการเงินเป็น "Paid"
                 if obj.balance_due <= 0:
                     obj.payment_status = 'Paid'
-                    obj.save(update_fields=['payment_status'])
+                else:
+                    obj.payment_status = 'Partial' # เพิ่มบรรทัดนี้เผื่อปิดยอดไม่หมดค่ะ
+                
+                obj.save(update_fields=['payment_status'])
             
             modeladmin.message_user(request, f"✅ บันทึกการชำระเงินเรียบร้อย {updated_count} รายการ", messages.SUCCESS)
             return HttpResponseRedirect(request.get_full_path())
@@ -998,6 +993,33 @@ class FinanceReportAdmin(admin.ModelAdmin):
     inlines = [PurchaseItemReadOnlyInline, PurchasePaymentInline]
 
     # --- ส่วนที่แก้ไข: ใช้ f-string จัดตัวเลขก่อนส่งไป format_html ทุกตัว ---
+        # บันทึก User คนจ่ายเงินอัตโนมัติ
+    def save_formset(self, request, form, formset, change):
+        # 1. เซฟรายการจ่ายเงินก่อน
+        instances = formset.save(commit=False)
+        for instance in instances:
+            if hasattr(instance, 'user') and not instance.user_id:
+                instance.user = request.user
+            instance.save()
+        formset.save_m2m()
+        
+        # 2. คำนวณสถานะใหม่ทันทีหลังเซฟเงิน
+        obj = formset.instance # นี่คือตัว FinanceReport (PurchaseOrder)
+        
+        # ดึงยอดที่จ่ายไปแล้วทั้งหมดจาก Log
+        # (ใช้ purchasepaymentlog_set เพราะเปรมไม่ได้ตั้ง related_name)
+        paid = sum(log.amount for log in obj.purchasepaymentlog_set.all())
+        total = obj.grand_total # ยอดที่ต้องจ่ายทั้งหมด
+        
+        # 🟢 Logic เปลี่ยนสถานะ
+        if paid <= 0:
+            obj.payment_status = 'Unpaid' # ยังไม่จ่าย
+        elif paid < total:
+            obj.payment_status = 'Partial' # จ่ายบางส่วน (ที่เปรมต้องการ!)
+        else:
+            obj.payment_status = 'Paid' # จ่ายครบแล้ว
+            
+        obj.save(update_fields=['payment_status'])
 
     def get_total_items_display(self, obj):
         return f"{sum(i.quantity_ordered for i in obj.items.all()):,}"
@@ -1077,6 +1099,25 @@ class IncomeReportAdmin(admin.ModelAdmin):
     inlines = [SalesItemReadOnlyInline, SalesPaymentInline]
 
     # --- Methods ที่ปรับปรุงใหม่ (ใช้ได้ทั้ง List และ Detail) ---
+    def save_formset(self, request, form, formset, change):
+        # 1. เซฟรายการรับเงิน
+        formset.save()
+        
+        # 2. คำนวณสถานะ
+        obj = formset.instance
+        # ฝั่งขายใช้ SalesPayment (เปรมต้องเช็ค related_name ใน model นะคะ)
+        # ถ้าไม่มีใช้ salespayment_set
+        paid = sum(p.amount for p in obj.salespayment_set.all())
+        total = obj.grand_total
+        
+        if paid <= 0:
+            obj.payment_status = 'Unpaid'
+        elif paid < total:
+            obj.payment_status = 'Partial' # จ่ายบางส่วน
+        else:
+            obj.payment_status = 'Paid'
+            
+        obj.save(update_fields=['payment_status'])
 
     def get_total_items_display(self, obj):
         return f"{sum(i.quantity for i in obj.items.all()):,}" if hasattr(obj, 'items') else "0"
