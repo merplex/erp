@@ -347,9 +347,10 @@ class PurchaseReceiptLogInline(admin.TabularInline):
 class SalesItemInline(admin.TabularInline):
     model = SalesItem
     autocomplete_fields = ['product'] 
+    extra = 1
     # 1. เรียงลำดับคอลัมน์จากซ้ายไปขวา
     fields = [
-        'product', 
+        'product',        
         'quantity_ordered', 
         'sale_price',        # ✅ ใส่ตรงนี้เพื่อให้ "แก้ไขได้" (ห้ามใส่ใน readonly_fields)
         'get_total_display', # 🔒 ใส่ตรงนี้เพื่อโชว์ผลลัพธ์ (ต้องใส่ใน readonly_fields ด้วย)
@@ -415,7 +416,7 @@ class ProductAdmin(admin.ModelAdmin):
     search_fields = ('name', 'barcodes__code','tags__name')
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
-    
+
     def get_search_results(self, request, queryset, search_term):
         queryset, use_distinct = super().get_search_results(request, queryset, search_term)
 
