@@ -1157,14 +1157,7 @@ class FinanceReportAdmin(admin.ModelAdmin):
             obj.save(update_fields=['payment_status'])
     
     def get_total_items_display(self, obj):
-        # obj ในที่นี้คือ SalesOrder
-        # เราจะไปดึง items (SalesItem) ทั้งหมดมา Sum ฟิลด์ quantity_ordered
-        result = obj.items.aggregate(total_qty=Sum('quantity_ordered'))
-        total = result['total_qty'] or 0
-        
-        if total > 0:
-            return f"{total:,} รายการ"
-        return "0 รายการ"
+        return f"{sum(i.quantity_ordered for i in obj.items.all()):,}"
     get_total_items_display.short_description = "📦 รวมจำนวนสินค้า"
 
     def get_subtotal_display(self, obj):
@@ -1267,8 +1260,19 @@ class IncomeReportAdmin(admin.ModelAdmin):
         obj.save(update_fields=['payment_status'])
 
     def get_total_items_display(self, obj):
-        return f"{sum(i.quantity for i in obj.items.all()):,}" if hasattr(obj, 'items') else "0"
-    get_total_items_display.short_description = "📦 รวมสินค้า"
+        # ใช้ Sum จาก django.db.models (ซึ่งในไฟล์ admin ของเปรมยังไม่ได้ import ไว้ด้านบน)
+        from django.db.models import Sum
+        
+        # ดึงจาก related_name='items' ที่ตั้งไว้ใน SalesItem
+        result = obj.items.aggregate(total_qty=Sum('quantity_ordered'))
+        total = result['total_qty'] or 0
+        
+        if total > 0:
+            return f"{total:,} ชิ้น"
+        return "0 ชิ้น"
+    
+    # ✅ จุดที่ 3: ชื่อตรงนี้ก็ต้องตรงกัน
+    get_total_items_display.short_description = "📦 รวมจำนวนสินค้า"
 
     def get_subtotal_display(self, obj):
         # ✅ จัดรูปแบบด้วย f-string ให้เสร็จก่อน แล้วค่อยส่งเข้า format_html
