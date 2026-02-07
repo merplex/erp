@@ -1339,6 +1339,42 @@ class ShipmentPaymentReportAdmin(admin.ModelAdmin):
     list_filter = ['payment_due_date', 'sales_order__customer']
     ordering = ['payment_due_date']
 
+    actions = ['calculate_selected_totals']
+    
+    list_display = [
+        'payment_due_date', 'get_so_number', 'get_customer', 
+        'quantity_shipped', 'get_shipment_value_display', 
+        'get_dc_display', 'get_rebate_display', 'get_total_with_vat_display'
+    ]
+
+    # --- 🧮 ฟังก์ชันคำนวณยอดรวมสำหรับรายการที่เลือก ---
+    @admin.action(description="📝 สรุปยอดรวมรายการที่เลือก")
+    def calculate_selected_totals(self, request, queryset):
+        # 1. สั่งให้ฐานข้อมูลคำนวณ Sum ทุกคอลัมน์พร้อมกัน
+        totals = queryset.aggregate(
+            total_qty=Sum('quantity_shipped'),
+            total_value=Sum('shipment_value'),
+            total_dc=Sum('dc_amount'),
+            total_rebate=Sum('rebate_amount'),
+        )
+
+        # 2. คำนวณยอดสุทธิ (คิด VAT 7%)
+        net_before_vat = (totals['total_value'] or 0) - (totals['total_dc'] or 0) - (totals['total_rebate'] or 0)
+        total_with_vat = float(net_before_vat) * 1.07 # หรือใช้ logic VAT จาก SO ของเปรม
+
+        # 3. สร้างข้อความสรุป
+        summary_message = (
+            f"📊 สรุปยอดรวม {queryset.count()} รายการที่เลือก:  |  "
+            f"📦 จำนวนรวม: {totals['total_qty'] or 0:,} ชิ้น  |  "
+            f"💰 ยอดรวมสินค้า: {totals['total_value'] or 0:,.2f} บาท  |  "
+            f"🔻 หัก DC: {totals['total_dc'] or 0:,.2f} บาท  |  "
+            f"🔻 หัก Rebate: {totals['total_rebate'] or 0:,.2f} บาท  |  "
+            f"✅ ยอดรับสุทธิ (รวม VAT): {total_with_vat:,.2f} บาท"
+        )
+
+        # 4. ส่งข้อความไปโชว์ที่หน้าจอ
+        self.message_user(request, summary_message, messages.SUCCESS)
+
     def get_dc_display(self, obj):
         # โชว์ตัวเลขคลีนๆ มีคอมม่าและทศนิยม 2 ตำแหน่ง
         return f"{obj.dc_amount:,.2f}"
