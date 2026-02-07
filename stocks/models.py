@@ -686,5 +686,5 @@ class FinanceReport(PurchaseOrder):
 class ShipmentPaymentReport(SalesDeliveryLog):
     class Meta:
         proxy = True
-        verbose_name = "C4. รายงานกำหนดรับเงิน (แยกตามการส่ง)"
-        verbose_name_plural = "C4. รายงานกำหนดรับเงิน (แยกตามการส่ง)"
+        verbose_name = "C4. รายงานรับชำระ (ตามการส่ง)"
+        verbose_name_plural = "C4. รายงานรับชำระ (ตามการส่ง)"
