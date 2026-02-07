@@ -1367,11 +1367,13 @@ class CustomerProductContractAdmin(admin.ModelAdmin):
     list_display = ['customer', 'product', 'contract_price', 'dc_percent', 'rebate_percent']
     list_editable = ['contract_price', 'dc_percent', 'rebate_percent'] # แก้ไขแบบรวดเร็วได้
     search_fields = ['customer__company_name', 'product__name', 'product__barcodes__code']
+    autocomplete_fields = ['product']
 
 @admin.register(StockAdjustment)
 class StockAdjustmentAdmin(admin.ModelAdmin):
     list_display = ['created_at', 'product', 'adjustment_type', 'quantity', 'adjustment_value', 'reason']
     list_filter = ['adjustment_type', 'product']
     autocomplete_fields = ['product']
+    search_fields = ['product__name', 'reason']
 
 admin.site.register(Customer)
