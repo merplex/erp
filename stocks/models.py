@@ -513,7 +513,10 @@ class SalesDeliveryLog(models.Model):
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     shipped_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่ส่ง")
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
-    shipment_value = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="มูลค่าที่ส่งครั้งนี้")
+
+    dc_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="ยอดหัก DC")
+    rebate_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="ยอดหัก Rebate")
+    shipment_value = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="ยอดรวมสินค้า (ก่อนหัก)")
     payment_due_date = models.DateField(blank=True, null=True, verbose_name="วันกำหนดรับเงิน")
 
     def save(self, *args, **kwargs):
@@ -537,26 +540,38 @@ class SalesDeliveryLog(models.Model):
             # --- 🛑 [จบ LOGIC เดิม] ---
 
 
-            # --- 💰 [LOGIC บัญชีใหม่ที่เรเพิ่มให้] ---
-            # 3. คำนวณมูลค่าที่ส่งรอบนี้ (ดึงราคาขายจาก SalesItem มาคูณ)
+            # --- 2. [ส่วนที่เรเพิ่มให้: คำนวณเงินแยกถัง] ---
+            # คำนวณมูลค่าสินค้าดิบ (ราคาขาย x จำนวนส่ง)
             self.shipment_value = item.sale_price * self.quantity_shipped
 
-            # 4. คำนวณวันครบกำหนดรับเงิน (Payment Due Date)
-            if so.customer:
-                close_day = so.customer.account_close_day # วันปิดรอบ (เช่น 25)
-                term = so.customer.payment_term          # เครดิตเทอม (เช่น 30)
-                ref_date = datetime.date.today()          # ใช้วันที่ทำรายการส่ง
+            # ดึงข้อมูล DC/Rebate จากสัญญา (Price List) มาคำนวณแยกเก็บเป็น "บาท"
+            from .models import CustomerProductContract 
+            contract = CustomerProductContract.objects.filter(
+                customer=so.customer, 
+                product=self.product
+            ).first()
+            
+            if contract:
+                # แยกเก็บค่า DC และ Rebate ลงคอลัมน์ของตัวเองชัดๆ
+                self.dc_amount = self.shipment_value * (contract.dc_percent / 100)
+                self.rebate_amount = self.shipment_value * (contract.rebate_percent / 100)
+            else:
+                self.dc_amount = 0
+                self.rebate_amount = 0
 
-                # หาวันปิดยอดของเดือนที่ส่ง
+            # --- 3. [คำนวณวันจ่ายเงินตามรอบบัญชี] ---
+            if so.customer:
+                close_day = so.customer.account_close_day
+                term = so.customer.payment_term
+                ref_date = datetime.date.today()
+
                 try:
                     current_closing = ref_date.replace(day=close_day)
-                except ValueError: # กรณีเดือนนี้ไม่มีวันที่นั้น (เช่น ปิดวันที่ 31 แต่เดือนนี้มี 30)
+                except ValueError:
                     next_month = ref_date.replace(day=28) + datetime.timedelta(days=4)
                     current_closing = next_month - datetime.timedelta(days=next_month.day)
 
-                # เช็คว่าต้องนับจากรอบเดือนนี้ หรือรอบเดือนหน้า
                 if ref_date > current_closing:
-                    # เลยวันตัดรอบเดือนนี้ -> ไปเริ่มนับจากวันตัดรอบเดือนหน้า
                     first_of_next = (current_closing.replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
                     try:
                         base_date = first_of_next.replace(day=close_day)
@@ -564,21 +579,19 @@ class SalesDeliveryLog(models.Model):
                         next_next = first_of_next.replace(day=28) + datetime.timedelta(days=4)
                         base_date = next_next - datetime.timedelta(days=next_next.day)
                 else:
-                    # ยังไม่เลยวันตัดรอบ -> เริ่มนับจากวันตัดรอบเดือนนี้เลย
                     base_date = current_closing
 
-                # วันจ่ายเงิน = วันเริ่มนับ (Base Date) + เครดิตเทอม
                 self.payment_due_date = base_date + datetime.timedelta(days=term)
-            # --- 🛑 [จบ LOGIC บัญชีใหม่] ---
 
+        # บันทึกลงฐานข้อมูลจริง
         super().save(*args, **kwargs)
 
     @property
     def total_with_vat(self):
-        # ดึง % VAT จากใบสั่งขาย (SalesOrder) มาคำนวณ
+        # ยอดรับเงินจริง = (ยอดสินค้า - ยอดหัก DC - ยอดหัก Rebate) + VAT
+        net_before_vat = self.shipment_value - self.dc_amount - self.rebate_amount
         vat_p = self.sales_order.vat_percent or 0
-        total = self.shipment_value * (1 + (vat_p / 100))
-        return total
+        return net_before_vat * (1 + (vat_p / 100))
         
 @receiver(post_delete, sender=SalesDeliveryLog)
 def handle_delivery_deletion(sender, instance, **kwargs):
@@ -686,5 +699,49 @@ class FinanceReport(PurchaseOrder):
 class ShipmentPaymentReport(SalesDeliveryLog):
     class Meta:
         proxy = True
-        verbose_name = "C4. รายงานรับชำระ (ตามการส่ง)"
-        verbose_name_plural = "C4. รายงานรับชำระ (ตามการส่ง)"
+        verbose_name = "C4. สรุปรับชำระ (ตามการส่ง)"
+        verbose_name_plural = "C4. สรุปรับชำระ (ตามการส่ง)"
+
+# --- T2.1 รายการราคาสัญญาและค่าธรรมเนียม (Price List per Customer) ---
+class CustomerProductContract(models.Model):
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, verbose_name="ลูกค้า")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้า")
+    contract_price = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="ราคาสัญญา")
+    dc_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0, verbose_name="ค่า DC (%)")
+    rebate_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0, verbose_name="Rebate (%)")
+
+    def __str__(self):
+        return f"{self.customer.company_name} - {self.product.name}"
+
+    class Meta:
+        verbose_name_plural = "T2.1 ราคาสัญญา & DC/Rebate"
+        unique_together = ('customer', 'product')
+
+# --- T2.2 ระบบปรับปรุงสต็อก (Stock Adjustment) ---
+class StockAdjustment(models.Model):
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้า")
+    adjustment_type = models.CharField(
+        max_length=10, 
+        choices=[('ADD', 'เพิ่มสต็อก (+)'), ('SUB', 'ลดสต็อก (-)')], 
+        default='ADD'
+    )
+    quantity = models.IntegerField(verbose_name="จำนวนที่ปรับ")
+    reason = models.CharField(max_length=255, verbose_name="หมายเหตุ/เหตุผล")
+    adjustment_value = models.DecimalField(max_digits=12, decimal_places=2, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        # คำนวณมูลค่าตามราคาทุน (buy_price)
+        self.adjustment_value = self.quantity * self.product.buy_price
+        
+        # ปรับปรุงยอดใน Product ทันที
+        if self.adjustment_type == 'ADD':
+            self.product.stock_quantity += self.quantity
+        else:
+            self.product.stock_quantity -= self.quantity
+        
+        self.product.save()
+        super().save(*args, **kwargs)
+
+    class Meta:
+        verbose_name_plural = "T2.2 บันทึกการปรับสต็อก"
