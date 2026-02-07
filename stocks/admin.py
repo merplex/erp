@@ -1361,11 +1361,10 @@ class ProductBarcodeAdmin(admin.ModelAdmin):
     def get_search_results(self, request, queryset, search_term):
         queryset, use_distinct = super().get_search_results(request, queryset, search_term)
         
-        # 🎯 ดักจับการค้นหาจากช่องบาร์โค้ดในหน้า Inline 
-        if 'autocomplete' in request.path:
-            # ตรวจสอบว่ามีการส่งชื่อสินค้าหรือ ID สินค้ามาช่วยกรองไหม
-            # หรือถ้าเปรมพิมพ์ชื่อสินค้าในช่องบาร์โค้ด search_fields ['product__name'] จะช่วยเปรมเองระดับหนึ่งค่ะ
-            pass 
+        # ดึงค่า product_id ที่ส่งมาจาก JavaScript (ถ้ามี)
+        product_id = request.GET.get('product_id')
+        if product_id:
+            queryset = queryset.filter(product_id=product_id)
             
         return queryset, use_distinct
 
