@@ -667,7 +667,8 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
 class SalesOrderAdmin(admin.ModelAdmin):
     list_display = ('so_number', 'customer', 'order_date', 'status', 'vat_percent','get_diff')
     list_filter = ('status', 'order_date', 'customer')
-    search_fields = ('so_number', 'po_no_customer', 'customer__company_name')
+    search_fields = ('so_number', 'po_no_customer', 'customer__company_name', 
+        'items__product__barcodes__code')
     inlines = [SalesItemInline, SalesDeliveryLogInline]
     readonly_fields = ('created_by', 'status') # ล็อค status ให้ระบบจัดการออโต้
     
