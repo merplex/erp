@@ -192,7 +192,7 @@ class PurchaseOrder(models.Model):
         choices=[
             ('Pending', 'รอรับของ'),
             ('Received', 'รับของบางส่วน'),
-            ('Completed', 'ได้รับสินค้าครบถ้วน'),
+            ('Completed', 'ปิดงาน/ครบถ้วน'),
             ('Cancelled', 'ยกเลิก')
         ],
         default='Pending',
@@ -261,6 +261,13 @@ class PurchaseItem(models.Model):
     unit_price = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name="ราคา/หน่วย")
     
     @property
+    def total_paid(self):
+        # ✅ ในเมื่อไม่มี related_name ต้องใช้ชื่อคลาสตัวเล็กตามด้วย _set
+        # และเช็คว่าใน PurchasePaymentLog เปรมใช้ฟิลด์เงินชื่อ 'amount' หรือเปล่านะคะ
+        if hasattr(self, 'purchasepaymentlog_set'):
+            return sum(log.amount for log in self.purchasepaymentlog_set.all())
+        return 0
+    @property
     def total_price(self):
         return self.quantity_ordered * self.unit_price
 
@@ -284,6 +291,7 @@ class PurchaseItem(models.Model):
         
 # ✅ 3. เพิ่ม Class ใหม่: PurchasePaymentLog (บันทึกการจ่ายเงิน)
 # (วางต่อท้าย PurchaseItem ได้เลยครับ)
+
 class PurchasePaymentLog(models.Model):
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='payment_logs')
     amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="ยอดที่จ่าย")
@@ -337,10 +345,30 @@ class SalesOrder(models.Model):
     so_number = models.CharField(max_length=50, unique=True, editable=False)
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE)
     po_no_customer = models.CharField(max_length=100, blank=True, verbose_name="เลข PO ลูกค้า")
+    vat_percent = models.DecimalField(max_digits=5, decimal_places=2, default=7.00, verbose_name="VAT (%)") 
     order_date = models.DateField(default=datetime.date.today)
     status = models.CharField(max_length=20, default='Draft', choices=STATUS_CHOICES)
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+
+    @property
+    def total_items_price(self):
+        # ✅ ตอนนี้เรียก item.total_price ได้แล้ว เพราะเราสร้างไว้ข้างบน
+        return sum(item.total_price for item in self.items.all())
+
+    @property
+    def grand_total(self):
+        # สมมติ VAT 7% (ถ้าเปรมมีฟิลด์ vat_percent ให้เปลี่ยนเลข 7 เป็น self.vat_percent นะครับ)
+        subtotal = self.total_items_price
+        vat = (subtotal * self.vat_percent) / 100 
+        return subtotal + vat
+
+    @property
+    def balance_due(self):
+        # ยอดค้างรับ = ยอดสุทธิ - ยอดที่รับเงินมาแล้ว
+        total_paid = sum(p.amount for p in self.payments.all()) if hasattr(self, 'payments') else 0
+        return self.grand_total - total_paid
+    
     def save(self, *args, **kwargs):
         if not self.so_number: self.so_number = generate_number('SO', SalesOrder, 'so_number')
         super().save(*args, **kwargs)
@@ -400,6 +428,24 @@ class IncomeReport(SalesOrder):
         verbose_name = "C3. สรุปรายรับ (Income Report)"
         verbose_name_plural = "C3. สรุปรายรับ (Income Report)"
 
+    @property
+    def grand_total(self):
+        # คำนวณยอดรวมจากรายการสินค้าทั้งหมด (สมมติว่าใช้ related_name='items')
+        # ถ้าเปรมตั้งชื่อ related_name เป็นอย่างอื่น ให้เปลี่ยนชื่อ .items ตรงนี้ด้วยนะครับ
+        total = sum(item.total_price for item in self.items.all()) if hasattr(self, 'items') else 0
+        return total
+
+    @property
+    def total_paid(self):
+        # คำนวณยอดที่รับชำระมาแล้ว (สมมติว่ามี Model เก็บการรับเงิน)
+        total = sum(p.amount for p in self.payments.all()) if hasattr(self, 'payments') else 0
+        return total
+
+    @property
+    def balance_due(self):
+        # ยอดค้างรับ = ยอดรวมสุทธิ - ยอดที่จ่ายแล้ว
+        return self.grand_total - self.total_paid
+
 class SalesItem(models.Model):
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
@@ -408,6 +454,32 @@ class SalesItem(models.Model):
     # ✅ เพิ่ม 2 ฟิลด์นี้เพื่อทำ auto production ค่ะ
     auto_produce = models.BooleanField(default=False, verbose_name="ผลิตทันที (Auto PD)")
     is_produced = models.BooleanField(default=False, editable=False) # เก็บไว้หลังบ้านกันสร้างซ้ำ
+
+# ✅ 1. เพิ่มฟิลด์จริงลงฐานข้อมูล (เพื่อใช้เก็บราคาที่อาจจะโดนแก้ไข)
+    sale_price = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        default=0.00, 
+        verbose_name="ราคาขายต่อหน่วย"
+    )
+
+    quantity_shipped = models.PositiveIntegerField(default=0, verbose_name="ส่งสะสม")
+    auto_produce = models.BooleanField(default=False, verbose_name="ผลิตทันที (Auto PD)")
+    is_produced = models.BooleanField(default=False, editable=False)
+
+    # ✅ 2. ปรับ Property เดิม: ให้มาดึงจาก self.sale_price ของตัวเองแทน
+    @property
+    def total_price(self):
+        # ใช้ราคาจากฟิลด์ของตัวเอง (ถ้าเป็น 0 ให้ลองไปหยิบจาก Product มาเผื่อไว้ตอนโชว์หน้า Admin)
+        price = self.sale_price if self.sale_price > 0 else (self.product.sale_price if self.product else 0)
+        qty = self.quantity_ordered or 0
+        return price * qty
+
+    # ✅ 3. เพิ่มฟังก์ชัน Save: เพื่อดึงราคาจาก Product มาใส่ใน sale_price อัตโนมัติถ้าเราไม่กรอก
+    def save(self, *args, **kwargs):
+        if (not self.sale_price or self.sale_price == 0) and self.product:
+            self.sale_price = self.product.sale_price
+        super().save(*args, **kwargs)
 
 
 class SalesDeliveryLog(models.Model):

@@ -37,12 +37,11 @@ class PurchaseItemReadOnlyInline(admin.TabularInline):
 class SalesItemReadOnlyInline(admin.TabularInline):
     model = SalesItem  # ชื่อ Model สินค้าฝั่งขาย (เช็คใน models.py ว่าชื่อนี้ไหม)
     extra = 0
+    fields = ['product', 'quantity_ordered', 'sale_price', 'get_total_display', 'auto_produce']
+    readonly_fields = ['product', 'quantity_ordered', 'sale_price', 'get_total_display', 'auto_produce']
     can_delete = False
     verbose_name = "📦 รายการสินค้าที่ขาย"
     verbose_name_plural = "รายการสินค้า"
-    
-    # ทำให้แก้ไขไม่ได้ (Read Only) เพื่อความปลอดภัยในหน้ารายงาน
-    readonly_fields = ('product', 'quantity_ordered', 'quantity_shipped', 'get_unit_price', 'get_line_total')
     
     def has_add_permission(self, request, obj):
         return False
@@ -59,6 +58,15 @@ class SalesItemReadOnlyInline(admin.TabularInline):
         total = price * obj.quantity_ordered
         return f"{total:,.2f}"
     get_line_total.short_description = "รวมเงิน"
+
+    def get_total_display(self, obj):
+        # คำนวณ: จำนวน x ราคาขาย
+        price = obj.sale_price or 0
+        qty = obj.quantity_ordered or 0
+        total = price * qty
+        return f"{total:,.2f}"
+    
+    get_total_display.short_description = "ราคารวม"
     
 # ✅ 2. Inline การจ่ายเงิน และการรับเงิน (บันทึกยอดได้เรื่อยๆ)
 class PurchasePaymentInline(admin.TabularInline):
@@ -69,14 +77,6 @@ class PurchasePaymentInline(admin.TabularInline):
     fields = ('amount', 'notes', 'payment_date', 'user')
     readonly_fields = ('payment_date', 'user')
 
-    # บันทึก User คนจ่ายเงินอัตโนมัติ
-    def save_formset(self, request, form, formset, change):
-        instances = formset.save(commit=False)
-        for instance in instances:
-            if not instance.user_id:
-                instance.user = request.user
-            instance.save()
-        formset.save_m2m()
 
 class SalesPaymentInline(admin.TabularInline):
     model = SalesPayment
@@ -286,27 +286,43 @@ class BOMIngredientInline(admin.TabularInline):
 
 class PurchaseItemInline(admin.TabularInline):
     model = PurchaseItem
+    autocomplete_fields = ['product'] 
     extra = 1
     readonly_fields = ('quantity_received',) 
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "product":
+            # 1. พยายามหา ID จากหลายๆ ช่องทาง (ป้องกันชื่อ ID เปลี่ยน)
             resolved = request.resolver_match
-            if resolved and 'object_id' in resolved.kwargs:
-                po_id = resolved.kwargs['object_id']
+            object_id = None
+            if resolved:
+                object_id = resolved.kwargs.get('object_id') or resolved.kwargs.get('pk')
+
+            if object_id:
                 try:
-                    from django.db.models import Q # ✅ ต้อง Import Q มาด้วยครับ
-                    po = PurchaseOrder.objects.get(pk=po_id)
+                    from django.db.models import Q
+                    # ✅ ใช้ self.parent_model แทนการระบุชื่อตรงๆ จะปลอดภัยกว่าค่ะ
+                    parent_obj = self.parent_model.objects.get(pk=object_id)
                     
-                    # ✅ เงื่อนไขใหม่: 
-                    # 1. เป็นสินค้าที่ Supplier รายนี้ขาย (is_product=True และมีชื่อใน list)
-                    # 2. หรือ เป็นรายการ "ไม่ใช่สินค้า" (is_product=False) ซึ่งใครก็ซื้อได้
-                    kwargs["queryset"] = Product.objects.filter(
-                        Q(product_suppliers__supplier=po.supplier) | Q(is_product=False)
-                    ).distinct()
+                    if parent_obj.supplier:
+                        # ✅ กรองสินค้า: 
+                        # - เป็นสินค้าที่ Supplier นี้ขาย (ผ่าน product_suppliers)
+                        # - หรือ เป็นรายการที่ไม่ใช่สินค้า (is_product=False)
+                        kwargs["queryset"] = Product.objects.filter(
+                            Q(product_suppliers__supplier=parent_obj.supplier) | 
+                            Q(is_product=False)
+                        ).distinct()
                     
                 except Exception as e:
-                    print(f"Error filtering PO products: {e}")
+                    # ถ้ามี Error ให้มันพ่นออกมาใน Console เปรมจะได้เห็นค่ะ
+                    print(f"🚨 Filter Error: {e}")
+            
+            # 💡 ถ้าเป็นหน้า "เพิ่มใหม่" (Add Mode) ซึ่งไม่มี ID 
+            # ปกติ Django จะโชว์หมด เพราะมันยังไม่รู้ว่าเปรมจะเลือก Supplier คนไหน
+            # ถ้าเปรมอยากให้มันว่างไว้ก่อนจนกว่าจะเลือก ให้ใส่บรรทัดนี้ค่ะ (แต่ต้องกด Save รอบนึงก่อนนะ)
+            # elif not object_id:
+            #     kwargs["queryset"] = Product.objects.none()
+
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 class PurchaseReceiptLogInline(admin.TabularInline):
@@ -330,10 +346,27 @@ class PurchaseReceiptLogInline(admin.TabularInline):
 
 class SalesItemInline(admin.TabularInline):
     model = SalesItem
-    # ✅ เพิ่ม 'auto_produce' เข้าไปในหน้าจอ
-    fields = ['product', 'quantity_ordered', 'quantity_shipped', 'auto_produce']
-    readonly_fields = ('quantity_shipped',)
+    autocomplete_fields = ['product'] 
     extra = 1
+    # 1. เรียงลำดับคอลัมน์จากซ้ายไปขวา
+    fields = [
+        'product',        
+        'quantity_ordered', 
+        'sale_price',        # ✅ ใส่ตรงนี้เพื่อให้ "แก้ไขได้" (ห้ามใส่ใน readonly_fields)
+        'get_total_display', # 🔒 ใส่ตรงนี้เพื่อโชว์ผลลัพธ์ (ต้องใส่ใน readonly_fields ด้วย)
+        'auto_produce',      # 🔘 Checkbox อยู่ท้ายสุดตามที่เปรมต้องการ
+    ]
+    
+    # 2. ระบุว่าตัวไหน "ห้ามแก้" (เฉพาะตัวที่คำนวณ)
+    readonly_fields = ['get_total_display'] 
+
+    # 3. สร้างฟังก์ชันคำนวณราคารวม (Quantity * Sale Price)
+    def get_total_display(self, obj):
+        if obj.quantity_ordered and obj.sale_price:
+            total = obj.quantity_ordered * obj.sale_price
+            return f"{total:,.2f}"
+        return "0.00"
+    get_total_display.short_description = "ราคารวม"
 
 class SalesDeliveryLogInline(admin.TabularInline):
     model = SalesDeliveryLog
@@ -384,6 +417,35 @@ class ProductAdmin(admin.ModelAdmin):
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
 
+    def get_search_results(self, request, queryset, search_term):
+        queryset, use_distinct = super().get_search_results(request, queryset, search_term)
+
+        # เช็คว่านี่คือการค้นหาจากระบบ Autocomplete หรือไม่
+        if 'autocomplete' in request.path:
+            referer = request.META.get('HTTP_REFERER', '')
+            
+            # ถ้าค้นหามาจากหน้า Purchase Order (ใบสั่งซื้อ)
+            if 'purchaseorder' in referer:
+                import re
+                # แกะรหัส ID ของใบสั่งซื้อจาก URL (เช่น .../purchaseorder/3/change/)
+                match = re.search(r'purchaseorder/(\d+)/change/', referer)
+                if match:
+                    po_id = match.group(1)
+                    from .models import PurchaseOrder, Product
+                    from django.db.models import Q
+                    
+                    try:
+                        po = PurchaseOrder.objects.get(pk=po_id)
+                        if po.supplier:
+                            # 🎯 ล็อคทันที: เอาเฉพาะที่ Supplier นี้ขาย หรือรายการที่ไม่ใช่สินค้า
+                            queryset = queryset.filter(
+                                Q(product_suppliers__supplier=po.supplier) | Q(is_product=False)
+                            )
+                    except PurchaseOrder.DoesNotExist:
+                        pass
+        
+        return queryset, use_distinct
+    
     formfield_overrides = {
         models.ManyToManyField: {'widget': forms.CheckboxSelectMultiple},
     }
@@ -576,7 +638,7 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
     
 @admin.register(SalesOrder)
 class SalesOrderAdmin(admin.ModelAdmin):
-    list_display = ('so_number', 'customer', 'order_date', 'status', 'get_diff')
+    list_display = ('so_number', 'customer', 'order_date', 'status', 'vat_percent','get_diff')
     list_filter = ('status', 'order_date', 'customer')
     search_fields = ('so_number', 'po_no_customer', 'customer__company_name')
     inlines = [SalesItemInline, SalesDeliveryLogInline]
@@ -913,15 +975,20 @@ def settle_and_close_orders(modeladmin, request, queryset):
                 # สร้างรายการจ่ายเงิน (ตามยอดที่ค้าง)
                 if balance > 0:
                     if isinstance(obj, PurchaseOrder):
-                        PurchasePayment.objects.create(order=obj, amount=balance, payment_date=pay_date, remark="Auto Settle")
+                        PurchasePaymentLog.objects.create(order=obj, amount=balance, payment_date=pay_date, remark="Auto Settle")
+                        obj.refresh_from_db()
                     elif isinstance(obj, SalesOrder): # รองรับทั้ง SalesOrder และ IncomeReport
                         SalesPayment.objects.create(order=obj, amount=balance, payment_date=pay_date, remark="Auto Settle")
+                        obj.refresh_from_db()
                     updated_count += 1
                 
                 # บังคับอัปเดตสถานะการเงินเป็น "Paid"
                 if obj.balance_due <= 0:
                     obj.payment_status = 'Paid'
-                    obj.save(update_fields=['payment_status'])
+                else:
+                    obj.payment_status = 'Partial' # เพิ่มบรรทัดนี้เผื่อปิดยอดไม่หมดค่ะ
+                
+                obj.save(update_fields=['payment_status'])
             
             modeladmin.message_user(request, f"✅ บันทึกการชำระเงินเรียบร้อย {updated_count} รายการ", messages.SUCCESS)
             return HttpResponseRedirect(request.get_full_path())
@@ -996,6 +1063,36 @@ class FinanceReportAdmin(admin.ModelAdmin):
     inlines = [PurchaseItemReadOnlyInline, PurchasePaymentInline]
 
     # --- ส่วนที่แก้ไข: ใช้ f-string จัดตัวเลขก่อนส่งไป format_html ทุกตัว ---
+        # บันทึก User คนจ่ายเงินอัตโนมัติ
+    def save_formset(self, request, form, formset, change):
+        # 1. บันทึกข้อมูลที่กรอกในตารางก่อน
+        formset.save()
+    
+        # 2. ดึงใบสั่งซื้อใบนี้ออกมา
+        obj = formset.instance
+    
+        # 3. เช็คว่าถ้าเป็นการเซฟตาราง "บันทึกการจ่ายเงิน" ให้คำนวณสถานะใหม่
+        if formset.model == PurchasePaymentLog:
+            from django.db.models import Sum
+        
+        # ✅ ท่าไม้ตาย: ไม่ต้องง้อ _set แต่สั่งไปที่ Model PurchasePaymentLog โดยตรงเลย
+        # กรองเอาเฉพาะรายการที่ฟิลด์ 'order' ตรงกับใบนี้
+            paid_data = PurchasePaymentLog.objects.filter(purchase_order=obj).aggregate(Sum('amount'))
+            paid = paid_data['amount__sum'] or 0
+        
+            # ยอดสุทธิที่ต้องจ่าย
+            total = obj.grand_total
+
+            # 🟢 เปลี่ยนสถานะตาม Choice ที่เปรมมีใน Model
+            if paid <= 0:
+                obj.payment_status = 'Unpaid'
+            elif paid < total:
+                obj.payment_status = 'Partial'  # 🟠 นี่คือ "จ่ายบางส่วน" ที่เปรมต้องการ!
+            else:
+                obj.payment_status = 'Paid'     # 🟢 จ่ายครบแล้ว
+            
+            # บันทึกสถานะลงฐานข้อมูล
+            obj.save(update_fields=['payment_status'])
 
     def get_total_items_display(self, obj):
         return f"{sum(i.quantity_ordered for i in obj.items.all()):,}"
@@ -1034,93 +1131,131 @@ class FinanceReportAdmin(admin.ModelAdmin):
     get_grand_total_list.short_description = "ยอดสุทธิ"
 
     def get_balance_due_list(self, obj):
-        # ✅ แก้ไข (อันนี้ที่เราแก้กันไปตะกี้ครับ รวมมาให้แล้ว)
-        bal = obj.balance_due
+        # 1. คำนวณหา Grand Total ที่แท้จริง (รวม VAT แล้ว)
+        subtotal = getattr(obj, 'total_items_price', 0) or 0
+        vat_p = getattr(obj, 'vat_percent', 0) or 0
+        grand_total = subtotal + (subtotal * vat_p / 100)
+        # 2. หักยอดที่จ่ายมาแล้ว
+        paid = getattr(obj, 'total_paid', 0) or 0
+        bal = grand_total - paid
+        # 3. Logic การโชว์สีแบบเดิมที่เปรมต้องการ
         if bal <= 0: 
-            return format_html('<span style="color:green; font-weight:bold;">{}</span>', "ครบถ้วน")
+            # ถ้าจ่ายครบหรือจ่ายเกิน ให้โชว์ 0.00 สีเขียว
+            return format_html('<span style="color:green; font-weight:bold;">{}</span>', "0.00")
+        # ถ้ายังค้างชำระ ให้โชว์ยอดค้างเป็นสีแดง (ติดลบตามสไตล์เปรม)
         return format_html('<span style="color:red; font-weight:bold;">-{}</span>', f"{bal:,.2f}")
-    get_balance_due_list.short_description = "ค้างจ่าย"
 
 # 2. หน้า Admin ของ Income Report
 @admin.register(IncomeReport)
 class IncomeReportAdmin(admin.ModelAdmin):
-    # หน้ารวม: เน้นดูยอดเงิน และ สถานะการเงิน
-    list_display = ('so_number', 'customer', 'get_grand_total_list', 'get_balance_due_list', 'payment_status')
-    list_filter = ('payment_status', 'status', 'customer', 'order_date') # กรองได้ทั้งสถานะเงินและของ
+    # ✅ ปรับ list_display ให้เอาตัวที่มีสีมาโชว์เลย จะได้ดูง่ายๆ
+    list_display = ('so_number', 'customer', 'get_grand_total_display', 'get_balance_due_display', 'payment_status')
+    list_filter = ('payment_status', 'status', 'customer', 'order_date')
     search_fields = ('so_number', 'customer__company_name')
-    
-    # ใช้ Action เดียวกับฝั่งรายจ่าย (Smart Action)
     actions = [settle_and_close_orders]
 
-    # จัดหน้าตาฟอร์ม
     fieldsets = (
         ('📊 สรุปยอดเงิน (Income Summary)', {
             'fields': (
                 ('get_total_items_display', 'get_subtotal_display'), 
-                ('vat_percent', 'get_vat_amount_display'), 
+                ('get_vat_percent_display','get_vat_amount_display'), 
                 ('get_grand_total_display', 'get_total_paid_display', 'get_balance_due_display')
             ),
-            'classes': ('wide',), 
         }),
         ('📝 ข้อมูลเอกสาร', {
-            # โชว์ทั้งสถานะของ และ สถานะเงิน ให้บัญชีเห็นภาพรวม
             'fields': ('so_number', 'customer', 'order_date', 'status', 'payment_status')
         }),
     )
 
     readonly_fields = (
-        'so_number', 'customer', 'order_date', 'status', 'payment_status', # <-- ห้ามแก้สถานะมือ
-        'get_total_items_display', 'get_subtotal_display', 
+        'so_number', 'customer', 'order_date', 'status', 'payment_status',
+        'get_total_items_display', 'get_subtotal_display', 'get_vat_percent_display',
         'get_vat_amount_display', 'get_grand_total_display', 
         'get_total_paid_display', 'get_balance_due_display'
     )
 
-    inlines = [SalesItemReadOnlyInline, SalesPaymentInline] # อย่าลืม Inline รายการสินค้าของ SalesOrder นะครับ
+    inlines = [SalesItemReadOnlyInline, SalesPaymentInline]
 
-    # --- Display Methods (จัดสีสวยๆ) ---
+    # --- Methods ที่ปรับปรุงใหม่ (ใช้ได้ทั้ง List และ Detail) ---
+    def save_formset(self, request, form, formset, change):
+        # 1. เซฟรายการรับเงิน
+        formset.save()
+        
+        # 2. คำนวณสถานะ
+        obj = formset.instance
+        # ฝั่งขายใช้ SalesPayment (เปรมต้องเช็ค related_name ใน model นะคะ)
+        # ถ้าไม่มีใช้ salespayment_set
+        paid = sum(p.amount for p in obj.payments.all())
+        total = obj.grand_total
+        
+        if paid <= 0:
+            obj.payment_status = 'Unpaid'
+        elif paid < total:
+            obj.payment_status = 'Partial' # จ่ายบางส่วน
+        else:
+            obj.payment_status = 'Paid'
+            
+        obj.save(update_fields=['payment_status'])
 
     def get_total_items_display(self, obj):
-        # เช็กชื่อ field items/quantity ให้ตรงกับ Model จริงนะครับ
-        return f"{sum(i.quantity for i in obj.items.all()):,}" 
+        return f"{sum(i.quantity for i in obj.items.all()):,}" if hasattr(obj, 'items') else "0"
     get_total_items_display.short_description = "📦 รวมสินค้า"
 
     def get_subtotal_display(self, obj):
-        return format_html('<span style="font-size:14px;">{}</span>', f"{obj.total_items_price:,.2f}")
+        # ✅ จัดรูปแบบด้วย f-string ให้เสร็จก่อน แล้วค่อยส่งเข้า format_html
+        value = f"{obj.total_items_price:,.2f}"
+        return format_html('<span style="font-size:14px;">{}</span>', value)
     get_subtotal_display.short_description = "💵 ก่อน VAT"
 
+    # 1. ฟังก์ชันดึง % VAT มาโชว์ (อ่านอย่างเดียว)
+    def get_vat_percent_display(self, obj):
+        return f"{obj.vat_percent}%"
+    get_vat_percent_display.short_description = "อัตราภาษี (%)"
+
+    # 2. ฟังก์ชันคำนวณยอดเงิน VAT (ดึงค่าจากแม่มาคำนวณ)
     def get_vat_amount_display(self, obj):
-        return f"{obj.vat_amount:,.2f}"
-    get_vat_amount_display.short_description = "VAT"
+        # คำนวณ: (ราคาก่อน VAT * % VAT) / 100
+        subtotal = getattr(obj, 'total_items_price', 0) # สมมติว่าเปรมมี property นี้ใน SalesOrder
+        vat_p = obj.vat_percent or 0
+        vat_amt = (subtotal * vat_p) / 100
+        return f"{vat_amt:,.2f}"
+    get_vat_amount_display.short_description = "ภาษีมูลค่าเพิ่ม (VAT)"
 
     def get_grand_total_display(self, obj):
-        # 🔵 ยอดสุทธิ (สีน้ำเงิน)
-        return format_html('<b style="color:#007bff;">{}</b>', f"{obj.grand_total:,.2f}")
-    get_grand_total_display.short_description = "💰 ยอดสุทธิ"
+        subtotal = getattr(obj, 'total_items_price', 0)
+        vat_p = obj.vat_percent or 0
+        total = subtotal + ((subtotal * vat_p) / 100)
+        formatted_total = f"{total:,.2f}"
+        return format_html('<b style="color:#007bff;">{}</b>', formatted_total)
+    get_grand_total_display.short_description = "💰 ยอดสุทธิ (Grand Total)"
 
     def get_total_paid_display(self, obj):
-        # 🟢 รับแล้ว (สีเขียว)
-        return format_html('<b style="color:#28a745;">{}</b>', f"{obj.total_paid:,.2f}")
+        value = f"{obj.total_paid:,.2f}"
+        return format_html('<b style="color:#28a745;">{}</b>', value)
     get_total_paid_display.short_description = "✅ รับแล้ว"
 
-    def get_balance_due_display(self, obj):
-        # 🔴 ค้างรับ (สีแดง)
-        balance = obj.balance_due
-        color = "red" if balance > 0 else "green"
-        text = f"{balance:,.2f}"
-        return format_html('<b style="color:{};">{}</b>', color, text)
-    get_balance_due_display.short_description = "❗️ ยอดค้างรับ"
+    def calculate_balance_due(self, obj):
+        subtotal = getattr(obj, 'total_items_price', 0) or 0
+        vat_p = getattr(obj, 'vat_percent', 0) or 0
+        # ยอดรวมภาษี
+        grand_total = subtotal + (subtotal * vat_p / 100)
+        # หักยอดที่รับเงินมาแล้ว
+        paid = getattr(obj, 'total_paid', 0) or 0
+        return grand_total - paid
 
-    # --- List Display (หน้ารวม) ---
-    def get_grand_total_list(self, obj): 
-        return f"{obj.grand_total:,.2f}"
-    get_grand_total_list.short_description = "ยอดสุทธิ"
-
+    # สำหรับโชว์ในหน้าตาราง (List View)
     def get_balance_due_list(self, obj):
-        bal = obj.balance_due
-        if bal <= 0: 
-            return format_html('<span style="color:green; font-weight:bold;">{}</span>', "ครบถ้วน")
+        bal = self.calculate_balance_due(obj)
+        if bal <= 0:
+            return format_html('<span style="color:green; font-weight:bold;">0.00</span>')
         return format_html('<span style="color:red; font-weight:bold;">-{}</span>', f"{bal:,.2f}")
-    get_balance_due_list.short_description = "ค้างรับ"
+    get_balance_due_list.short_description = "ยอดคงค้าง"
 
+    # สำหรับโชว์ในหน้าแก้ไข (Detail View / Fieldsets)
+    def get_balance_due_display(self, obj):
+        bal = self.calculate_balance_due(obj)
+        color = "green" if bal <= 0 else "red"
+        return format_html('<b style="color:{}; font-size:1.1em;">{}</b>', color, f"{max(0, bal):,.2f}")
+    get_balance_due_display.short_description = "ยอดเงินคงค้าง (Balance Due)"
 
 admin.site.register(Customer)
