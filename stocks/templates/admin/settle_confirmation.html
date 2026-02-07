@@ -2,12 +2,37 @@
 {% block content %}
 <div style="padding: 20px;">
     <h2 style="color:#d9534f;">⚠️ ยืนยันการตัดจบรายการ (SETTLED)</h2>
-    <p>เปรมคะ รายการต่อไปนี้จะถูกเปลี่ยนเป็น <b>COMPLETED</b> และ <b>SETTLED</b> ทันที (แม้เงินไม่ครบ):</p>
-    <ul>
-        {% for obj in queryset %}
-        <li>{{ obj }} (ยอดค้าง: {{ obj.get_balance_due_display }})</li>
-        {% endfor %}
-    </ul>
+    <p>ตรวจสอบรายละเอียดรายการที่จะปิดยอดอีกครั้ง (ระบบจะเปลี่ยนสถานะเป็น COMPLETED และ SETTLED ทันที):</p>
+    
+    <table style="width: 100%; border-collapse: collapse; margin: 20px 0; background: white; border: 1px solid #dee2e6;">
+        <thead>
+            <tr style="background: #f8f9fa; border-bottom: 2px solid #dee2e6;">
+                <th style="padding: 12px; text-align: left;">
+                    {% if mode == 'income' %}เลขที่ SO{% else %}เลขที่ PO{% endif %}
+                </th>
+                <th style="padding: 12px; text-align: left;">
+                    {% if mode == 'income' %}ชื่อลูกค้า{% else %}ชื่อ Supplier{% endif %}
+                </th>
+                <th style="padding: 12px; text-align: right;">ยอดเงินค้างชำระ</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for obj in queryset %}
+            <tr style="border-bottom: 1px solid #eee;">
+                <td style="padding: 12px; font-weight: bold;">
+                    {% if mode == 'income' %}{{ obj.so_number }}{% else %}{{ obj.po_number }}{% endif %}
+                </td>
+                <td style="padding: 12px;">
+                    {% if mode == 'income' %}{{ obj.customer }}{% else %}{{ obj.supplier }}{% endif %}
+                </td>
+                <td style="padding: 12px; text-align: right; color: #d9534f; font-weight: bold;">
+                    {{ obj.get_balance_due_display }}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
     <form action="" method="post">
         {% csrf_token %}
         {% for obj in queryset %}
@@ -15,8 +40,12 @@
         {% endfor %}
         <input type="hidden" name="action" value="{{ action_name }}" />
         <input type="hidden" name="apply" value="1" />
-        <input type="submit" value="ยืนยันการตัดจบรายการ" style="background:#28a745; color:white; padding:10px 20px; border:none; border-radius:4px; cursor:pointer;" />
-        <a href="#" onclick="window.history.back();" style="margin-left:15px; color:#666;">ยกเลิก</a>
+        
+        <div style="margin-top: 20px;">
+            <input type="submit" value="✅ ใช่, ฉันยืนยันการตัดจบรายการ" 
+                   style="background:#28a745; color:white; padding:10px 25px; border:none; border-radius:4px; cursor:pointer; font-size: 16px;" />
+            <a href="#" onclick="window.history.back();" style="margin-left:15px; color:#666; text-decoration:none;">ยกเลิก</a>
+        </div>
     </form>
 </div>
 {% endblock %}
