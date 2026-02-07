@@ -253,6 +253,10 @@ class PurchaseOrder(models.Model):
         else:
             super().delete(*args, **kwargs)
 
+    def get_balance_due_display(self):
+        # ทำให้ออกมาเป็นตัวอักษรพร้อมคอมม่าและทศนิยม 2 ตำแหน่ง
+        return f"{self.balance_due:,.2f} บาท"
+
 class PurchaseItem(models.Model):
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
@@ -404,6 +408,10 @@ class SalesOrder(models.Model):
             self.payment_status = 'Unpaid'
             
         self.save(update_fields=['payment_status'])
+        
+    def get_balance_due_display(self):
+        # ทำให้ออกมาเป็นตัวอักษรพร้อมคอมม่าและทศนิยม 2 ตำแหน่ง
+        return f"{self.balance_due:,.2f} บาท"
 
 # --- 3. ตารางประวัติการรับเงิน (SalesPayment) ---
 class SalesPayment(models.Model):
