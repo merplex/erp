@@ -4,3 +4,4 @@ dj-database-url
 whitenoise
 gunicorn
 Pillow
+python-dateutil
