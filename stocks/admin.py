@@ -1155,9 +1155,16 @@ class FinanceReportAdmin(admin.ModelAdmin):
             
             # บันทึกสถานะลงฐานข้อมูล
             obj.save(update_fields=['payment_status'])
-
+    
     def get_total_items_display(self, obj):
-        return f"{sum(i.quantity_ordered for i in obj.items.all()):,}"
+        # obj ในที่นี้คือ SalesOrder
+        # เราจะไปดึง items (SalesItem) ทั้งหมดมา Sum ฟิลด์ quantity_ordered
+        result = obj.items.aggregate(total_qty=Sum('quantity_ordered'))
+        total = result['total_qty'] or 0
+        
+        if total > 0:
+            return f"{total:,} รายการ"
+        return "0 รายการ"
     get_total_items_display.short_description = "📦 รวมจำนวนสินค้า"
 
     def get_subtotal_display(self, obj):
