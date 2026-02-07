@@ -1,5 +1,4 @@
 from decimal import Decimal
-from dateutil.relativedelta import relativedelta
 from django.db import models
 from django.db.models import Sum
 from django.db.models.signals import post_delete
@@ -332,7 +331,7 @@ class PurchaseReceiptLog(models.Model):
 @receiver(post_delete, sender=PurchaseReceiptLog)
 def handle_receipt_deletion(sender, instance, **kwargs):
     instance.product.stock_quantity -= instance.quantity_received
-    instance.product.save()  
+    instance.product.save()
     try:
         item = PurchaseItem.objects.get(purchase_order=instance.purchase_order, product=instance.product)
         item.quantity_received -= instance.quantity_received
@@ -343,26 +342,6 @@ def handle_receipt_deletion(sender, instance, **kwargs):
     if not po.receipt_logs.exists() and po.status == 'Received':
         po.status = 'Confirmed'
         po.save()
-
-# 6. สัญญาราคาและบาร์โค้ดเฉพาะเจ้า
-class CustomerProductContract(models.Model):
-    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='product_contracts', verbose_name="ลูกค้า")
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้า")
-    # ✅ ล็อคบาร์โค้ดเฉพาะเจ้า (ดึงจาก ProductBarcode ที่สินค้า 1 ตัวมีได้หลายตัว)
-    barcode = models.ForeignKey(ProductBarcode, on_delete=models.PROTECT, verbose_name="บาร์โค้ดเฉพาะเจ้า")
-    
-    price = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="ราคาขายเฉพาะเจ้า")
-    dc_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0, verbose_name="% DC")
-    rebate_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0, verbose_name="% Rebate")
-
-    class Meta:
-        # ล็อคให้ 1 สินค้า ต่อ 1 ลูกค้า มีได้แค่ 1 สัญญาเท่านั้น
-        unique_together = ('customer', 'product')
-        verbose_name = "สัญญาราคาและบาร์โค้ด"
-        verbose_name_plural = "T2. สัญญาราคาและบาร์โค้ด"
-
-    def __str__(self):
-        return f"{self.customer.name} - {self.product.name} ({self.price})"
 
 # 7. ระบบเอกสารสั่งขาย
 class SalesOrder(models.Model):
@@ -397,21 +376,7 @@ class SalesOrder(models.Model):
     def save(self, *args, **kwargs):
         if not self.so_number: self.so_number = generate_number('SO', SalesOrder, 'so_number')
         super().save(*args, **kwargs)
-
-        # คำนวณวันครบกำหนดชำระเงิน (Due Date)
-        if self.delivery_date and self.customer.credit_term:
-            # วันที่ครบกำหนดตามจำนวนวัน
-            calculated_date = self.delivery_date + datetime.timedelta(days=self.customer.credit_term)
-            
-            # ถ้าไม่อยู่วันที่ 1 ให้เลื่อนไปวันที่ 1 ของเดือนถัดไปจาก "เดือนที่ส่งของ"
-            if calculated_date.day != 1:
-                # ใช้ relativedelta เพื่อเลื่อนเดือนจาก delivery_date
-                self.due_date = (self.delivery_date + relativedelta(months=1)).replace(day=1)
-            else:
-                self.due_date = calculated_date
-                
-        super().save(*args, **kwargs)
-
+    class Meta: verbose_name_plural = "B2. ใบสั่งขาย (Sales)"
     def delete(self, *args, **kwargs):
         if self.status == 'Draft':
             super().delete(*args, **kwargs) # ถ้าเป็น Draft ลบทิ้งจริงๆ ได้
@@ -447,8 +412,6 @@ class SalesOrder(models.Model):
     def get_balance_due_display(self):
         # ทำให้ออกมาเป็นตัวอักษรพร้อมคอมม่าและทศนิยม 2 ตำแหน่ง
         return f"{self.balance_due:,.2f} บาท"
-    
-    class Meta: verbose_name_plural = "B2. ใบสั่งขาย (Sales)"
 
 # --- 3. ตารางประวัติการรับเงิน (SalesPayment) ---
 class SalesPayment(models.Model):
@@ -500,10 +463,6 @@ class SalesItem(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
     quantity_ordered = models.PositiveIntegerField(verbose_name="จำนวนที่สั่งขาย")
     quantity_shipped = models.PositiveIntegerField(default=0, verbose_name="ส่งสะสม")
-    barcode_used = models.CharField(max_length=100, blank=True, verbose_name="บาร์โค้ดที่ใช้")
-    sale_price = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="ราคาต่อหน่วย")
-    dc_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0, verbose_name="% DC")
-    rebate_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0, verbose_name="% Rebate")
     # ✅ เพิ่ม 2 ฟิลด์นี้เพื่อทำ auto production ค่ะ
     auto_produce = models.BooleanField(default=False, verbose_name="ผลิตทันที (Auto PD)")
     is_produced = models.BooleanField(default=False, editable=False) # เก็บไว้หลังบ้านกันสร้างซ้ำ
@@ -520,30 +479,13 @@ class SalesItem(models.Model):
     auto_produce = models.BooleanField(default=False, verbose_name="ผลิตทันที (Auto PD)")
     is_produced = models.BooleanField(default=False, editable=False)
 
-    @property
-    def dc_amount(self):
-        """คำนวณยอดเงินส่วนลด DC (หักหน้าบิล)"""
-        # ใช้ราคาจากบิล หรือราคาจากสินค้า (แผนสำรองของเปรม)
-        price = self.sale_price if self.sale_price > 0 else (self.product.sale_price if self.product else 0)
-        qty = self.quantity_ordered or 0
-        # สูตร: (ราคา x จำนวน) x (%DC / 100)
-        return (price * qty) * (self.dc_percent / 100)
-
+    # ✅ 2. ปรับ Property เดิม: ให้มาดึงจาก self.sale_price ของตัวเองแทน
     @property
     def total_price(self):
-        """ยอดรวมสุทธิของบรรทัดนี้ (ยอดเต็ม - ส่วนลด DC)"""
+        # ใช้ราคาจากฟิลด์ของตัวเอง (ถ้าเป็น 0 ให้ลองไปหยิบจาก Product มาเผื่อไว้ตอนโชว์หน้า Admin)
         price = self.sale_price if self.sale_price > 0 else (self.product.sale_price if self.product else 0)
         qty = self.quantity_ordered or 0
-        base_total = price * qty
-        # ยอดสุทธิคือ ยอดรวมลบด้วยยอด dc_amount ที่เราคำนวณไว้ข้างบนค่ะ
-        return base_total - self.dc_amount
-
-    @property
-    def rebate_amount(self):
-        """คำนวณยอด Rebate (แยกไว้ทำรายงานคืนเงินรายเดือน ไม่หักหน้าบิล)"""
-        price = self.sale_price if self.sale_price > 0 else (self.product.sale_price if self.product else 0)
-        qty = self.quantity_ordered or 0
-        return (price * qty) * (self.rebate_percent / 100)
+        return price * qty
 
     # ✅ 3. เพิ่มฟังก์ชัน Save: เพื่อดึงราคาจาก Product มาใส่ใน sale_price อัตโนมัติถ้าเราไม่กรอก
     def save(self, *args, **kwargs):
