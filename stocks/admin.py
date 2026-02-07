@@ -16,6 +16,32 @@ from django.template import Template, RequestContext
 from django.http import HttpResponse, HttpResponseRedirect
 from django.template.response import TemplateResponse
 
+class ProductOnlyFilter(admin.SimpleListFilter):
+    title = 'ประเภทรายการ' # หัวข้อบนแถบ Filter
+    parameter_name = 'is_product'
+
+    def lookups(self, request, model_admin):
+        return (
+            ('true', 'สินค้าเท่านั้น'),
+            ('false', 'ไม่ใช่สินค้า (ค่าบริการ/อื่นๆ)'),
+            ('all', 'แสดงทั้งหมด'),
+        )
+
+    def queryset(self, request, queryset):
+        # ✅ กำหนด Logic การกรอง
+        if self.value() == 'true':
+            return queryset.filter(is_product=True)
+        if self.value() == 'false':
+            return queryset.filter(is_product=False)
+        if self.value() == 'all':
+            return queryset
+        
+        # 🎯 จุดสำคัญ: ถ้ายังไม่ได้เลือก (Default) ให้โชว์แค่สินค้า
+        if self.value() is None:
+            return queryset.filter(is_product=True)
+        
+        return queryset
+
 # ✅ 1. Inline รายการสินค้า (แบบ Read-Only สำหรับหน้าการเงิน)
 class PurchaseItemReadOnlyInline(admin.TabularInline):
     model = PurchaseItem
@@ -832,7 +858,7 @@ class BuyPriceRangeFilter(admin.SimpleListFilter):
 @admin.register(StockPlanning)
 class StockPlanningAdmin(admin.ModelAdmin):
     list_display = ('name', 'category', 'stock_quantity', 'get_pending_in', 'get_pending_out', 'get_pending_prod', 'get_available', 'buy_price')
-    list_filter = ('category', 'suppliers', BuyPriceRangeFilter)
+    list_filter = ('category', 'suppliers', ProductOnlyFilter, BuyPriceRangeFilter)
     search_fields = ('name', 'barcode__code')
 
     # 1. แก้ไขแผนรับ (PO): รวมสถานะ Draft และรายการที่ยังได้รับไม่ครบ
