@@ -974,7 +974,7 @@ def settle_income_special(modeladmin, request, queryset):
         'title': "ยืนยันปิดยอดรายรับกรณีพิเศษ (SETTLED)",
         'queryset': queryset,
         'action_checkbox_name': admin.helpers.ACTION_CHECKBOX_NAME,
-        'action_name': 'settle_income_special' # ต้องตรงกับชื่อฟังก์ชัน,
+        'action_name': 'settle_income_special', # ต้องตรงกับชื่อฟังก์ชัน,
         'mode': 'income'
     })
 settle_income_special.short_description = "🎯 ปิดยอดกรณีพิเศษ (SETTLED)"
