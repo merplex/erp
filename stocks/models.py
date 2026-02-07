@@ -73,6 +73,11 @@ class Customer(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, null=True)
     updated_at = models.DateTimeField(auto_now=True, null=True) # แก้ไขจาก auto_True เป็น auto_now
     def __str__(self): return self.company_name
+    account_close_day = models.IntegerField(
+        default=25, 
+        verbose_name="วันที่ตัดรอบบัญชี",
+        help_text="ระบุวันที่ 1-31"
+    )
     class Meta: verbose_name_plural = "A3. ลูกค้า (Customer)"
 
 # 4. รายการสินค้า
@@ -354,6 +359,12 @@ class SalesOrder(models.Model):
     status = models.CharField(max_length=20, default='Draft', choices=STATUS_CHOICES)
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    # ✅ เพิ่มตัวนี้ตัวเดียวพอค่ะ (ไม่ต้องเปลี่ยนตัวอื่น)
+    payment_due_date = models.DateField(
+        blank=True, 
+        null=True, 
+        verbose_name="วันกำหนดรับเงิน (Payment Due)"
+    )
 
     @property
     def total_items_price(self):
@@ -374,8 +385,42 @@ class SalesOrder(models.Model):
         return self.grand_total - total_paid
     
     def save(self, *args, **kwargs):
-        if not self.so_number: self.so_number = generate_number('SO', SalesOrder, 'so_number')
+        # 1. รันเลขที่เอกสาร (โค้ดเดิมเปรม)
+        if not self.so_number: 
+            self.so_number = generate_number('SO', SalesOrder, 'so_number')
+        
+        # 2. 🧠 Logic คำนวณวันจ่ายเงินตามรอบบัญชี
+        if self.customer:
+            close_day = self.customer.account_close_day  # วันที่ปิดรอบ (เช่น 25)
+            term = self.customer.payment_term           # เครดิตเทอม (เช่น 30)
+            ref_date = self.order_date                  # วันที่ส่งของ/วางบิล
+            
+            # หาวันปิดยอดของเดือนที่ออกบิล
+            try:
+                closing_this_month = ref_date.replace(day=close_day)
+            except ValueError: # กรณีวันที่ 31 แต่เดือนนั้นมีแค่ 28/30 วัน
+                next_m = ref_date.replace(day=28) + datetime.timedelta(days=4)
+                closing_this_month = next_m - datetime.timedelta(days=next_m.day)
+
+            # เช็คว่า "เลยวันปิดยอดหรือยัง"
+            if ref_date > closing_this_month:
+                # 🚩 ถ้าเลยแล้ว: ให้เริ่มนับจากวันปิดยอด "เดือนหน้า"
+                first_of_next = (closing_this_month.replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
+                try:
+                    base_date = first_of_next.replace(day=close_day)
+                except ValueError:
+                    next_next = first_of_next.replace(day=28) + datetime.timedelta(days=4)
+                    base_date = next_next - datetime.timedelta(days=next_next.day)
+            else:
+                # 🏳️ ถ้ายังไม่เลย: ให้เริ่มนับจากวันปิดยอด "เดือนนี้"
+                base_date = closing_this_month
+
+            # วันจ่ายเงิน = วันที่เริ่มนับ (Base Date) + เครดิตเทอม
+            self.payment_due_date = base_date + datetime.timedelta(days=term)
+
         super().save(*args, **kwargs)
+
+
     class Meta: verbose_name_plural = "B2. ใบสั่งขาย (Sales)"
     def delete(self, *args, **kwargs):
         if self.status == 'Draft':
@@ -623,3 +668,9 @@ class FinanceReport(PurchaseOrder):
     class Meta:
         proxy = True
         verbose_name_plural = "C2. สรุปรายจ่าย (Purchase Report)"
+
+class PaymentSchedule(SalesOrder):
+    class Meta:
+        proxy = True
+        verbose_name = "C4. กำหนดรับเงิน (Payment Schedule)"
+        verbose_name_plural = "C4. กำหนดรับเงิน (Payment Schedule)"
