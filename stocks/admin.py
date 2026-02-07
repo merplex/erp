@@ -1323,14 +1323,21 @@ class IncomeReportAdmin(admin.ModelAdmin):
 @admin.register(ShipmentPaymentReport)
 class ShipmentPaymentReportAdmin(admin.ModelAdmin):
     # ✅ โชว์มูลค่าที่ส่ง และวันที่จะได้รับเงินของยอดนั้นๆ
-    list_display = ['payment_due_date', 'sales_order', 'get_customer', 'quantity_shipped', 'get_shipment_value_display', 'get_total_with_vat_display']
+    list_display = ['payment_due_date', 'get_so_number', 'get_customer', 'quantity_shipped', 'get_shipment_value_display', 'get_total_with_vat_display']
     search_fields = ['sales_order__so_number', 'sales_order__customer__company_name']
     list_filter = ['payment_due_date', 'sales_order__customer']
     ordering = ['payment_due_date']
+
+    def get_so_number(self, obj):
+        return obj.sales_order.so_number
+    get_so_number.short_description = "เลขที่ SO"
+    get_so_number.admin_order_field = 'sales_order__so_number' # ทำให้กดเรียงลำดับได้ด้วยค่ะ
+
     def get_customer(self, obj):
         # ดึงชื่อลูกค้าจาก SalesOrder -> Customer
         return obj.sales_order.customer.company_name
     get_customer.short_description = 'ลูกค้า' # ชื่อหัวตาราง
+    get_customer.admin_order_field = 'sales_order__customer__company_name'
 
     def get_shipment_value_display(self, obj):
         return f"{obj.shipment_value:,.2f}"

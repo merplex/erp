@@ -378,6 +378,9 @@ class SalesOrder(models.Model):
         total_paid = sum(p.amount for p in self.payments.all()) if hasattr(self, 'payments') else 0
         return self.grand_total - total_paid
     
+    def __str__(self):
+        return self.so_number
+    
     def save(self, *args, **kwargs):
         if not self.so_number: self.so_number = generate_number('SO', SalesOrder, 'so_number')
         super().save(*args, **kwargs)
@@ -569,7 +572,7 @@ class SalesDeliveryLog(models.Model):
             # --- 🛑 [จบ LOGIC บัญชีใหม่] ---
 
         super().save(*args, **kwargs)
-        
+
     @property
     def total_with_vat(self):
         # ดึง % VAT จากใบสั่งขาย (SalesOrder) มาคำนวณ
