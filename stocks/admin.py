@@ -1372,6 +1372,6 @@ class CustomerProductContractAdmin(admin.ModelAdmin):
 class StockAdjustmentAdmin(admin.ModelAdmin):
     list_display = ['created_at', 'product', 'adjustment_type', 'quantity', 'adjustment_value', 'reason']
     list_filter = ['adjustment_type', 'product']
-    search_fields = ['name', 'barcodes__code', 'tags__name']
+    autocomplete_fields = ['product']
 
 admin.site.register(Customer)
