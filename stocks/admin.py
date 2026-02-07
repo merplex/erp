@@ -1326,5 +1326,21 @@ class ShipmentPaymentReportAdmin(admin.ModelAdmin):
     search_fields = ['sales_order__so_number', 'sales_order__customer__company_name']
     list_filter = ['payment_due_date', 'sales_order__customer']
     ordering = ['payment_due_date']
+    def get_customer(self, obj):
+        # ดึงชื่อลูกค้าจาก SalesOrder -> Customer
+        return obj.sales_order.customer.company_name
+    get_customer.short_description = 'ลูกค้า' # ชื่อหัวตาราง
+
+    def get_shipment_value_display(self, obj):
+        return f"{obj.shipment_value:,.2f}"
+    get_shipment_value_display.short_description = 'มูลค่าสินค้า (ก่อน VAT)'
+
+    def get_total_with_vat_display(self, obj):
+        # ดึงค่าจาก property ใน model มาโชว์
+        return f"{obj.total_with_vat:,.2f}"
+    get_total_with_vat_display.short_description = 'ยอดรวมสุทธิ (รวม VAT)'
+
+    def has_add_permission(self, request):
+        return False
 
 admin.site.register(Customer)
