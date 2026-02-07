@@ -975,10 +975,10 @@ def settle_and_close_orders(modeladmin, request, queryset):
                 # สร้างรายการจ่ายเงิน (ตามยอดที่ค้าง)
                 if balance > 0:
                     if isinstance(obj, PurchaseOrder):
-                        PurchasePaymentLog.objects.create(order=obj, amount=balance, payment_date=pay_date, remark="Auto Settle")
+                        PurchasePaymentLog.objects.create(order=obj, amount=balance, payment_date=pay_date, notes="Auto Settle")
                         obj.refresh_from_db()
                     elif isinstance(obj, SalesOrder): # รองรับทั้ง SalesOrder และ IncomeReport
-                        SalesPayment.objects.create(order=obj, amount=balance, payment_date=pay_date, remark="Auto Settle")
+                        SalesPayment.objects.create(order=obj, amount=balance, payment_date=pay_date, notes="Auto Settle")
                         obj.refresh_from_db()
                     updated_count += 1
                 
