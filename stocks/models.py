@@ -490,18 +490,52 @@ class SalesItem(models.Model):
     auto_produce = models.BooleanField(default=False, verbose_name="ผลิตทันที (Auto PD)")
     is_produced = models.BooleanField(default=False, editable=False)
 
-    # ✅ 2. ปรับ Property เดิม: ให้มาดึงจาก self.sale_price ของตัวเองแทน
     @property
     def total_price(self):
-        # ใช้ราคาจากฟิลด์ของตัวเอง (ถ้าเป็น 0 ให้ลองไปหยิบจาก Product มาเผื่อไว้ตอนโชว์หน้า Admin)
-        price = self.sale_price if self.sale_price > 0 else (self.product.sale_price if self.product else 0)
+        """
+        ใช้สำหรับแสดงผลราคารวมในหน้า Admin 
+        โดยไล่ลำดับ: ราคาที่ระบุเอง > ราคาสัญญา > ราคามาตรฐาน
+        """
+        # 1. เช็คราคาจากฟิลด์ตัวเองก่อน
+        price = self.sale_price
+        
+        # 2. ถ้าเป็น 0 หรือไม่ได้ระบุ ให้ลองหา 'ราคาสัญญา' หรือ 'ราคามาตรฐาน' มาโชว์เผื่อไว้
+        if not price or price <= 0:
+            from .models import CustomerProductContract
+            contract = CustomerProductContract.objects.filter(
+                customer=self.sales_order.customer,
+                product=self.product
+            ).first()
+            
+            if contract:
+                price = contract.contract_price
+            else:
+                price = self.product.sale_price if self.product else 0
+        
         qty = self.quantity_ordered or 0
         return price * qty
 
-    # ✅ 3. เพิ่มฟังก์ชัน Save: เพื่อดึงราคาจาก Product มาใส่ใน sale_price อัตโนมัติถ้าเราไม่กรอก
     def save(self, *args, **kwargs):
-        if (not self.sale_price or self.sale_price == 0) and self.product:
-            self.sale_price = self.product.sale_price
+        """
+        จังหวะกด Save: ระบบจะไปควานหาราคาที่ถูกต้องที่สุดมาบันทึกลงฟิลด์ sale_price
+        เพื่อไม่ให้เป็น 0 ในฐานข้อมูล (ป้องกันราคาพังในรายงานอื่นๆ)
+        """
+        if not self.sale_price or self.sale_price == 0:
+            from .models import CustomerProductContract
+            
+            # 🎯 ขั้นที่ 1: หาในสัญญารายลูกค้า (T2.1)
+            contract = CustomerProductContract.objects.filter(
+                customer=self.sales_order.customer,
+                product=self.product
+            ).first()
+
+            if contract:
+                # เจอสัญญาปุ๊บ ใช้ราคาสัญญาทันที
+                self.sale_price = contract.contract_price
+            else:
+                # ไม่เจอสัญญา ใช้ราคาขายมาตรฐานจากหน้าสินค้า
+                self.sale_price = self.product.sale_price if self.product else 0
+        
         super().save(*args, **kwargs)
 
 
