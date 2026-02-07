@@ -439,9 +439,9 @@ class SupplierAdmin(admin.ModelAdmin):
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
     list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit', 'has_bom', 'created_by')
-    list_filter = ('category','is_product', 'tags', 'has_bom', 'suppliers')
-    search_fields = ('name', 'barcodes__code','tags__name')
-    inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
+    list_filter = ('category', 'is_product', 'tags', 'has_bom', 'suppliers')
+    search_fields = ('name', 'barcodes__code', 'tags__name')
+    inlines = [ProductBarcodeInline, ProductSupplierInline, PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
 
     def get_search_results(self, request, queryset, search_term):
@@ -450,27 +450,42 @@ class ProductAdmin(admin.ModelAdmin):
         # เช็คว่านี่คือการค้นหาจากระบบ Autocomplete หรือไม่
         if 'autocomplete' in request.path:
             referer = request.META.get('HTTP_REFERER', '')
-            
-            # ถ้าค้นหามาจากหน้า Purchase Order (ใบสั่งซื้อ)
+            import re
+            from django.db.models import Q
+            from .models import PurchaseOrder, SalesOrder # ดึงโมเดลมาใช้
+
+            # 🛒 1. ถ้าค้นหามาจากหน้า Purchase Order (ฝั่งซื้อ - ของเดิมเปรม)
             if 'purchaseorder' in referer:
-                import re
-                # แกะรหัส ID ของใบสั่งซื้อจาก URL (เช่น .../purchaseorder/3/change/)
                 match = re.search(r'purchaseorder/(\d+)/change/', referer)
                 if match:
                     po_id = match.group(1)
-                    from .models import PurchaseOrder, Product
-                    from django.db.models import Q
-                    
                     try:
                         po = PurchaseOrder.objects.get(pk=po_id)
                         if po.supplier:
-                            # 🎯 ล็อคทันที: เอาเฉพาะที่ Supplier นี้ขาย หรือรายการที่ไม่ใช่สินค้า
+                            # ล็อค: เอาเฉพาะที่ Supplier นี้ขาย หรือรายการที่ไม่ใช่สินค้า
                             queryset = queryset.filter(
                                 Q(product_suppliers__supplier=po.supplier) | Q(is_product=False)
                             )
                     except PurchaseOrder.DoesNotExist:
                         pass
-        
+
+            # 💰 2. ถ้าค้นหามาจากหน้า Sales Order (ฝั่งขาย - ของใหม่)
+            elif 'salesorder' in referer:
+                # แกะรหัส ID ของใบสั่งขาย (เช่น .../salesorder/5/change/)
+                match = re.search(r'salesorder/(\d+)/change/', referer)
+                if match:
+                    so_id = match.group(1)
+                    try:
+                        so = SalesOrder.objects.get(pk=so_id)
+                        if so.customer:
+                            # 🎯 ล็อคทันที: โชว์เฉพาะสินค้าที่มี "สัญญา" กับลูกค้าเจ้านี้เท่านั้น 
+                            # หรือรายการที่ไม่ใช่สินค้า (เช่น ค่าขนส่ง/บริการ)
+                            queryset = queryset.filter(
+                                Q(customerproductcontract__customer=so.customer) | Q(is_product=False)
+                            )
+                    except SalesOrder.DoesNotExist:
+                        pass
+
         return queryset, use_distinct
     
     formfield_overrides = {
@@ -1319,4 +1334,25 @@ class IncomeReportAdmin(admin.ModelAdmin):
         return format_html('<b style="color:{}; font-size:1.1em;">{}</b>', color, f"{max(0, bal):,.2f}")
     get_balance_due_display.short_description = "ยอดเงินคงค้าง (Balance Due)"
 
-admin.site.register(Customer)
+class CustomerProductContractInline(admin.TabularInline):
+    model = CustomerProductContract
+    extra = 1
+    autocomplete_fields = ['product', 'barcode'] # ช่วยให้เปรมค้นหาสินค้าและบาร์โค้ดง่ายขึ้น
+
+@admin.register(Customer)
+class CustomerAdmin(admin.ModelAdmin):
+    # ...
+    inlines = [CustomerProductContractInline] # ✅ เพิ่มตารางสัญญาไว้ท้ายข้อมูลลูกค้า
+
+# เพิ่มต่อท้ายใน stocks/admin.py ได้เลยค่ะ
+@admin.register(CustomerProductContract)
+class CustomerProductContractAdmin(admin.ModelAdmin):
+    list_display = ['customer', 'product', 'barcode', 'price', 'dc_percent', 'rebate_percent']
+    search_fields = ['customer__name', 'product__name', 'barcode__barcode']
+
+@admin.register(ProductBarcode)
+class ProductBarcodeAdmin(admin.ModelAdmin):
+    # ✅ สำคัญมาก: ต้องมี search_fields เพื่อให้ autocomplete_fields ทำงานได้
+    search_fields = ['code', 'product__name'] 
+    list_display = ['code', 'product', 'created_at']
+
