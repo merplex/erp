@@ -961,7 +961,7 @@ class PaymentDateForm(forms.Form):
     )
 
 # ✅ Action: ปิดงาน Finance แบบมีหน้ายืนยัน (Confirmation Page)
-@admin.action(description='💰 ยืนยันการชำระเงิน/ปิดยอด (Settle Payment)')
+@admin.action(description='💰 ชำระครบ/ปิดยอด (Settle Payment)')
 def settle_and_close_orders(modeladmin, request, queryset):
     # ... (Logic ปิดงาน) ...
     if 'apply' in request.POST:
@@ -978,7 +978,7 @@ def settle_and_close_orders(modeladmin, request, queryset):
                         PurchasePaymentLog.objects.create(purchase_order=obj, amount=balance, payment_date=pay_date, notes="Auto Settle")
                         obj.refresh_from_db()
                     elif isinstance(obj, SalesOrder): # รองรับทั้ง SalesOrder และ IncomeReport
-                        SalesPayment.objects.create(purchase_order=obj, amount=balance, payment_date=pay_date, notes="Auto Settle")
+                        SalesPayment.objects.create(order=obj, amount=balance, payment_date=pay_date, notes="Auto Settle")
                         obj.refresh_from_db()
                     updated_count += 1
                 

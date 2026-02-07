@@ -430,10 +430,14 @@ class IncomeReport(SalesOrder):
 
     @property
     def grand_total(self):
-        # คำนวณยอดรวมจากรายการสินค้าทั้งหมด (สมมติว่าใช้ related_name='items')
-        # ถ้าเปรมตั้งชื่อ related_name เป็นอย่างอื่น ให้เปลี่ยนชื่อ .items ตรงนี้ด้วยนะครับ
-        total = sum(item.total_price for item in self.items.all()) if hasattr(self, 'items') else 0
-        return total
+        # 1. หายอดรวมสินค้าทั้งหมด (Subtotal)
+        subtotal = sum(item.total_price for item in self.items.all()) if hasattr(self, 'items') else 0
+        # 2. ดึงค่า % VAT มาจากฟิลด์ (ถ้าไม่มีหรือเป็น None ให้เป็น 0)
+        vat_p = getattr(self, 'vat_percent', 0) or 0
+        # 3. คำนวณยอดรวมสุทธิที่รวมภาษีแล้ว
+        total_with_vat = subtotal + (subtotal * vat_p / 100)
+        
+        return total_with_vat
 
     @property
     def total_paid(self):
