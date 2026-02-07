@@ -1343,6 +1343,8 @@ class CustomerProductContractInline(admin.TabularInline):
 class CustomerAdmin(admin.ModelAdmin):
     # ...
     inlines = [CustomerProductContractInline] # ✅ เพิ่มตารางสัญญาไว้ท้ายข้อมูลลูกค้า
+    class Media:
+        js = ('admin/js/vendor/jquery/jquery.js', 'js/contract_autofill.js')
 
 # เพิ่มต่อท้ายใน stocks/admin.py ได้เลยค่ะ
 @admin.register(CustomerProductContract)
@@ -1359,7 +1361,7 @@ class ProductBarcodeAdmin(admin.ModelAdmin):
     def get_search_results(self, request, queryset, search_term):
         queryset, use_distinct = super().get_search_results(request, queryset, search_term)
         
-        # 🎯 ดักจับการค้นหาจากช่องบาร์โค้ดในหน้า Inline
+        # 🎯 ดักจับการค้นหาจากช่องบาร์โค้ดในหน้า Inline 
         if 'autocomplete' in request.path:
             # ตรวจสอบว่ามีการส่งชื่อสินค้าหรือ ID สินค้ามาช่วยกรองไหม
             # หรือถ้าเปรมพิมพ์ชื่อสินค้าในช่องบาร์โค้ด search_fields ['product__name'] จะช่วยเปรมเองระดับหนึ่งค่ะ
