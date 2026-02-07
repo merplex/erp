@@ -1340,21 +1340,14 @@ class ShipmentPaymentReportAdmin(admin.ModelAdmin):
     ordering = ['payment_due_date']
 
     def get_dc_display(self, obj):
-        if obj.dc_amount > 0:
-            # ✅ จัดฟอร์แมตตัวเลขเป็นข้อความก่อน (เช่น "288.00")
-            formatted_value = f"{obj.dc_amount:,.2f}"
-            # ✅ แล้วค่อยส่งค่าที่จัดฟอร์แมตแล้วเข้าไปใน format_html
-            return format_html('<span style="color: red;">- {}</span>', formatted_value)
-        return "0.00"
+        # โชว์ตัวเลขคลีนๆ มีคอมม่าและทศนิยม 2 ตำแหน่ง
+        return f"{obj.dc_amount:,.2f}"
     get_dc_display.short_description = "หัก DC"
     get_dc_display.admin_order_field = 'dc_amount'
 
     def get_rebate_display(self, obj):
-        if obj.rebate_amount > 0:
-            # ✅ จัดฟอร์แมตตัวเลขเป็นข้อความก่อน
-            formatted_value = f"{obj.rebate_amount:,.2f}"
-            return format_html('<span style="color: red;">- {}</span>', formatted_value)
-        return "0.00"
+        # โชว์ตัวเลขคลีนๆ มีคอมม่าและทศนิยม 2 ตำแหน่ง
+        return f"{obj.rebate_amount:,.2f}"
     get_rebate_display.short_description = "หัก Rebate"
     get_rebate_display.admin_order_field = 'rebate_amount'
 
