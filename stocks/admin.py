@@ -960,6 +960,39 @@ class PaymentDateForm(forms.Form):
         widget=AdminDateWidget()
     )
 
+@admin.action(description="🎯 ปิดยอด: กรณีพิเศษ/รับไม่ครบ (SETTLED)")    
+def settle_income_special(modeladmin, request, queryset):
+    if 'apply' in request.POST:
+        # ตัดจบสถานะอย่างเดียว ไม่สร้างบันทึกการเงินเพิ่ม
+        count = queryset.update(status='COMPLETED', payment_status='SETTLED')
+        modeladmin.message_user(request, f"ตัดจบรายการรายรับสำเร็จ {count} รายการ (SETTLED)", messages.SUCCESS)
+        return None
+
+    return TemplateResponse(request, "admin/settle_confirmation.html", {
+        **modeladmin.admin_site.each_context(request),
+        'title': "ยืนยันปิดยอดรายรับกรณีพิเศษ (SETTLED)",
+        'queryset': queryset,
+        'action_checkbox_name': admin.helpers.ACTION_CHECKBOX_NAME,
+        'action_name': 'settle_income_special' # ต้องตรงกับชื่อฟังก์ชัน
+    })
+settle_income_special.short_description = "🎯 ปิดยอดกรณีพิเศษ (SETTLED)"
+
+# ✅ ปุ่มใหม่สำหรับฝั่งรายจ่าย (Purchase)
+def settle_purchase_special(modeladmin, request, queryset):
+    if 'apply' in request.POST:
+        count = queryset.update(status='COMPLETED', payment_status='SETTLED')
+        modeladmin.message_user(request, f"ตัดจบรายการรายจ่ายสำเร็จ {count} รายการ (SETTLED)", messages.SUCCESS)
+        return None
+
+    return TemplateResponse(request, "admin/settle_confirmation.html", {
+        **modeladmin.admin_site.each_context(request),
+        'title': "ยืนยันปิดยอดรายจ่ายกรณีพิเศษ (SETTLED)",
+        'queryset': queryset,
+        'action_checkbox_name': admin.helpers.ACTION_CHECKBOX_NAME,
+        'action_name': 'settle_purchase_special'
+    })
+settle_purchase_special.short_description = "🎯 ปิดยอดกรณีพิเศษ (SETTLED)"
+
 # ✅ Action: ปิดงาน Finance แบบมีหน้ายืนยัน (Confirmation Page)
 @admin.action(description='💰 ชำระครบ/ปิดยอด (Settle Payment)')
 def settle_and_close_orders(modeladmin, request, queryset):
@@ -1027,7 +1060,7 @@ def settle_and_close_orders(modeladmin, request, queryset):
 class FinanceReportAdmin(admin.ModelAdmin):
     # หน้ารวม: ดูง่ายๆ ว่าใบไหนค้างจ่าย
     search_fields = ('po_number', 'supplier__company_name')
-    actions = [settle_and_close_orders]
+    actions = [settle_and_close_orders, settle_purchase_special]
 
     # จัดหน้าตาฟอร์ม
     # ✅ 1. เปลี่ยน list_display ให้โชว์ Payment Status แทน
@@ -1152,7 +1185,7 @@ class IncomeReportAdmin(admin.ModelAdmin):
     list_display = ('so_number', 'customer', 'get_grand_total_display', 'get_balance_due_display', 'payment_status')
     list_filter = ('payment_status', 'status', 'customer', 'order_date')
     search_fields = ('so_number', 'customer__company_name')
-    actions = [settle_and_close_orders]
+    actions = [settle_and_close_orders, settle_income_special]
 
     fieldsets = (
         ('📊 สรุปยอดเงิน (Income Summary)', {
