@@ -1355,4 +1355,15 @@ class ProductBarcodeAdmin(admin.ModelAdmin):
     # ✅ สำคัญมาก: ต้องมี search_fields เพื่อให้ autocomplete_fields ทำงานได้
     search_fields = ['code', 'product__name'] 
     list_display = ['code', 'product', 'created_at']
+    
+    def get_search_results(self, request, queryset, search_term):
+        queryset, use_distinct = super().get_search_results(request, queryset, search_term)
+        
+        # 🎯 ดักจับการค้นหาจากช่องบาร์โค้ดในหน้า Inline
+        if 'autocomplete' in request.path:
+            # ตรวจสอบว่ามีการส่งชื่อสินค้าหรือ ID สินค้ามาช่วยกรองไหม
+            # หรือถ้าเปรมพิมพ์ชื่อสินค้าในช่องบาร์โค้ด search_fields ['product__name'] จะช่วยเปรมเองระดับหนึ่งค่ะ
+            pass 
+            
+        return queryset, use_distinct
 
