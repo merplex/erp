@@ -1334,10 +1334,25 @@ class IncomeReportAdmin(admin.ModelAdmin):
 @admin.register(ShipmentPaymentReport)
 class ShipmentPaymentReportAdmin(admin.ModelAdmin):
     # ✅ โชว์มูลค่าที่ส่ง และวันที่จะได้รับเงินของยอดนั้นๆ
-    list_display = ['payment_due_date', 'get_so_number', 'get_customer', 'quantity_shipped', 'get_shipment_value_display', 'get_total_with_vat_display']
+    list_display = ['payment_due_date', 'get_so_number', 'get_customer', 'quantity_shipped', 'get_shipment_value_display', 'get_dc_display','get_rebate_display', 'get_total_with_vat_display']
     search_fields = ['sales_order__so_number', 'sales_order__customer__company_name']
     list_filter = ['payment_due_date', 'sales_order__customer']
     ordering = ['payment_due_date']
+    
+    def get_dc_display(self, obj):
+        if obj.dc_amount > 0:
+            return format_html('<span style="color: red;">- {:,.2f}</span>', obj.dc_amount)
+        return "0.00"
+    get_dc_display.short_description = "หัก DC"
+    get_dc_display.admin_order_field = 'dc_amount'
+
+    # 3. เพิ่มฟังก์ชันสำหรับโชว์ยอด Rebate
+    def get_rebate_display(self, obj):
+        if obj.rebate_amount > 0:
+            return format_html('<span style="color: red;">- {:,.2f}</span>', obj.rebate_amount)
+        return "0.00"
+    get_rebate_display.short_description = "หัก Rebate"
+    get_rebate_display.admin_order_field = 'rebate_amount'
 
     def get_so_number(self, obj):
         return obj.sales_order.so_number
