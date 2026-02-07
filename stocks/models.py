@@ -512,7 +512,7 @@ class SalesDeliveryLog(models.Model):
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
     shipment_value = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="มูลค่าที่ส่งครั้งนี้")
     payment_due_date = models.DateField(blank=True, null=True, verbose_name="วันกำหนดรับเงิน")
-    
+
     def save(self, *args, **kwargs):
         is_new = self.pk is None
         if is_new:
@@ -569,6 +569,13 @@ class SalesDeliveryLog(models.Model):
             # --- 🛑 [จบ LOGIC บัญชีใหม่] ---
 
         super().save(*args, **kwargs)
+        
+    @property
+    def total_with_vat(self):
+        # ดึง % VAT จากใบสั่งขาย (SalesOrder) มาคำนวณ
+        vat_p = self.sales_order.vat_percent or 0
+        total = self.shipment_value * (1 + (vat_p / 100))
+        return total
         
 @receiver(post_delete, sender=SalesDeliveryLog)
 def handle_delivery_deletion(sender, instance, **kwargs):

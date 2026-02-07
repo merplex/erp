@@ -1322,7 +1322,8 @@ class IncomeReportAdmin(admin.ModelAdmin):
 @admin.register(ShipmentPaymentReport)
 class ShipmentPaymentReportAdmin(admin.ModelAdmin):
     # ✅ โชว์มูลค่าที่ส่ง และวันที่จะได้รับเงินของยอดนั้นๆ
-    list_display = ['payment_due_date', 'sales_order', 'product', 'quantity_shipped', 'shipment_value']
+    list_display = ['payment_due_date', 'sales_order', 'get_customer', 'quantity_shipped', 'get_shipment_value_display', 'get_total_with_vat_display']
+    search_fields = ['sales_order__so_number', 'sales_order__customer__company_name']
     list_filter = ['payment_due_date', 'sales_order__customer']
     ordering = ['payment_due_date']
 
