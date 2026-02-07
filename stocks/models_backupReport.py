@@ -73,6 +73,11 @@ class Customer(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, null=True)
     updated_at = models.DateTimeField(auto_now=True, null=True) # แก้ไขจาก auto_True เป็น auto_now
     def __str__(self): return self.company_name
+    account_close_day = models.IntegerField(
+        default=25, 
+        verbose_name="วันที่ตัดรอบบัญชี",
+        help_text="ระบุวันที่ 1-31"
+    )
     class Meta: verbose_name_plural = "A3. ลูกค้า (Customer)"
 
 # 4. รายการสินค้า
@@ -373,11 +378,16 @@ class SalesOrder(models.Model):
         total_paid = sum(p.amount for p in self.payments.all()) if hasattr(self, 'payments') else 0
         return self.grand_total - total_paid
     
+    def __str__(self):
+        return self.so_number
+    
     def save(self, *args, **kwargs):
         if not self.so_number: self.so_number = generate_number('SO', SalesOrder, 'so_number')
         super().save(*args, **kwargs)
     class Meta: verbose_name_plural = "B2. ใบสั่งขาย (Sales)"
-    
+
+
+    class Meta: verbose_name_plural = "B2. ใบสั่งขาย (Sales)"
     def delete(self, *args, **kwargs):
         if self.status == 'Draft':
             super().delete(*args, **kwargs) # ถ้าเป็น Draft ลบทิ้งจริงๆ ได้
@@ -480,18 +490,52 @@ class SalesItem(models.Model):
     auto_produce = models.BooleanField(default=False, verbose_name="ผลิตทันที (Auto PD)")
     is_produced = models.BooleanField(default=False, editable=False)
 
-    # ✅ 2. ปรับ Property เดิม: ให้มาดึงจาก self.sale_price ของตัวเองแทน
     @property
     def total_price(self):
-        # ใช้ราคาจากฟิลด์ของตัวเอง (ถ้าเป็น 0 ให้ลองไปหยิบจาก Product มาเผื่อไว้ตอนโชว์หน้า Admin)
-        price = self.sale_price if self.sale_price > 0 else (self.product.sale_price if self.product else 0)
+        """
+        ใช้สำหรับแสดงผลราคารวมในหน้า Admin 
+        โดยไล่ลำดับ: ราคาที่ระบุเอง > ราคาสัญญา > ราคามาตรฐาน
+        """
+        # 1. เช็คราคาจากฟิลด์ตัวเองก่อน
+        price = self.sale_price
+        
+        # 2. ถ้าเป็น 0 หรือไม่ได้ระบุ ให้ลองหา 'ราคาสัญญา' หรือ 'ราคามาตรฐาน' มาโชว์เผื่อไว้
+        if not price or price <= 0:
+            from .models import CustomerProductContract
+            contract = CustomerProductContract.objects.filter(
+                customer=self.sales_order.customer,
+                product=self.product
+            ).first()
+            
+            if contract:
+                price = contract.contract_price
+            else:
+                price = self.product.sale_price if self.product else 0
+        
         qty = self.quantity_ordered or 0
         return price * qty
 
-    # ✅ 3. เพิ่มฟังก์ชัน Save: เพื่อดึงราคาจาก Product มาใส่ใน sale_price อัตโนมัติถ้าเราไม่กรอก
     def save(self, *args, **kwargs):
-        if (not self.sale_price or self.sale_price == 0) and self.product:
-            self.sale_price = self.product.sale_price
+        """
+        จังหวะกด Save: ระบบจะไปควานหาราคาที่ถูกต้องที่สุดมาบันทึกลงฟิลด์ sale_price
+        เพื่อไม่ให้เป็น 0 ในฐานข้อมูล (ป้องกันราคาพังในรายงานอื่นๆ)
+        """
+        if not self.sale_price or self.sale_price == 0:
+            from .models import CustomerProductContract
+            
+            # 🎯 ขั้นที่ 1: หาในสัญญารายลูกค้า (T2.1)
+            contract = CustomerProductContract.objects.filter(
+                customer=self.sales_order.customer,
+                product=self.product
+            ).first()
+
+            if contract:
+                # เจอสัญญาปุ๊บ ใช้ราคาสัญญาทันที
+                self.sale_price = contract.contract_price
+            else:
+                # ไม่เจอสัญญา ใช้ราคาขายมาตรฐานจากหน้าสินค้า
+                self.sale_price = self.product.sale_price if self.product else 0
+        
         super().save(*args, **kwargs)
 
 
@@ -504,23 +548,84 @@ class SalesDeliveryLog(models.Model):
     shipped_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่ส่ง")
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
 
+    dc_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="ยอดหัก DC")
+    rebate_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="ยอดหัก Rebate")
+    shipment_value = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="ยอดรวมสินค้า (ก่อนหัก)")
+    payment_due_date = models.DateField(blank=True, null=True, verbose_name="วันกำหนดรับเงิน")
+
     def save(self, *args, **kwargs):
         is_new = self.pk is None
         if is_new:
+            # --- 🚀 [LOGIC เดิมของเปรม] ---
             # 1. สมองกล: ลดสต็อกจริง
             self.product.stock_quantity -= self.quantity_shipped
             self.product.save()
+
             # 2. สมองกล: สะสมยอดส่งในใบ SO
             item = SalesItem.objects.get(sales_order=self.sales_order, product=self.product)
             item.quantity_shipped += self.quantity_shipped
             item.save()
             
-            # 🤖 2) ออโต้สถานะ: เปลี่ยนเป็น 'ส่งบางส่วน' (Shipped)
+            # 🤖 ออโต้สถานะ: เปลี่ยนเป็น 'ส่งบางส่วน' (Shipped)
             so = self.sales_order
             if so.status in ['Draft', 'Confirmed']:
                 so.status = 'Shipped'
                 so.save()
+            # --- 🛑 [จบ LOGIC เดิม] ---
+
+
+            # --- 2. [ส่วนที่เรเพิ่มให้: คำนวณเงินแยกถัง] ---
+            # คำนวณมูลค่าสินค้าดิบ (ราคาขาย x จำนวนส่ง)
+            self.shipment_value = item.sale_price * self.quantity_shipped
+
+            # ดึงข้อมูล DC/Rebate จากสัญญา (Price List) มาคำนวณแยกเก็บเป็น "บาท"
+            from .models import CustomerProductContract 
+            contract = CustomerProductContract.objects.filter(
+                customer=so.customer, 
+                product=self.product
+            ).first()
+            
+            if contract:
+                # แยกเก็บค่า DC และ Rebate ลงคอลัมน์ของตัวเองชัดๆ
+                self.dc_amount = self.shipment_value * (contract.dc_percent / 100)
+                self.rebate_amount = self.shipment_value * (contract.rebate_percent / 100)
+            else:
+                self.dc_amount = 0
+                self.rebate_amount = 0
+
+            # --- 3. [คำนวณวันจ่ายเงินตามรอบบัญชี] ---
+            if so.customer:
+                close_day = so.customer.account_close_day
+                term = so.customer.payment_term
+                ref_date = datetime.date.today()
+
+                try:
+                    current_closing = ref_date.replace(day=close_day)
+                except ValueError:
+                    next_month = ref_date.replace(day=28) + datetime.timedelta(days=4)
+                    current_closing = next_month - datetime.timedelta(days=next_month.day)
+
+                if ref_date > current_closing:
+                    first_of_next = (current_closing.replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
+                    try:
+                        base_date = first_of_next.replace(day=close_day)
+                    except ValueError:
+                        next_next = first_of_next.replace(day=28) + datetime.timedelta(days=4)
+                        base_date = next_next - datetime.timedelta(days=next_next.day)
+                else:
+                    base_date = current_closing
+
+                self.payment_due_date = base_date + datetime.timedelta(days=term)
+
+        # บันทึกลงฐานข้อมูลจริง
         super().save(*args, **kwargs)
+
+    @property
+    def total_with_vat(self):
+        # ยอดรับเงินจริง = (ยอดสินค้า - ยอดหัก DC - ยอดหัก Rebate) + VAT
+        net_before_vat = self.shipment_value - self.dc_amount - self.rebate_amount
+        vat_p = self.sales_order.vat_percent or 0
+        return net_before_vat * (1 + (vat_p / 100))
         
 @receiver(post_delete, sender=SalesDeliveryLog)
 def handle_delivery_deletion(sender, instance, **kwargs):
@@ -624,3 +729,53 @@ class FinanceReport(PurchaseOrder):
     class Meta:
         proxy = True
         verbose_name_plural = "C2. สรุปรายจ่าย (Purchase Report)"
+
+class ShipmentPaymentReport(SalesDeliveryLog):
+    class Meta:
+        proxy = True
+        verbose_name = "C4. สรุปรับชำระ (ตามการส่ง)"
+        verbose_name_plural = "C4. สรุปรับชำระ (ตามการส่ง)"
+
+# --- T2.1 รายการราคาสัญญาและค่าธรรมเนียม (Price List per Customer) ---
+class CustomerProductContract(models.Model):
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, verbose_name="ลูกค้า")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้า")
+    contract_price = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="ราคาสัญญา")
+    dc_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0, verbose_name="ค่า DC (%)")
+    rebate_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0, verbose_name="Rebate (%)")
+
+    def __str__(self):
+        return f"{self.customer.company_name} - {self.product.name}"
+
+    class Meta:
+        verbose_name_plural = "T2 ราคาสัญญา & DC/Rebate"
+        unique_together = ('customer', 'product')
+
+# --- T2.2 ระบบปรับปรุงสต็อก (Stock Adjustment) ---
+class StockAdjustment(models.Model):
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้า")
+    adjustment_type = models.CharField(
+        max_length=10, 
+        choices=[('ADD', 'เพิ่มสต็อก (+)'), ('SUB', 'ลดสต็อก (-)')], 
+        default='ADD'
+    )
+    quantity = models.IntegerField(verbose_name="จำนวนที่ปรับ")
+    reason = models.CharField(max_length=255, verbose_name="หมายเหตุ/เหตุผล")
+    adjustment_value = models.DecimalField(max_digits=12, decimal_places=2, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        # คำนวณมูลค่าตามราคาทุน (buy_price)
+        self.adjustment_value = self.quantity * self.product.buy_price
+        
+        # ปรับปรุงยอดใน Product ทันที
+        if self.adjustment_type == 'ADD':
+            self.product.stock_quantity += self.quantity
+        else:
+            self.product.stock_quantity -= self.quantity
+        
+        self.product.save()
+        super().save(*args, **kwargs)
+
+    class Meta:
+        verbose_name_plural = "T3 บันทึกการปรับสต็อก"

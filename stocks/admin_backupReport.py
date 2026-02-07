@@ -16,6 +16,32 @@ from django.template import Template, RequestContext
 from django.http import HttpResponse, HttpResponseRedirect
 from django.template.response import TemplateResponse
 
+class ProductOnlyFilter(admin.SimpleListFilter):
+    title = 'ประเภทรายการ' # หัวข้อบนแถบ Filter
+    parameter_name = 'is_product'
+
+    def lookups(self, request, model_admin):
+        return (
+            ('true', 'สินค้าเท่านั้น'),
+            ('false', 'ไม่ใช่สินค้า (ค่าบริการ/อื่นๆ)'),
+            ('all', 'แสดงทั้งหมด'),
+        )
+
+    def queryset(self, request, queryset):
+        # ✅ กำหนด Logic การกรอง
+        if self.value() == 'true':
+            return queryset.filter(is_product=True)
+        if self.value() == 'false':
+            return queryset.filter(is_product=False)
+        if self.value() == 'all':
+            return queryset
+        
+        # 🎯 จุดสำคัญ: ถ้ายังไม่ได้เลือก (Default) ให้โชว์แค่สินค้า
+        if self.value() is None:
+            return queryset.filter(is_product=True)
+        
+        return queryset
+
 # ✅ 1. Inline รายการสินค้า (แบบ Read-Only สำหรับหน้าการเงิน)
 class PurchaseItemReadOnlyInline(admin.TabularInline):
     model = PurchaseItem
@@ -641,7 +667,8 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
 class SalesOrderAdmin(admin.ModelAdmin):
     list_display = ('so_number', 'customer', 'order_date', 'status', 'vat_percent','get_diff')
     list_filter = ('status', 'order_date', 'customer')
-    search_fields = ('so_number', 'po_no_customer', 'customer__company_name')
+    search_fields = ('so_number', 'po_no_customer', 'customer__company_name', 
+        'items__product__barcodes__code')
     inlines = [SalesItemInline, SalesDeliveryLogInline]
     readonly_fields = ('created_by', 'status') # ล็อค status ให้ระบบจัดการออโต้
     
@@ -832,7 +859,7 @@ class BuyPriceRangeFilter(admin.SimpleListFilter):
 @admin.register(StockPlanning)
 class StockPlanningAdmin(admin.ModelAdmin):
     list_display = ('name', 'category', 'stock_quantity', 'get_pending_in', 'get_pending_out', 'get_pending_prod', 'get_available', 'buy_price')
-    list_filter = ('category', 'suppliers', BuyPriceRangeFilter)
+    list_filter = ('category', 'suppliers', ProductOnlyFilter, BuyPriceRangeFilter)
     search_fields = ('name', 'barcode__code')
 
     # 1. แก้ไขแผนรับ (PO): รวมสถานะ Draft และรายการที่ยังได้รับไม่ครบ
@@ -1128,7 +1155,7 @@ class FinanceReportAdmin(admin.ModelAdmin):
             
             # บันทึกสถานะลงฐานข้อมูล
             obj.save(update_fields=['payment_status'])
-
+    
     def get_total_items_display(self, obj):
         return f"{sum(i.quantity_ordered for i in obj.items.all()):,}"
     get_total_items_display.short_description = "📦 รวมจำนวนสินค้า"
@@ -1233,8 +1260,19 @@ class IncomeReportAdmin(admin.ModelAdmin):
         obj.save(update_fields=['payment_status'])
 
     def get_total_items_display(self, obj):
-        return f"{sum(i.quantity for i in obj.items.all()):,}" if hasattr(obj, 'items') else "0"
-    get_total_items_display.short_description = "📦 รวมสินค้า"
+        # ใช้ Sum จาก django.db.models (ซึ่งในไฟล์ admin ของเปรมยังไม่ได้ import ไว้ด้านบน)
+        from django.db.models import Sum
+        
+        # ดึงจาก related_name='items' ที่ตั้งไว้ใน SalesItem
+        result = obj.items.aggregate(total_qty=Sum('quantity_ordered'))
+        total = result['total_qty'] or 0
+        
+        if total > 0:
+            return f"{total:,} ชิ้น"
+        return "0 ชิ้น"
+    
+    # ✅ จุดที่ 3: ชื่อตรงนี้ก็ต้องตรงกัน
+    get_total_items_display.short_description = "📦 รวมจำนวนสินค้า"
 
     def get_subtotal_display(self, obj):
         # ✅ จัดรูปแบบด้วย f-string ให้เสร็จก่อน แล้วค่อยส่งเข้า format_html
@@ -1292,5 +1330,98 @@ class IncomeReportAdmin(admin.ModelAdmin):
         color = "green" if bal <= 0 else "red"
         return format_html('<b style="color:{}; font-size:1.1em;">{}</b>', color, f"{max(0, bal):,.2f}")
     get_balance_due_display.short_description = "ยอดเงินคงค้าง (Balance Due)"
+
+@admin.register(ShipmentPaymentReport)
+class ShipmentPaymentReportAdmin(admin.ModelAdmin):
+    # ✅ โชว์มูลค่าที่ส่ง และวันที่จะได้รับเงินของยอดนั้นๆ
+    list_display = ['payment_due_date', 'get_so_number', 'get_customer', 'quantity_shipped', 'get_shipment_value_display', 'get_dc_display','get_rebate_display', 'get_total_with_vat_display']
+    search_fields = ['sales_order__so_number', 'sales_order__customer__company_name']
+    list_filter = ['payment_due_date', 'sales_order__customer']
+    ordering = ['payment_due_date']
+
+    actions = ['calculate_selected_totals']
+    
+    list_display = [
+        'payment_due_date', 'get_so_number', 'get_customer', 
+        'quantity_shipped', 'get_shipment_value_display', 
+        'get_dc_display', 'get_rebate_display', 'get_total_with_vat_display'
+    ]
+
+    # --- 🧮 ฟังก์ชันคำนวณยอดรวมสำหรับรายการที่เลือก ---
+    @admin.action(description="📝 สรุปยอดรวมรายการที่เลือก")
+    def calculate_selected_totals(self, request, queryset):
+        # 1. สั่งให้ฐานข้อมูลคำนวณ Sum ทุกคอลัมน์พร้อมกัน
+        totals = queryset.aggregate(
+            total_qty=Sum('quantity_shipped'),
+            total_value=Sum('shipment_value'),
+            total_dc=Sum('dc_amount'),
+            total_rebate=Sum('rebate_amount'),
+        )
+
+        # 2. คำนวณยอดสุทธิ (คิด VAT 7%)
+        net_before_vat = (totals['total_value'] or 0) - (totals['total_dc'] or 0) - (totals['total_rebate'] or 0)
+        total_with_vat = float(net_before_vat) * 1.07 # หรือใช้ logic VAT จาก SO ของเปรม
+
+        # 3. สร้างข้อความสรุป
+        summary_message = (
+            f"📊 สรุปยอดรวม {queryset.count()} รายการที่เลือก:  |  "
+            f"📦 จำนวนรวม: {totals['total_qty'] or 0:,} ชิ้น  |  "
+            f"💰 ยอดรวมสินค้า: {totals['total_value'] or 0:,.2f} บาท  |  "
+            f"🔻 หัก DC: {totals['total_dc'] or 0:,.2f} บาท  |  "
+            f"🔻 หัก Rebate: {totals['total_rebate'] or 0:,.2f} บาท  |  "
+            f"✅ ยอดรับสุทธิ (รวม VAT): {total_with_vat:,.2f} บาท"
+        )
+
+        # 4. ส่งข้อความไปโชว์ที่หน้าจอ
+        self.message_user(request, summary_message, messages.SUCCESS)
+
+    def get_dc_display(self, obj):
+        # โชว์ตัวเลขคลีนๆ มีคอมม่าและทศนิยม 2 ตำแหน่ง
+        return f"{obj.dc_amount:,.2f}"
+    get_dc_display.short_description = "หัก DC"
+    get_dc_display.admin_order_field = 'dc_amount'
+
+    def get_rebate_display(self, obj):
+        # โชว์ตัวเลขคลีนๆ มีคอมม่าและทศนิยม 2 ตำแหน่ง
+        return f"{obj.rebate_amount:,.2f}"
+    get_rebate_display.short_description = "หัก Rebate"
+    get_rebate_display.admin_order_field = 'rebate_amount'
+
+    def get_so_number(self, obj):
+        return obj.sales_order.so_number
+    get_so_number.short_description = "เลขที่ SO"
+    get_so_number.admin_order_field = 'sales_order__so_number' # ทำให้กดเรียงลำดับได้ด้วยค่ะ
+
+    def get_customer(self, obj):
+        # ดึงชื่อลูกค้าจาก SalesOrder -> Customer
+        return obj.sales_order.customer.company_name
+    get_customer.short_description = 'ลูกค้า' # ชื่อหัวตาราง
+    get_customer.admin_order_field = 'sales_order__customer__company_name'
+
+    def get_shipment_value_display(self, obj):
+        return f"{obj.shipment_value:,.2f}"
+    get_shipment_value_display.short_description = 'มูลค่าสินค้า (ก่อน VAT)'
+
+    def get_total_with_vat_display(self, obj):
+        # ดึงค่าจาก property ใน model มาโชว์
+        return f"{obj.total_with_vat:,.2f}"
+    get_total_with_vat_display.short_description = 'ยอดรวมสุทธิ (รวม VAT)'
+
+    def has_add_permission(self, request):
+        return False
+    
+@admin.register(CustomerProductContract)
+class CustomerProductContractAdmin(admin.ModelAdmin):
+    list_display = ['customer', 'product', 'contract_price', 'dc_percent', 'rebate_percent']
+    list_editable = ['contract_price', 'dc_percent', 'rebate_percent'] # แก้ไขแบบรวดเร็วได้
+    search_fields = ['customer__company_name', 'product__name', 'product__barcodes__code']
+    autocomplete_fields = ['product']
+
+@admin.register(StockAdjustment)
+class StockAdjustmentAdmin(admin.ModelAdmin):
+    list_display = ['created_at', 'product', 'adjustment_type', 'quantity', 'adjustment_value', 'reason']
+    list_filter = ['adjustment_type', 'product']
+    autocomplete_fields = ['product']
+    search_fields = ['product__name', 'reason']
 
 admin.site.register(Customer)
