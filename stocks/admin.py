@@ -436,6 +436,11 @@ class SupplierAdmin(admin.ModelAdmin):
     list_display = ('company_name', 'contact_person', 'type')
     inlines = [SupplierProductInline]
 
+@admin.register(Barcode)
+class BarcodeAdmin(admin.ModelAdmin):
+    # ต้องมีบรรทัดนี้เช่นกัน
+    search_fields = ['code']
+
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
     list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit', 'has_bom', 'created_by')
