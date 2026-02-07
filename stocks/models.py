@@ -359,12 +359,6 @@ class SalesOrder(models.Model):
     status = models.CharField(max_length=20, default='Draft', choices=STATUS_CHOICES)
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
-    # ✅ เพิ่มตัวนี้ตัวเดียวพอค่ะ (ไม่ต้องเปลี่ยนตัวอื่น)
-    payment_due_date = models.DateField(
-        blank=True, 
-        null=True, 
-        verbose_name="วันกำหนดรับเงิน (Payment Due)"
-    )
 
     @property
     def total_items_price(self):
@@ -385,40 +379,9 @@ class SalesOrder(models.Model):
         return self.grand_total - total_paid
     
     def save(self, *args, **kwargs):
-        # 1. รันเลขที่เอกสาร (โค้ดเดิมเปรม)
-        if not self.so_number: 
-            self.so_number = generate_number('SO', SalesOrder, 'so_number')
-        
-        # 2. 🧠 Logic คำนวณวันจ่ายเงินตามรอบบัญชี
-        if self.customer:
-            close_day = self.customer.account_close_day  # วันที่ปิดรอบ (เช่น 25)
-            term = self.customer.payment_term           # เครดิตเทอม (เช่น 30)
-            ref_date = self.order_date                  # วันที่ส่งของ/วางบิล
-            
-            # หาวันปิดยอดของเดือนที่ออกบิล
-            try:
-                closing_this_month = ref_date.replace(day=close_day)
-            except ValueError: # กรณีวันที่ 31 แต่เดือนนั้นมีแค่ 28/30 วัน
-                next_m = ref_date.replace(day=28) + datetime.timedelta(days=4)
-                closing_this_month = next_m - datetime.timedelta(days=next_m.day)
-
-            # เช็คว่า "เลยวันปิดยอดหรือยัง"
-            if ref_date > closing_this_month:
-                # 🚩 ถ้าเลยแล้ว: ให้เริ่มนับจากวันปิดยอด "เดือนหน้า"
-                first_of_next = (closing_this_month.replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
-                try:
-                    base_date = first_of_next.replace(day=close_day)
-                except ValueError:
-                    next_next = first_of_next.replace(day=28) + datetime.timedelta(days=4)
-                    base_date = next_next - datetime.timedelta(days=next_next.day)
-            else:
-                # 🏳️ ถ้ายังไม่เลย: ให้เริ่มนับจากวันปิดยอด "เดือนนี้"
-                base_date = closing_this_month
-
-            # วันจ่ายเงิน = วันที่เริ่มนับ (Base Date) + เครดิตเทอม
-            self.payment_due_date = base_date + datetime.timedelta(days=term)
-
+        if not self.so_number: self.so_number = generate_number('SO', SalesOrder, 'so_number')
         super().save(*args, **kwargs)
+    class Meta: verbose_name_plural = "B2. ใบสั่งขาย (Sales)"
 
 
     class Meta: verbose_name_plural = "B2. ใบสั่งขาย (Sales)"
@@ -547,23 +510,64 @@ class SalesDeliveryLog(models.Model):
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     shipped_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่ส่ง")
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
-
+    shipment_value = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="มูลค่าที่ส่งครั้งนี้")
+    payment_due_date = models.DateField(blank=True, null=True, verbose_name="วันกำหนดรับเงิน")
+    
     def save(self, *args, **kwargs):
         is_new = self.pk is None
         if is_new:
+            # --- 🚀 [LOGIC เดิมของเปรม] ---
             # 1. สมองกล: ลดสต็อกจริง
             self.product.stock_quantity -= self.quantity_shipped
             self.product.save()
+
             # 2. สมองกล: สะสมยอดส่งในใบ SO
             item = SalesItem.objects.get(sales_order=self.sales_order, product=self.product)
             item.quantity_shipped += self.quantity_shipped
             item.save()
             
-            # 🤖 2) ออโต้สถานะ: เปลี่ยนเป็น 'ส่งบางส่วน' (Shipped)
+            # 🤖 ออโต้สถานะ: เปลี่ยนเป็น 'ส่งบางส่วน' (Shipped)
             so = self.sales_order
             if so.status in ['Draft', 'Confirmed']:
                 so.status = 'Shipped'
                 so.save()
+            # --- 🛑 [จบ LOGIC เดิม] ---
+
+
+            # --- 💰 [LOGIC บัญชีใหม่ที่เรเพิ่มให้] ---
+            # 3. คำนวณมูลค่าที่ส่งรอบนี้ (ดึงราคาขายจาก SalesItem มาคูณ)
+            self.shipment_value = item.sale_price * self.quantity_shipped
+
+            # 4. คำนวณวันครบกำหนดรับเงิน (Payment Due Date)
+            if so.customer:
+                close_day = so.customer.account_close_day # วันปิดรอบ (เช่น 25)
+                term = so.customer.payment_term          # เครดิตเทอม (เช่น 30)
+                ref_date = datetime.date.today()          # ใช้วันที่ทำรายการส่ง
+
+                # หาวันปิดยอดของเดือนที่ส่ง
+                try:
+                    current_closing = ref_date.replace(day=close_day)
+                except ValueError: # กรณีเดือนนี้ไม่มีวันที่นั้น (เช่น ปิดวันที่ 31 แต่เดือนนี้มี 30)
+                    next_month = ref_date.replace(day=28) + datetime.timedelta(days=4)
+                    current_closing = next_month - datetime.timedelta(days=next_month.day)
+
+                # เช็คว่าต้องนับจากรอบเดือนนี้ หรือรอบเดือนหน้า
+                if ref_date > current_closing:
+                    # เลยวันตัดรอบเดือนนี้ -> ไปเริ่มนับจากวันตัดรอบเดือนหน้า
+                    first_of_next = (current_closing.replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
+                    try:
+                        base_date = first_of_next.replace(day=close_day)
+                    except ValueError:
+                        next_next = first_of_next.replace(day=28) + datetime.timedelta(days=4)
+                        base_date = next_next - datetime.timedelta(days=next_next.day)
+                else:
+                    # ยังไม่เลยวันตัดรอบ -> เริ่มนับจากวันตัดรอบเดือนนี้เลย
+                    base_date = current_closing
+
+                # วันจ่ายเงิน = วันเริ่มนับ (Base Date) + เครดิตเทอม
+                self.payment_due_date = base_date + datetime.timedelta(days=term)
+            # --- 🛑 [จบ LOGIC บัญชีใหม่] ---
+
         super().save(*args, **kwargs)
         
 @receiver(post_delete, sender=SalesDeliveryLog)
@@ -669,8 +673,8 @@ class FinanceReport(PurchaseOrder):
         proxy = True
         verbose_name_plural = "C2. สรุปรายจ่าย (Purchase Report)"
 
-class PaymentSchedule(SalesOrder):
+class ShipmentPaymentReport(SalesDeliveryLog):
     class Meta:
         proxy = True
-        verbose_name = "C4. กำหนดรับเงิน (Payment Schedule)"
-        verbose_name_plural = "C4. กำหนดรับเงิน (Payment Schedule)"
+        verbose_name = "C4. รายงานกำหนดรับเงิน (แยกตามการส่ง)"
+        verbose_name_plural = "C4. รายงานกำหนดรับเงิน (แยกตามการส่ง)"

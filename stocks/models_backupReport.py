@@ -377,6 +377,7 @@ class SalesOrder(models.Model):
         if not self.so_number: self.so_number = generate_number('SO', SalesOrder, 'so_number')
         super().save(*args, **kwargs)
     class Meta: verbose_name_plural = "B2. ใบสั่งขาย (Sales)"
+    
     def delete(self, *args, **kwargs):
         if self.status == 'Draft':
             super().delete(*args, **kwargs) # ถ้าเป็น Draft ลบทิ้งจริงๆ ได้

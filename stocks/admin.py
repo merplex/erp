@@ -1319,14 +1319,11 @@ class IncomeReportAdmin(admin.ModelAdmin):
         return format_html('<b style="color:{}; font-size:1.1em;">{}</b>', color, f"{max(0, bal):,.2f}")
     get_balance_due_display.short_description = "ยอดเงินคงค้าง (Balance Due)"
 
-@admin.register(PaymentSchedule)
-class PaymentScheduleAdmin(admin.ModelAdmin):
-    # ✅ โชว์วันจ่ายเงินขึ้นก่อนเลย จะได้รู้ว่าวันไหนเงินจะเข้า
-    list_display = ['payment_due_date', 'so_number', 'customer', 'grand_total', 'payment_status']
-    list_filter = ['payment_due_date', 'customer', 'payment_status']
-    ordering = ['payment_due_date'] # เรียงจากวันที่ใกล้ถึงก่อน
-    
-    # ทำให้แก้ไขไม่ได้ในหน้านี้ (ดูอย่างเดียว)
-    def has_add_permission(self, request): return False
-    
+@admin.register(ShipmentPaymentReport)
+class ShipmentPaymentReportAdmin(admin.ModelAdmin):
+    # ✅ โชว์มูลค่าที่ส่ง และวันที่จะได้รับเงินของยอดนั้นๆ
+    list_display = ['payment_due_date', 'sales_order', 'product', 'quantity_shipped', 'shipment_value']
+    list_filter = ['payment_due_date', 'sales_order__customer']
+    ordering = ['payment_due_date']
+
 admin.site.register(Customer)
