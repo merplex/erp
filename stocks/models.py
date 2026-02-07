@@ -332,7 +332,7 @@ class PurchaseReceiptLog(models.Model):
 @receiver(post_delete, sender=PurchaseReceiptLog)
 def handle_receipt_deletion(sender, instance, **kwargs):
     instance.product.stock_quantity -= instance.quantity_received
-    instance.product.save()
+    instance.product.save()  
     try:
         item = PurchaseItem.objects.get(purchase_order=instance.purchase_order, product=instance.product)
         item.quantity_received -= instance.quantity_received
