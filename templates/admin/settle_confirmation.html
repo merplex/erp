@@ -1,0 +1,22 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<div style="padding: 20px;">
+    <h2 style="color:#d9534f;">⚠️ ยืนยันการตัดจบรายการ (SETTLED)</h2>
+    <p>เปรมคะ รายการต่อไปนี้จะถูกเปลี่ยนเป็น <b>COMPLETED</b> และ <b>SETTLED</b> ทันที (แม้เงินไม่ครบ):</p>
+    <ul>
+        {% for obj in queryset %}
+        <li>{{ obj }} (ยอดค้าง: {{ obj.get_balance_due_display }})</li>
+        {% endfor %}
+    </ul>
+    <form action="" method="post">
+        {% csrf_token %}
+        {% for obj in queryset %}
+        <input type="hidden" name="{{ action_checkbox_name }}" value="{{ obj.pk }}" />
+        {% endfor %}
+        <input type="hidden" name="action" value="{{ action_name }}" />
+        <input type="hidden" name="apply" value="1" />
+        <input type="submit" value="ยืนยันการตัดจบรายการ" style="background:#28a745; color:white; padding:10px 20px; border:none; border-radius:4px; cursor:pointer;" />
+        <a href="#" onclick="window.history.back();" style="margin-left:15px; color:#666;">ยกเลิก</a>
+    </form>
+</div>
+{% endblock %}
