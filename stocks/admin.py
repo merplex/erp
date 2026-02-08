@@ -520,67 +520,60 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
     filter_horizontal = ('tags',)
 
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
-        # ✅ CSS สำหรับแก้ปัญหา filter_horizontal ใน Jazzmin
+        # ✅ ฉีด CSS ชุดคลีน: ลบส่วนรก เปลี่ยนหัวข้อ และจัดระเบียบใหม่
         style = mark_safe("""
             <style>
-                /* 1. ขยายความกว้างรวม และใช้ Flexbox จัดระเบียบ */
-                .selector {
-                    display: flex !important;
-                    align-items: center !important;
-                    width: 100% !important;
-                    max-width: 800px; /* ปรับความกว้างรวมตามใจชอบค่ะ */
+                /* 1. จัดขนาดกล่องให้สมดุลและลูกศรอยู่ตรงกลาง */
+                .selector { display: flex !important; align-items: center !important; width: 100% !important; max-width: 900px; }
+                .selector-available, .selector-chosen { flex: 1 1 45% !important; width: auto !important; }
+                .selector-chooser { flex: 0 0 40px !important; margin: 0 10px !important; }
+                .selector select { height: 280px !important; border-radius: 4px !important; }
+
+                /* 2. ลบคำแนะนำที่ "รก" (Choose แท็ก by selecting...) */
+                .selector .selector-available p, 
+                .selector .selector-chosen p:not(.selector-filter) { 
+                    display: none !important; 
+                }
+                /* แต่ยังคงช่อง Filter ไว้ให้ค้นหาได้ */
+                .selector .selector-filter { display: block !important; padding: 5px !important; }
+
+                /* 3. ลบคำว่า (click to clear) ข้างล่างออก */
+                .selector .selector-chosen .selector-clearall { display: none !important; }
+
+                /* 4. เปลี่ยนหัวข้อเป็นภาษาไทยตามที่เปรมต้องการ */
+                .selector-available h2 { font-size: 0 !important; margin-bottom: 10px !important; }
+                .selector-available h2:before { 
+                    content: "📦 กลุ่มสินค้าที่มี" !important; 
+                    font-size: 14px !important; 
+                    font-weight: bold !important;
+                    color: #333;
                 }
 
-                /* 2. บังคับให้กล่องซ้ายและขวามีขนาดเท่ากันเป๊ะ */
-                .selector-available, .selector-chosen {
-                    flex: 1 1 45% !important;
-                    width: auto !important;
+                .selector-chosen h2 { font-size: 0 !important; margin-bottom: 10px !important; }
+                .selector-chosen h2:before { 
+                    content: "✅ กลุ่มที่เลือก" !important; 
+                    font-size: 14px !important; 
+                    font-weight: bold !important;
+                    color: #28a745;
                 }
 
-                /* 3. แก้ไขกล่องลูกศรตรงกลางไม่ให้โดนบีบ */
-                .selector-chooser {
-                    flex: 0 0 50px !important; /* ล็อคความกว้างช่องลูกศร */
-                    text-align: center;
-                    padding: 0 !important;
-                    margin: 0 10px !important;
-                }
-
-                /* 4. จัดตำแหน่งลูกศรให้ชัดเจน */
-                .selector-chooser ul {
-                    padding: 0 !important;
-                    margin: 0 !important;
-                    list-style: none !important;
-                }
-                
-                .selector-chooser li {
-                    margin-bottom: 10px !important;
-                }
-
-                /* 5. ปรับขนาดกล่อง Select ภายในให้เต็มพื้นที่ */
-                .selector select {
-                    width: 100% !important;
-                    height: 250px !important; /* ปรับความสูงกล่องตามต้องการ */
-                    border-radius: 4px !important;
-                }
-
-                /* 6. แก้ไขช่อง Filter ด้านบนให้สวยงาม */
-                .selector .selector-filter {
-                    padding: 8px !important;
-                    border: 1px solid #dee2e6 !important;
+                /* 5. ปรับแต่งปุ่ม Choose all / Remove all ให้ดูสะอาดขึ้น */
+                .selector-chooseall, .selector-removeall {
+                    padding: 5px 10px !important;
                     background: #f8f9fa !important;
-                    width: 100% !important;
-                    box-sizing: border-box;
-                }
-                
-                .selector .selector-filter input {
-                    width: 85% !important;
-                    margin-left: 5px !important;
+                    border: 1px solid #ddd !important;
+                    border-radius: 4px !important;
+                    font-size: 12px !important;
+                    text-decoration: none !important;
+                    display: inline-block !important;
+                    margin-top: 10px !important;
                 }
             </style>
         """)
 
         context['title'] = mark_safe(f"{context['title']} {style}")
         return super().render_change_form(request, context, add, change, form_url, obj)
+    
     # ✅ 3. ตัวโชว์ Tag ในหน้ารวมรายการสินค้า (โค้ดเปรมดีอยู่แล้วครับ)
     def display_tags(self, obj):
         tags = obj.tags.all()
