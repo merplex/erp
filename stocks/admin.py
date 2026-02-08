@@ -649,7 +649,8 @@ class BOMAdmin(DocumentLockMixin,admin.ModelAdmin):
 class PurchaseOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('po_number', 'supplier', 'order_date', 'status', 'get_diff')
     list_filter = ('status', 'order_date', 'supplier')
-    search_fields = ('po_number', 'invoice_no_supplier', 'items__product__name', 'supplier__company_name')
+    search_fields = ('po_number', 'invoice_no_supplier', 'items__product__name',
+    'items__product__productbarcode_set__code', 'supplier__company_name')
     inlines = [PurchaseItemInline, PurchaseReceiptLogInline]
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
     readonly_fields = ('created_by', 'status')
@@ -713,7 +714,7 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('so_number', 'customer', 'order_date', 'status', 'vat_percent','get_diff')
     list_filter = ('status', 'order_date', 'customer')
     search_fields = ('so_number', 'po_no_customer', 'customer__company_name', 
-        'items__product__barcodes__code')
+        'items__product__barcodes__code', 'items__product__name')
     inlines = [SalesItemInline, SalesDeliveryLogInline]
     readonly_fields = ('created_by', 'status') # ล็อค status ให้ระบบจัดการออโต้
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
