@@ -520,59 +520,67 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
     filter_horizontal = ('tags',)
 
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
-        # ✅ ปรับ CSS ใหม่สำหรับ Jazzmin (Bootstrap 4)
+        # ✅ CSS สำหรับแก้ปัญหา filter_horizontal ใน Jazzmin
         style = mark_safe("""
             <style>
-                /* บังคับให้รายการ Checkbox เรียงขวา */
-                .field-tags ul#id_tags {
+                /* 1. ขยายความกว้างรวม และใช้ Flexbox จัดระเบียบ */
+                .selector {
                     display: flex !important;
-                    flex-direction: row !important;
-                    flex-wrap: wrap !important;
-                    gap: 8px !important;
-                    padding-left: 0 !important;
+                    align-items: center !important;
+                    width: 100% !important;
+                    max-width: 800px; /* ปรับความกว้างรวมตามใจชอบค่ะ */
+                }
+
+                /* 2. บังคับให้กล่องซ้ายและขวามีขนาดเท่ากันเป๊ะ */
+                .selector-available, .selector-chosen {
+                    flex: 1 1 45% !important;
+                    width: auto !important;
+                }
+
+                /* 3. แก้ไขกล่องลูกศรตรงกลางไม่ให้โดนบีบ */
+                .selector-chooser {
+                    flex: 0 0 50px !important; /* ล็อคความกว้างช่องลูกศร */
+                    text-align: center;
+                    padding: 0 !important;
+                    margin: 0 10px !important;
+                }
+
+                /* 4. จัดตำแหน่งลูกศรให้ชัดเจน */
+                .selector-chooser ul {
+                    padding: 0 !important;
+                    margin: 0 !important;
                     list-style: none !important;
                 }
+                
+                .selector-chooser li {
+                    margin-bottom: 10px !important;
+                }
 
-                /* ปรับแต่งหน้าตาของแต่ละ Tag ให้เหมือน Badge */
-                .field-tags ul#id_tags li {
-                    display: inline-flex !important;
-                    align-items: center !important;
-                    background: #f4f6f9 !important; /* สีเทาอ่อนแบบ Jazzmin */
-                    border: 1px solid #dee2e6 !important;
+                /* 5. ปรับขนาดกล่อง Select ภายในให้เต็มพื้นที่ */
+                .selector select {
+                    width: 100% !important;
+                    height: 250px !important; /* ปรับความสูงกล่องตามต้องการ */
                     border-radius: 4px !important;
-                    padding: 2px 10px !important;
-                    margin: 0 !important;
-                    transition: all 0.2s;
                 }
 
-                /* เอฟเฟกต์ตอนเอาเมาส์ไปชี้ */
-                .field-tags ul#id_tags li:hover {
-                    background: #e9ecef !important;
-                    border-color: #007bff !important;
+                /* 6. แก้ไขช่อง Filter ด้านบนให้สวยงาม */
+                .selector .selector-filter {
+                    padding: 8px !important;
+                    border: 1px solid #dee2e6 !important;
+                    background: #f8f9fa !important;
+                    width: 100% !important;
+                    box-sizing: border-box;
                 }
-
-                /* จัดระเบียบช่องติ๊กกับตัวหนังสือ */
-                .field-tags ul#id_tags li label {
-                    margin: 0 !important;
-                    font-weight: normal !important;
-                    cursor: pointer;
-                    display: flex !important;
-                    align-items: center !important;
+                
+                .selector .selector-filter input {
+                    width: 85% !important;
+                    margin-left: 5px !important;
                 }
-
-                .field-tags ul#id_tags input[type="checkbox"] {
-                    margin-right: 6px !important;
-                }
-
-                /* ลบจุดหน้า List และตัวคั่นเดิม */
-                .field-tags ul li:before { content: none !important; }
-                .field-tags br { display: none !important; }
             </style>
         """)
 
         context['title'] = mark_safe(f"{context['title']} {style}")
         return super().render_change_form(request, context, add, change, form_url, obj)
-    
     # ✅ 3. ตัวโชว์ Tag ในหน้ารวมรายการสินค้า (โค้ดเปรมดีอยู่แล้วครับ)
     def display_tags(self, obj):
         tags = obj.tags.all()
