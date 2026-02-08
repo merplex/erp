@@ -1483,10 +1483,3 @@ class CustomerAdmin(DocumentLockMixin, admin.ModelAdmin): # ✅ ใส่ Mixin 
         model = CustomerProductContract
         extra = 0
     inlines = [ContractInline]
-
-@admin.register(ProductTag)
-class ProductTagAdmin(admin.ModelAdmin):
-    # ✅ สำคัญที่สุด: ต้องมีบรรทัดนี้ เพื่อให้หน้า Product ค้นหาแท็กเจอค่ะ
-    search_fields = ['name'] 
-    
-    list_display = ('name', 'color', 'created_at')
