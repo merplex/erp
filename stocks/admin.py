@@ -1277,7 +1277,7 @@ class IncomeReportAdmin(DocumentLockMixin, admin.ModelAdmin):
     list_display = ('so_number', 'customer', 'get_grand_total_display', 'get_balance_due_display', 'payment_status')
     list_filter = ('payment_status', 'status', 'customer', 'order_date')
     search_fields = ('so_number', 'customer__company_name')
-    actions = [settle_and_close_orders, settle_income_special, 'calculate_finance_totals']
+    actions = [settle_and_close_orders, settle_income_special, 'calculate_income_totals']
 
     @admin.action(description="📝 สรุปยอดเงินรายรับที่เลือก")
     def calculate_income_totals(self, request, queryset):
