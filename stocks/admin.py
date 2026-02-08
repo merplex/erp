@@ -651,6 +651,7 @@ class PurchaseOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_filter = ('status', 'order_date', 'supplier')
     search_fields = ('po_number', 'invoice_no_supplier', 'supplier__company_name')
     inlines = [PurchaseItemInline, PurchaseReceiptLogInline]
+    date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
     readonly_fields = ('created_by', 'status')
 
     actions = ['mark_as_completed']
@@ -715,7 +716,7 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
         'items__product__barcodes__code')
     inlines = [SalesItemInline, SalesDeliveryLogInline]
     readonly_fields = ('created_by', 'status') # ล็อค status ให้ระบบจัดการออโต้
-    
+    date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
     actions = ['mark_as_completed']
 
     @admin.action(description="✅ เปลี่ยนสถานะเป็น: เสร็จงาน/ปิดงาน")
@@ -807,6 +808,7 @@ class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_filter = ('status', 'order_date', 'product')
     search_fields = ('pd_number', 'product__name')
     inlines = [ProductionLogInline]
+    date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
     readonly_fields = ('created_by', 'status') 
     
     actions = ['mark_as_completed']

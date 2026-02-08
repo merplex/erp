@@ -205,7 +205,7 @@ class PurchaseOrder(models.Model):
     po_number = models.CharField(max_length=50, unique=True, editable=False)
     supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE)
     invoice_no_supplier = models.CharField(max_length=100, blank=True, verbose_name="เลข Invoice ผู้ขาย")
-    order_date = models.DateField(default=datetime.date.today)
+    order_date = models.DateField(default=datetime.date.today,db_index=True)
     status = models.CharField(max_length=20, default='Draft', choices=STATUS_CHOICES)
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     vat_percent = models.DecimalField(max_digits=5, decimal_places=2, default=7.00, verbose_name="VAT (%)")
@@ -374,7 +374,7 @@ class SalesOrder(models.Model):
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE)
     po_no_customer = models.CharField(max_length=100, blank=True, verbose_name="เลข PO ลูกค้า")
     vat_percent = models.DecimalField(max_digits=5, decimal_places=2, default=7.00, verbose_name="VAT (%)") 
-    order_date = models.DateField(default=datetime.date.today)
+    order_date = models.DateField(default=datetime.date.today,db_index=True)
     status = models.CharField(max_length=20, default='Draft', choices=STATUS_CHOICES)
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
@@ -565,7 +565,7 @@ class SalesDeliveryLog(models.Model):
     shipping_no = models.CharField(max_length=100, blank=True, verbose_name="เลขใบขนส่ง/Invoice ของเรา")
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     shipped_date = models.DateTimeField(
-        default=timezone.now, 
+        default=timezone.now, db_index=True,
         verbose_name="วันที่ส่งของ"
     )
 
@@ -676,7 +676,7 @@ class ProductionOrder(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
     quantity_planned = models.PositiveIntegerField(verbose_name="จำนวนที่วางแผน")
     quantity_actual = models.PositiveIntegerField(default=0, verbose_name="ผลิตได้สะสม")
-    order_date = models.DateField(default=datetime.date.today)
+    order_date = models.DateField(default=datetime.date.today,db_index=True)
     status = models.CharField(max_length=20, default='Draft', choices=STATUS_CHOICES)
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
