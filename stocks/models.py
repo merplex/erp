@@ -4,9 +4,28 @@ from django.db.models import Sum
 from django.db.models.signals import post_delete
 from django.utils import timezone
 from django.contrib.auth.models import User
+from django.contrib.contenttypes.models import ContentType
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.dispatch import receiver
 import random # ✅ เพิ่มไว้บนสุดของไฟล์
 import datetime
+
+class DocumentLock(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.CharField(max_length=50) # รองรับทั้ง ID ตัวเลขและเลขที่เอกสาร
+    content_object = GenericForeignKey('content_type', 'object_id')
+    locked_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('content_type', 'object_id')
+
+    def is_expired(self):
+        # ตั้งไว้ 10 นาที ถ้าเปิดทิ้งไว้เฉยๆ ไม่ทำอะไร 10 นาที ระบบจะปล่อยให้คนอื่นแย่งล็อกได้
+        return (timezone.now() - self.locked_at).total_seconds() > 600 
+
+    def __str__(self):
+        return f"{self.user.username} ล็อก {self.content_type.model} ID:{self.object_id}"
 
 def get_random_color():
     # สุ่มรหัสสี Hex เช่น #a1b2c3
