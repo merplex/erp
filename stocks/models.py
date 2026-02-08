@@ -564,7 +564,11 @@ class SalesDeliveryLog(models.Model):
     quantity_shipped = models.PositiveIntegerField(verbose_name="จำนวนที่ส่งครั้งนี้")
     shipping_no = models.CharField(max_length=100, blank=True, verbose_name="เลขใบขนส่ง/Invoice ของเรา")
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
-    shipped_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่ส่ง")
+    shipped_date = models.DateTimeField(
+        default=timezone.now, 
+        verbose_name="วันที่ส่งของ"
+    )
+
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
 
     dc_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="ยอดหัก DC")

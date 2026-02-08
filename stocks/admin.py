@@ -443,7 +443,7 @@ class SalesDeliveryLogInline(admin.TabularInline):
     model = SalesDeliveryLog
     extra = 1
     fields = ('product','shipping_no', 'quantity_shipped', 'user', 'notes','shipped_date')
-    readonly_fields = ('user', 'shipped_date')
+    readonly_fields = ('user',)
     formfield_overrides = {
         models.CharField: {'widget': TextInput(attrs={'style': 'width: 120px;', 'placeholder': 'เลขใบส่งของ'})},
         models.TextField: {'widget': TextInput(attrs={'style': 'width: 200px;', 'placeholder': 'หมายเหตุ'})},
