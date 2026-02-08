@@ -1,4 +1,12 @@
 from django.contrib import admin
+# 1. เปลี่ยนชื่อที่ปรากฏบนหัวเอกสาร (Header สีน้ำเงิน)
+admin.site.site_header = "Meebun ERP"
+
+# 2. เปลี่ยนชื่อที่ปรากฏบน Browser Tab (Title)
+admin.site.site_title = "Meebun ERP Admin"
+
+# 3. เปลี่ยนชื่อหัวข้อหลักในหน้าแรก (Index Title)
+admin.site.index_title = "ยินดีต้อนรับสู่ระบบจัดการข้อมูล"
 from django.contrib import messages
 from django.contrib.admin.widgets import AdminDateWidget
 from django.contrib.admin import helpers  # <--- helpers ต้องดึงมาจาก admin ครับ
@@ -15,6 +23,42 @@ from django.http import HttpResponseRedirect
 from django.template import Template, RequestContext 
 from django.http import HttpResponse, HttpResponseRedirect
 from django.template.response import TemplateResponse
+from django.urls import reverse # ✅ 3บรรทัดนี้ สำหรับระบบล็อคเอกสาร
+from django.contrib.contenttypes.models import ContentType
+from .models import DocumentLock
+
+class DocumentLockMixin:
+    def change_view(self, request, object_id, form_url='', extra_context=None):
+        content_type = ContentType.objects.get_for_model(self.model)
+        
+        # 1. เช็คว่ามีใครล็อกใบนี้อยู่ไหม
+        lock = DocumentLock.objects.filter(content_type=content_type, object_id=object_id).first()
+        
+        if lock:
+            # 2. ถ้ามีคนล็อกอยู่ และไม่ใช่เรา + ล็อกยังไม่หมดอายุ -> "ห้ามเข้า"
+            if lock.user != request.user and not lock.is_expired():
+                messages.error(
+                    request, 
+                    f"⛔ หยุดก่อน! ใบนี้กำลังถูกแก้ไขโดย {lock.user.get_full_name() or lock.user.username} "
+                    f"กรุณารอประมาณ 10 นาที หรือติดต่อผู้ใช้คนดังกล่าวค่ะ"
+                )
+                # ดีดกลับไปหน้า List ทันที
+                return HttpResponseRedirect(reverse(f'admin:{self.model._meta.app_label}_{self.model._meta.model_name}_changelist'))
+            
+            # 3. ถ้าเป็นเราเอง หรือล็อกมันหมดอายุแล้ว -> "ต่ออายุล็อก"
+            lock.user = request.user
+            lock.save()
+        else:
+            # 4. ถ้ายังไม่มีใครล็อก -> "สร้างล็อกใหม่"
+            DocumentLock.objects.create(content_type=content_type, object_id=object_id, user=request.user)
+            
+        return super().change_view(request, object_id, form_url, extra_context)
+
+    def save_model(self, request, obj, form, change):
+        # เมื่อกด Save เสร็จสมบูรณ์ -> "ปลดล็อก" ให้คนอื่นเข้าต่อได้ทันที
+        super().save_model(request, obj, form, change)
+        content_type = ContentType.objects.get_for_model(self.model)
+        DocumentLock.objects.filter(content_type=content_type, object_id=obj.pk).delete()
 
 class ProductOnlyFilter(admin.SimpleListFilter):
     title = 'ประเภทรายการ' # หัวข้อบนแถบ Filter
@@ -399,7 +443,7 @@ class SalesDeliveryLogInline(admin.TabularInline):
     model = SalesDeliveryLog
     extra = 1
     fields = ('product','shipping_no', 'quantity_shipped', 'user', 'notes','shipped_date')
-    readonly_fields = ('user', 'shipped_date')
+    readonly_fields = ('user',)
     formfield_overrides = {
         models.CharField: {'widget': TextInput(attrs={'style': 'width: 120px;', 'placeholder': 'เลขใบส่งของ'})},
         models.TextField: {'widget': TextInput(attrs={'style': 'width: 200px;', 'placeholder': 'หมายเหตุ'})},
@@ -432,12 +476,12 @@ def color_diff(diff):
 # --- Admin Registrations ---
 
 @admin.register(Supplier)
-class SupplierAdmin(admin.ModelAdmin):
+class SupplierAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('company_name', 'contact_person', 'type')
     inlines = [SupplierProductInline]
 
 @admin.register(Product)
-class ProductAdmin(admin.ModelAdmin):
+class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit', 'has_bom', 'created_by')
     list_filter = ('category','is_product', 'tags', 'has_bom', 'suppliers')
     search_fields = ('name', 'barcodes__code','tags__name')
@@ -580,7 +624,7 @@ class ProductAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
 @admin.register(BOM)
-class BOMAdmin(admin.ModelAdmin):
+class BOMAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('name', 'product', 'total_cost_display', 'sale_price', 'unit', 'production_time', 'created_by')
     list_filter = ('product__category',)
     inlines = [BOMIngredientInline]
@@ -602,11 +646,12 @@ class BOMAdmin(admin.ModelAdmin):
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 @admin.register(PurchaseOrder)
-class PurchaseOrderAdmin(admin.ModelAdmin):
+class PurchaseOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('po_number', 'supplier', 'order_date', 'status', 'get_diff')
     list_filter = ('status', 'order_date', 'supplier')
     search_fields = ('po_number', 'invoice_no_supplier', 'supplier__company_name')
     inlines = [PurchaseItemInline, PurchaseReceiptLogInline]
+    date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
     readonly_fields = ('created_by', 'status')
 
     actions = ['mark_as_completed']
@@ -664,14 +709,14 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
         return color_diff(received - ordered)
     
 @admin.register(SalesOrder)
-class SalesOrderAdmin(admin.ModelAdmin):
+class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('so_number', 'customer', 'order_date', 'status', 'vat_percent','get_diff')
     list_filter = ('status', 'order_date', 'customer')
     search_fields = ('so_number', 'po_no_customer', 'customer__company_name', 
         'items__product__barcodes__code')
     inlines = [SalesItemInline, SalesDeliveryLogInline]
     readonly_fields = ('created_by', 'status') # ล็อค status ให้ระบบจัดการออโต้
-    
+    date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
     actions = ['mark_as_completed']
 
     @admin.action(description="✅ เปลี่ยนสถานะเป็น: เสร็จงาน/ปิดงาน")
@@ -758,11 +803,12 @@ class SalesOrderAdmin(admin.ModelAdmin):
 
 
 @admin.register(ProductionOrder)
-class ProductionOrderAdmin(admin.ModelAdmin):
+class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('pd_number', 'product', 'quantity_planned', 'quantity_actual', 'get_diff', 'status')
     list_filter = ('status', 'order_date', 'product')
     search_fields = ('pd_number', 'product__name')
     inlines = [ProductionLogInline]
+    date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
     readonly_fields = ('created_by', 'status') 
     
     actions = ['mark_as_completed']
@@ -1086,18 +1132,35 @@ def settle_and_close_orders(modeladmin, request, queryset):
     return HttpResponse(Template(html_template).render(RequestContext(request, context)))
 
 @admin.register(FinanceReport)
-class FinanceReportAdmin(admin.ModelAdmin):
+class FinanceReportAdmin(DocumentLockMixin,admin.ModelAdmin):
     # หน้ารวม: ดูง่ายๆ ว่าใบไหนค้างจ่าย
     search_fields = ('po_number', 'supplier__company_name')
-    actions = [settle_and_close_orders, settle_purchase_special]
+    actions = [settle_and_close_orders, settle_purchase_special, 'calculate_finance_totals']
+
+    @admin.action(description="📝 สรุปยอดเงินรายจ่ายที่เลือก")
+    def calculate_finance_totals(self, request, queryset):
+        grand_total = 0
+        paid_total = 0
+        total_balance_due = 0 # ✅ ใช้ชื่อให้ตรงกับ Balance Due ในหน้าจอ
+
+        for obj in queryset:
+            grand_total += float(obj.grand_total or 0)
+            paid_total += float(obj.total_paid or 0)
+            total_balance_due += float(obj.balance_due or 0)
+
+        summary_message = (
+            f"📊 สรุปรายจ่าย {queryset.count()} รายการ:  |  "
+            f"💰 ยอดจ่ายสุทธิรวม: {grand_total:,.2f} บาท  |  "
+            f"✅ จ่ายแล้วรวม: {paid_total:,.2f} บาท  |  "
+            f"❗️ ค้างจ่ายรวม (Balance Due): {total_balance_due:,.2f} บาท"
+        )
+        self.message_user(request, summary_message, messages.SUCCESS)
 
     # จัดหน้าตาฟอร์ม
     # ✅ 1. เปลี่ยน list_display ให้โชว์ Payment Status แทน
     list_display = ('po_number', 'supplier', 'get_grand_total_list', 'get_balance_due_list', 'payment_status')
-    
     # ✅ 2. ตัวกรอง ก็ต้องกรองตามการจ่ายเงิน
     list_filter = ('payment_status', 'supplier') 
-
     # ✅ 3. ในหน้า Detail ก็เปลี่ยน fields
     fieldsets = (
         ('📊 สรุปยอดเงิน', {
@@ -1209,12 +1272,32 @@ class FinanceReportAdmin(admin.ModelAdmin):
 
 # 2. หน้า Admin ของ Income Report
 @admin.register(IncomeReport)
-class IncomeReportAdmin(admin.ModelAdmin):
+class IncomeReportAdmin(DocumentLockMixin, admin.ModelAdmin):
     # ✅ ปรับ list_display ให้เอาตัวที่มีสีมาโชว์เลย จะได้ดูง่ายๆ
     list_display = ('so_number', 'customer', 'get_grand_total_display', 'get_balance_due_display', 'payment_status')
     list_filter = ('payment_status', 'status', 'customer', 'order_date')
     search_fields = ('so_number', 'customer__company_name')
-    actions = [settle_and_close_orders, settle_income_special]
+    actions = [settle_and_close_orders, settle_income_special, 'calculate_income_totals']
+
+    @admin.action(description="📝 สรุปยอดเงินรายรับที่เลือก")
+    def calculate_income_totals(self, request, queryset):
+        grand_total = 0
+        paid_total = 0
+        total_balance_due = 0 # ✅ เปลี่ยนชื่อจาก balance_total เป็นชื่อนี้ให้อ่านง่าย
+        
+        for obj in queryset:
+            grand_total += float(obj.grand_total or 0)
+            paid_total += float(obj.total_paid or 0)
+            # ✅ เรียกใช้ฟังก์ชันคำนวณที่เปรมมีอยู่แล้วใน Admin
+            total_balance_due += float(self.calculate_balance_due(obj) or 0)
+
+        summary_message = (
+            f"💰 สรุปรายรับ {queryset.count()} รายการ: | "
+            f"ยอดสุทธิ: {grand_total:,.2f} | "
+            f"รับเงินแล้ว: {paid_total:,.2f} | "
+            f"⚠️ ค้างรับ (Balance Due): {total_balance_due:,.2f}" # ✅ ใช้คำให้ตรงกับหน้าจอ
+        )
+        self.message_user(request, summary_message, messages.SUCCESS)
 
     fieldsets = (
         ('📊 สรุปยอดเงิน (Income Summary)', {
@@ -1411,7 +1494,7 @@ class ShipmentPaymentReportAdmin(admin.ModelAdmin):
         return False
     
 @admin.register(CustomerProductContract)
-class CustomerProductContractAdmin(admin.ModelAdmin):
+class CustomerProductContractAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ['customer', 'product', 'contract_price', 'dc_percent', 'rebate_percent']
     list_editable = ['contract_price', 'dc_percent', 'rebate_percent'] # แก้ไขแบบรวดเร็วได้
     search_fields = ['customer__company_name', 'product__name', 'product__barcodes__code']
@@ -1424,4 +1507,21 @@ class StockAdjustmentAdmin(admin.ModelAdmin):
     autocomplete_fields = ['product']
     search_fields = ['product__name', 'reason']
 
-admin.site.register(Customer)
+# แก้ไขบรรทัดสุดท้ายของไฟล์ admin.py จากเดิมเป็นชุดนี้ค่ะ
+
+@admin.register(Customer)
+class CustomerAdmin(DocumentLockMixin, admin.ModelAdmin): # ✅ ใส่ Mixin เพื่อล็อคหน้าจอด้วย
+    # 1. กำหนดคอลัมน์ที่อยากเห็นหน้าตาราง (จะได้ไม่ต้องกดเข้าไปดูข้างใน)
+    list_display = ('company_name', 'contact_person', 'phone')
+    
+    # 2. เพิ่มช่องค้นหา (Search) ด้านบน
+    # จะช่วยให้เปรมพิมพ์ชื่อบริษัท หรือเบอร์โทรเพื่อหาลูกค้าได้ทันที
+    search_fields = ('company_name', 'contact_person', 'phone')
+    
+    # 3. (แถม) ถ้ามีรายการราคาสัญญาลูกค้า (Contract) อยากให้โชว์ในหน้านี้เลยไหมคะ?
+    # ถ้าอยากให้โชว์ ให้เอาคอมเมนต์ออกได้เลยค่ะ
+    from .models import CustomerProductContract
+    class ContractInline(admin.TabularInline):
+        model = CustomerProductContract
+        extra = 0
+    inlines = [ContractInline]

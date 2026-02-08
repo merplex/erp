@@ -4,9 +4,28 @@ from django.db.models import Sum
 from django.db.models.signals import post_delete
 from django.utils import timezone
 from django.contrib.auth.models import User
+from django.contrib.contenttypes.models import ContentType
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.dispatch import receiver
 import random # ✅ เพิ่มไว้บนสุดของไฟล์
 import datetime
+
+class DocumentLock(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.CharField(max_length=50) # รองรับทั้ง ID ตัวเลขและเลขที่เอกสาร
+    content_object = GenericForeignKey('content_type', 'object_id')
+    locked_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('content_type', 'object_id')
+
+    def is_expired(self):
+        # ตั้งไว้ 10 นาที ถ้าเปิดทิ้งไว้เฉยๆ ไม่ทำอะไร 10 นาที ระบบจะปล่อยให้คนอื่นแย่งล็อกได้
+        return (timezone.now() - self.locked_at).total_seconds() > 600 
+
+    def __str__(self):
+        return f"{self.user.username} ล็อก {self.content_type.model} ID:{self.object_id}"
 
 def get_random_color():
     # สุ่มรหัสสี Hex เช่น #a1b2c3
@@ -186,7 +205,7 @@ class PurchaseOrder(models.Model):
     po_number = models.CharField(max_length=50, unique=True, editable=False)
     supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE)
     invoice_no_supplier = models.CharField(max_length=100, blank=True, verbose_name="เลข Invoice ผู้ขาย")
-    order_date = models.DateField(default=datetime.date.today)
+    order_date = models.DateField(default=datetime.date.today,db_index=True)
     status = models.CharField(max_length=20, default='Draft', choices=STATUS_CHOICES)
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     vat_percent = models.DecimalField(max_digits=5, decimal_places=2, default=7.00, verbose_name="VAT (%)")
@@ -355,7 +374,7 @@ class SalesOrder(models.Model):
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE)
     po_no_customer = models.CharField(max_length=100, blank=True, verbose_name="เลข PO ลูกค้า")
     vat_percent = models.DecimalField(max_digits=5, decimal_places=2, default=7.00, verbose_name="VAT (%)") 
-    order_date = models.DateField(default=datetime.date.today)
+    order_date = models.DateField(default=datetime.date.today,db_index=True)
     status = models.CharField(max_length=20, default='Draft', choices=STATUS_CHOICES)
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
@@ -545,7 +564,11 @@ class SalesDeliveryLog(models.Model):
     quantity_shipped = models.PositiveIntegerField(verbose_name="จำนวนที่ส่งครั้งนี้")
     shipping_no = models.CharField(max_length=100, blank=True, verbose_name="เลขใบขนส่ง/Invoice ของเรา")
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
-    shipped_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่ส่ง")
+    shipped_date = models.DateTimeField(
+        default=timezone.now, db_index=True,
+        verbose_name="วันที่ส่งของ"
+    )
+
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
 
     dc_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="ยอดหัก DC")
@@ -653,7 +676,7 @@ class ProductionOrder(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
     quantity_planned = models.PositiveIntegerField(verbose_name="จำนวนที่วางแผน")
     quantity_actual = models.PositiveIntegerField(default=0, verbose_name="ผลิตได้สะสม")
-    order_date = models.DateField(default=datetime.date.today)
+    order_date = models.DateField(default=datetime.date.today,db_index=True)
     status = models.CharField(max_length=20, default='Draft', choices=STATUS_CHOICES)
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
