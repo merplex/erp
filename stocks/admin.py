@@ -1137,13 +1137,30 @@ class FinanceReportAdmin(DocumentLockMixin,admin.ModelAdmin):
     search_fields = ('po_number', 'supplier__company_name')
     actions = [settle_and_close_orders, settle_purchase_special]
 
+    @admin.action(description="📝 สรุปยอดเงินรายจ่ายที่เลือก")
+    def calculate_finance_totals(self, request, queryset):
+        grand_total = 0
+        paid_total = 0
+        total_balance_due = 0 # ✅ ใช้ชื่อให้ตรงกับ Balance Due ในหน้าจอ
+
+        for obj in queryset:
+            grand_total += float(obj.grand_total or 0)
+            paid_total += float(obj.total_paid or 0)
+            total_balance_due += float(obj.balance_due or 0)
+
+        summary_message = (
+            f"📊 สรุปรายจ่าย {queryset.count()} รายการ:  |  "
+            f"💰 ยอดจ่ายสุทธิรวม: {grand_total:,.2f} บาท  |  "
+            f"✅ จ่ายแล้วรวม: {paid_total:,.2f} บาท  |  "
+            f"❗️ ค้างจ่ายรวม (Balance Due): {total_balance_due:,.2f} บาท"
+        )
+        self.message_user(request, summary_message, messages.SUCCESS)
+
     # จัดหน้าตาฟอร์ม
     # ✅ 1. เปลี่ยน list_display ให้โชว์ Payment Status แทน
     list_display = ('po_number', 'supplier', 'get_grand_total_list', 'get_balance_due_list', 'payment_status')
-    
     # ✅ 2. ตัวกรอง ก็ต้องกรองตามการจ่ายเงิน
     list_filter = ('payment_status', 'supplier') 
-
     # ✅ 3. ในหน้า Detail ก็เปลี่ยน fields
     fieldsets = (
         ('📊 สรุปยอดเงิน', {
@@ -1261,6 +1278,26 @@ class IncomeReportAdmin(DocumentLockMixin, admin.ModelAdmin):
     list_filter = ('payment_status', 'status', 'customer', 'order_date')
     search_fields = ('so_number', 'customer__company_name')
     actions = [settle_and_close_orders, settle_income_special]
+
+    @admin.action(description="📝 สรุปยอดเงินรายรับที่เลือก")
+    def calculate_income_totals(self, request, queryset):
+        grand_total = 0
+        paid_total = 0
+        total_balance_due = 0 # ✅ เปลี่ยนชื่อจาก balance_total เป็นชื่อนี้ให้อ่านง่าย
+        
+        for obj in queryset:
+            grand_total += float(obj.grand_total or 0)
+            paid_total += float(obj.total_paid or 0)
+            # ✅ เรียกใช้ฟังก์ชันคำนวณที่เปรมมีอยู่แล้วใน Admin
+            total_balance_due += float(self.calculate_balance_due(obj) or 0)
+
+        summary_message = (
+            f"💰 สรุปรายรับ {queryset.count()} รายการ: | "
+            f"ยอดสุทธิ: {grand_total:,.2f} | "
+            f"รับเงินแล้ว: {paid_total:,.2f} | "
+            f"⚠️ ค้างรับ (Balance Due): {total_balance_due:,.2f}" # ✅ ใช้คำให้ตรงกับหน้าจอ
+        )
+        self.message_user(request, summary_message, messages.SUCCESS)
 
     fieldsets = (
         ('📊 สรุปยอดเงิน (Income Summary)', {
