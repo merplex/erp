@@ -1,4 +1,5 @@
 from django.contrib import admin
+from .models import ProductTag
 # 1. เปลี่ยนชื่อที่ปรากฏบนหัวเอกสาร (Header สีน้ำเงิน)
 admin.site.site_header = "Meebun ERP"
 
