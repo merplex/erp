@@ -517,76 +517,61 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
         
         return queryset, use_distinct
     
-    filter_horizontal = ('tags',)
+    # 🎯 1. เปลี่ยนจาก horizontal เป็น vertical
+    filter_vertical = ('tags',)
 
-    class Media:
-        css = {
-            'all': ('admin/css/custom_filter.css',) # (อ้างอิงเฉลี่ย)
-        }
-
-    # แต่เพื่อให้ง่ายที่สุด เปรมใช้ render_change_form ท่า "เจาะจง ID" นี้แทนครับ:
+    # 🎯 2. ปรับ CSS สำหรับแนวตั้งโดยเฉพาะ (เน้นความคลีน)
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
-        # ✅ รวมทั้ง CSS (จัดหน้าตา) และ JavaScript (ลบขยะ)
         style_and_script = mark_safe("""
             <style>
-                /* --- 1. ลบส่วนรก (Instructions & Click to clear) --- */
-                #id_tags_from ~ p, 
-                #id_tags_to ~ p,
-                .selector-available p, 
-                .selector-chosen p,
-                .selector-chosen .selector-clearall { 
+                /* จัดระเบียบกล่องแนวตั้ง */
+                .selector { width: 100% !important; max-width: 600px !important; }
+                .selector-available, .selector-chosen { width: 100% !important; float: none !important; }
+                
+                /* จัดปุ่มลูกศรให้อยู่ตรงกลางระหว่างบน-ล่าง */
+                .selector-chooser { 
+                    width: 100% !important; 
+                    height: 40px !important; 
+                    display: flex !important; 
+                    justify-content: center !important; 
+                    align-items: center !important;
+                    margin: 5px 0 !important;
+                    transform: rotate(90deg); /* หมุนลูกศรให้ชี้ขึ้น-ลง */
+                }
+
+                /* ลบข้อความรกๆ ภาษาอังกฤษ */
+                .selector p, .selector-clearall, .help-block, .help { 
                     display: none !important; 
                 }
 
-                /* --- 2. จัดระเบียบกล่องและลูกศร --- */
-                .selector { 
-                    display: flex !important; 
-                    flex-direction: row !important;
-                    align-items: center !important; 
-                    width: 100% !important;
-                    max-width: 900px !important;
-                }
-                .selector-available, .selector-chosen { 
-                    flex: 1 1 45% !important; 
-                    min-width: 200px !important;
-                }
-                .selector-chooser { 
-                    flex: 0 0 40px !important; 
-                    margin: 0 10px !important; 
-                }
-
-                /* --- 3. เปลี่ยนชื่อหัวข้อเป็นภาษาไทย --- */
+                /* เปลี่ยนหัวข้อเป็นภาษาไทย */
                 .selector-available h2 { font-size: 0 !important; margin-bottom: 5px !important; }
                 .selector-available h2:before { 
-                    content: "📦 กลุ่มสินค้าที่มี" !important; 
-                    font-size: 14px !important; font-weight: bold; color: #444;
+                    content: "📦 กลุ่มสินค้าที่มี (เลือกจากที่นี่)"; 
+                    font-size: 14px; font-weight: bold; color: #444;
                 }
 
-                .selector-chosen h2 { font-size: 0 !important; margin-bottom: 5px !important; }
+                .selector-chosen h2 { font-size: 0 !important; margin-top: 10px !important; margin-bottom: 5px !important; }
                 .selector-chosen h2:before { 
-                    content: "✅ กลุ่มที่เลือก" !important; 
-                    font-size: 14px !important; font-weight: bold; color: #28a745;
+                    content: "✅ กลุ่มที่เลือก (รายการปัจจุบัน)"; 
+                    font-size: 14px; font-weight: bold; color: #28a745;
                 }
 
-                /* --- 4. ปรับขนาดกล่องเลือก --- */
-                .selector select { height: 280px !important; border-radius: 4px !important; }
+                /* ปรับขนาดกล่อง */
+                .selector select { height: 200px !important; border-radius: 4px !important; width: 100% !important; }
             </style>
             
             <script>
                 document.addEventListener("DOMContentLoaded", function() {
-                    function cleanUp() {
-                        // สั่งลบข้อความที่ CSS เข้าไม่ถึง
-                        document.querySelectorAll('.selector p, .selector-clearall, .help').forEach(el => {
-                            if (el.closest('.field-tags')) { el.style.display = 'none'; }
-                        });
-                    }
-                    setTimeout(cleanUp, 500); // รันครั้งแรกหลังโหลด
-                    setInterval(cleanUp, 2000); // รันซ้ำทุก 2 วิ (เผื่อมีการกดเพิ่มแท็กใหม่แล้วมันเด้งกลับมา)
+                    // ดักลบขยะซ้ำอีกรอบเผื่อ JS ของ Django สร้างใหม่
+                    setInterval(() => {
+                        document.querySelectorAll('.selector p, .selector-clearall').forEach(el => el.style.display = 'none');
+                    }, 1000);
                 });
             </script>
         """)
 
-        context['title'] = mark_safe(f"{context['title']} {style}")
+        context['title'] = mark_safe(f"{context['title']} {style_and_script}")
         return super().render_change_form(request, context, add, change, form_url, obj)
 
     # ✅ 3. ตัวโชว์ Tag ในหน้ารวมรายการสินค้า (โค้ดเปรมดีอยู่แล้วครับ)
