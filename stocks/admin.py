@@ -1,6 +1,6 @@
 from django.contrib import admin
 # 1. เปลี่ยนชื่อที่ปรากฏบนหัวเอกสาร (Header สีน้ำเงิน)
-admin.site.site_header = "ระบบจัดการหลังบ้าน Meebun ERP"
+admin.site.site_header = "Meebun ERP"
 
 # 2. เปลี่ยนชื่อที่ปรากฏบน Browser Tab (Title)
 admin.site.site_title = "Meebun ERP Admin"
