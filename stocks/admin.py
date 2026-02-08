@@ -1,4 +1,12 @@
 from django.contrib import admin
+# 1. เปลี่ยนชื่อที่ปรากฏบนหัวเอกสาร (Header สีน้ำเงิน)
+admin.site.site_header = "ระบบจัดการหลังบ้าน Meebun ERP"
+
+# 2. เปลี่ยนชื่อที่ปรากฏบน Browser Tab (Title)
+admin.site.site_title = "Meebun ERP Admin"
+
+# 3. เปลี่ยนชื่อหัวข้อหลักในหน้าแรก (Index Title)
+admin.site.index_title = "ยินดีต้อนรับสู่ระบบจัดการข้อมูล"
 from django.contrib import messages
 from django.contrib.admin.widgets import AdminDateWidget
 from django.contrib.admin import helpers  # <--- helpers ต้องดึงมาจาก admin ครับ
