@@ -574,6 +574,14 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
                     color: #666 !important;
                 }
             </style>
+            <script>
+                document.addEventListener("DOMContentLoaded", function() {
+                    setTimeout(function() {
+                        // สั่งลบข้อความภาษาอังกฤษที่รกๆ
+                        document.querySelectorAll('.selector p, .selector-clearall').forEach(el => el.style.display = 'none');
+                    }, 500); // รอให้ระบบสร้างกล่องเสร็จ 0.5 วินาทีแล้วค่อยลบ
+                });
+            </script>
         """)
         context['title'] = mark_safe(f"{context['title']} {style}")
         return super().render_change_form(request, context, add, change, form_url, obj)
