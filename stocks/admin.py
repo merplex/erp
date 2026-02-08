@@ -519,84 +519,65 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
     
     filter_horizontal = ('tags',)
 
+    class Media:
+        css = {
+            'all': ('admin/css/custom_filter.css',) # (อ้างอิงเฉลี่ย)
+        }
+
+    # แต่เพื่อให้ง่ายที่สุด เปรมใช้ render_change_form ท่า "เจาะจง ID" นี้แทนครับ:
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
-        # ✅ CSS ชุดใหม่: เน้นซ่อนส่วนรก และขยายช่องลูกศรให้ไม่โดนบีบ
         style = mark_safe("""
             <style>
-                /* 1. แก้ไขปัญหาลูกศรหาย/โดนบีบ และทำให้กล่องเท่ากัน */
-                .selector { 
-                    display: flex !important; 
-                    align-items: center !important; 
-                    width: 100% !important; 
-                    max-width: 850px !important;
-                }
-                .selector-available, .selector-chosen { 
-                    flex: 1 1 45% !important; 
-                    width: auto !important; 
-                    float: none !important; /* ป้องกันการใช้ float แบบเก่า */
-                }
-                .selector-chooser { 
-                    flex: 0 0 50px !important; 
-                    margin: 0 15px !important; 
-                    float: none !important;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                }
-                .selector-chooser ul { padding: 0 !important; margin: 0 !important; list-style: none !important; }
-                
-                /* 2. ลบ "ส่วนรก" ที่เปรมวงไว้ (Instructions) */
-                .selector-available p, .selector-chosen p { 
-                    display: none !important; 
-                }
-                /* แต่ยังโชว์ช่อง Filter ไว้ */
-                .selector .selector-filter { 
-                    display: block !important; 
-                    background: #f8f9fa !important;
-                    padding: 8px !important;
-                    border-bottom: 1px solid #eee;
-                }
-
-                /* 3. ลบคำว่า (click to clear) และลิงก์ขยะข้างล่าง */
+                /* --- 1. ลบส่วนรก (Instructions & Click to clear) --- */
+                #id_tags_from ~ p, 
+                #id_tags_to ~ p,
+                .selector-available p, 
+                .selector-chosen p,
                 .selector-chosen .selector-clearall { 
                     display: none !important; 
                 }
 
-                /* 4. เปลี่ยนหัวข้อเป็นภาษาไทย และทำให้ตัวใหญ่ชัดเจน */
-                .selector-available h2, .selector-chosen h2 { 
-                    font-size: 0 !important; 
-                    background: #343a40 !important; /* สีเข้มแบบ Jazzmin */
-                    color: white !important;
-                    padding: 8px 12px !important;
-                    border-radius: 4px 4px 0 0 !important;
-                    margin-bottom: 0 !important;
+                /* --- 2. จัดระเบียบกล่องและลูกศร (ป้องกันโดนบีบ) --- */
+                .selector { 
+                    display: flex !important; 
+                    flex-direction: row !important;
+                    align-items: center !important; 
+                    width: 100% !important;
                 }
+                .selector-available, .selector-chosen { 
+                    flex: 1 1 45% !important; 
+                    min-width: 200px !important;
+                }
+                .selector-chooser { 
+                    flex: 0 0 40px !important; 
+                    margin: 0 10px !important; 
+                }
+
+                /* --- 3. เปลี่ยนชื่อหัวข้อเป็นภาษาไทย --- */
+                .selector-available h2 { font-size: 0 !important; margin-bottom: 5px !important; }
                 .selector-available h2:before { 
                     content: "📦 กลุ่มสินค้าที่มี" !important; 
-                    font-size: 13px !important; 
+                    font-size: 14px !important; font-weight: bold; color: #444;
                 }
+
+                .selector-chosen h2 { font-size: 0 !important; margin-bottom: 5px !important; }
                 .selector-chosen h2:before { 
                     content: "✅ กลุ่มที่เลือก" !important; 
-                    font-size: 13px !important; 
+                    font-size: 14px !important; font-weight: bold; color: #28a745;
                 }
 
-                /* 5. ปรับขนาดกล่องเลือกให้สูงขึ้นและดูสะอาด */
-                .selector select { 
-                    height: 300px !important; 
-                    border: 1px solid #ddd !important;
-                    border-top: none !important;
+                /* --- 4. ปรับขนาดกล่องและปุ่ม Choose all ให้สะอาด --- */
+                .selector select { height: 250px !important; border-radius: 4px !important; }
+                .selector-chooseall, .selector-removeall { 
+                    margin-top: 5px !important; 
+                    font-size: 11px !important;
+                    color: #666 !important;
                 }
-
-                /* ซ่อนปุ่ม Choose all / Remove all ถ้าเปรมมองว่ามันรก (เลือกออกได้ครับ) */
-                /* .selector-chooseall, .selector-removeall { display: none !important; } */
             </style>
         """)
-
-        # ✅ ทริค: ใส่ style เข้าไปใน context['jazzmin_ui_builder_css'] หรือ title 
-        # เพื่อให้มันโหลดหลังจาก CSS ของ Jazzmin ครับ
         context['title'] = mark_safe(f"{context['title']} {style}")
-        
         return super().render_change_form(request, context, add, change, form_url, obj)
+
     # ✅ 3. ตัวโชว์ Tag ในหน้ารวมรายการสินค้า (โค้ดเปรมดีอยู่แล้วครับ)
     def display_tags(self, obj):
         tags = obj.tags.all()
