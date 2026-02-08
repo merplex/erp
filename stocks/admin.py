@@ -522,53 +522,59 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
     }
 
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
-        # ✅ ปรับ CSS ใหม่ ให้รองรับโครงสร้าง Checkbox ของเปรมครับ
+        # ✅ ปรับ CSS ใหม่สำหรับ Jazzmin (Bootstrap 4)
         style = mark_safe("""
             <style>
-                .field-tags .related-widget-wrapper,
-                .field-tags ul,
-                .field-tags div {
+                /* บังคับให้รายการ Checkbox เรียงขวา */
+                .field-tags ul#id_tags {
                     display: flex !important;
                     flex-direction: row !important;
                     flex-wrap: wrap !important;
-                    gap: 10px !important;
-                    align-items: center !important;
+                    gap: 8px !important;
+                    padding-left: 0 !important;
+                    list-style: none !important;
                 }
 
-                .field-tags ul li {
-                    display: inline-block !important;
-                    margin: 0 !important;
-                    padding: 0 !important;
-                }
-
-                .field-tags label {
+                /* ปรับแต่งหน้าตาของแต่ละ Tag ให้เหมือน Badge */
+                .field-tags ul#id_tags li {
                     display: inline-flex !important;
-                    flex-direction: row !important;
                     align-items: center !important;
-                    background: #e9ecef !important;
-                    border: 1px solid #ced4da !important;
-                    border-radius: 20px !important;
-                    padding: 4px 15px !important;
+                    background: #f4f6f9 !important; /* สีเทาอ่อนแบบ Jazzmin */
+                    border: 1px solid #dee2e6 !important;
+                    border-radius: 4px !important;
+                    padding: 2px 10px !important;
                     margin: 0 !important;
+                    transition: all 0.2s;
+                }
+
+                /* เอฟเฟกต์ตอนเอาเมาส์ไปชี้ */
+                .field-tags ul#id_tags li:hover {
+                    background: #e9ecef !important;
+                    border-color: #007bff !important;
+                }
+
+                /* จัดระเบียบช่องติ๊กกับตัวหนังสือ */
+                .field-tags ul#id_tags li label {
+                    margin: 0 !important;
+                    font-weight: normal !important;
                     cursor: pointer;
-                    white-space: nowrap !important; 
+                    display: flex !important;
+                    align-items: center !important;
                 }
 
-                .field-tags input[type="checkbox"] {
-                    margin: 0 8px 0 0 !important;
-                    vertical-align: middle !important;
+                .field-tags ul#id_tags input[type="checkbox"] {
+                    margin-right: 6px !important;
                 }
 
+                /* ลบจุดหน้า List และตัวคั่นเดิม */
                 .field-tags ul li:before { content: none !important; }
-                .field-tags br { display: none !important; } 
+                .field-tags br { display: none !important; }
             </style>
         """)
 
         context['title'] = mark_safe(f"{context['title']} {style}")
-        
-        # อย่าลืมคำว่า return นะครับ เดี๋ยวพังแบบมะกี้
         return super().render_change_form(request, context, add, change, form_url, obj)
-
+    
     # ✅ 3. ตัวโชว์ Tag ในหน้ารวมรายการสินค้า (โค้ดเปรมดีอยู่แล้วครับ)
     def display_tags(self, obj):
         tags = obj.tags.all()
