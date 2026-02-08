@@ -12,14 +12,15 @@ admin.site.site_title = "Meebun ERP Admin"
 # 3. เปลี่ยนชื่อหัวข้อหลักในหน้าแรก (Index Title)
 admin.site.index_title = "ยินดีต้อนรับสู่ระบบจัดการข้อมูล"
 from django.contrib import messages
+
 from django.contrib.admin.widgets import AdminDateWidget
 from django.contrib.admin import helpers  # <--- helpers ต้องดึงมาจาก admin ครับ
 from django.utils.html import format_html
 from django.core.exceptions import ValidationError
 from django.forms import TextInput
 from django.db import models # เพิ่มเพื่อรองรับ formfield_overrides
+from django.db.models import Q, Sum, F, DecimalField, ExpressionWrapper
 from django import forms # ✅ เพิ่มบรรทัดนี้ครับ ทำระบบ tag checkbox
-from django.db.models import Sum, F, ExpressionWrapper, DecimalField
 from django.utils.safestring import mark_safe # ✅ ต้องมีบรรทัดนี้ครับ
 # เพิ่มที่บรรทัดบนสุดของไฟล์ครับ
 from django.http import HttpResponseRedirect
@@ -1508,11 +1509,6 @@ class CustomerAdmin(DocumentLockMixin, admin.ModelAdmin): # ✅ ใส่ Mixin 
         model = CustomerProductContract
         extra = 0
     inlines = [ContractInline]
-
-# ใน stocks/admin.py
-import json
-from django.db.models import Sum, F, DecimalField
-from decimal import Decimal
 
 @admin.register(SalesReport)
 class SalesReportAdmin(admin.ModelAdmin):
