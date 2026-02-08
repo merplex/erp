@@ -1,5 +1,7 @@
 from django.contrib import admin
 from .models import ProductTag
+from .models import *
+from .models import DocumentLock
 # 1. เปลี่ยนชื่อที่ปรากฏบนหัวเอกสาร (Header สีน้ำเงิน)
 admin.site.site_header = "Meebun ERP"
 
@@ -15,9 +17,8 @@ from django.utils.html import format_html
 from django.core.exceptions import ValidationError
 from django.forms import TextInput
 from django.db import models # เพิ่มเพื่อรองรับ formfield_overrides
-from .models import *
 from django import forms # ✅ เพิ่มบรรทัดนี้ครับ ทำระบบ tag checkbox
-from django.db.models import F
+from django.db.models import Sum, F, ExpressionWrapper, DecimalField
 from django.utils.safestring import mark_safe # ✅ ต้องมีบรรทัดนี้ครับ
 # เพิ่มที่บรรทัดบนสุดของไฟล์ครับ
 from django.http import HttpResponseRedirect
@@ -26,7 +27,8 @@ from django.http import HttpResponse, HttpResponseRedirect
 from django.template.response import TemplateResponse
 from django.urls import reverse # ✅ 3บรรทัดนี้ สำหรับระบบล็อคเอกสาร
 from django.contrib.contenttypes.models import ContentType
-from .models import DocumentLock
+from datetime import timedelta
+from decimal import Decimal
 
 class DocumentLockMixin:
     def change_view(self, request, object_id, form_url='', extra_context=None):
@@ -84,8 +86,30 @@ class ProductOnlyFilter(admin.SimpleListFilter):
         # 🎯 จุดสำคัญ: ถ้ายังไม่ได้เลือก (Default) ให้โชว์แค่สินค้า
         if self.value() is None:
             return queryset.filter(is_product=True)
-        
         return queryset
+    
+class DatePeriodFilter(admin.SimpleListFilter):
+    title = 'ช่วงเวลารายงาน'
+    parameter_name = 'period'
+
+    def lookups(self, request, model_admin):
+        return (
+            ('1year', 'ย้อนหลัง 1 ปี (Default)'),
+            ('4months', 'ย้อนหลัง 4 เดือน'),
+            ('1month', 'ย้อนหลัง 1 เดือน'),
+        )
+
+    def queryset(self, request, queryset):
+        now = timezone.now()
+        if self.value() == '1year':
+            return queryset.filter(sales_items__sales_order__order_date__year=now.year)
+        if self.value() == '4months':
+            start_date = now - timedelta(days=120)
+            return queryset.filter(sales_items__sales_order__order_date__gte=start_date)
+        if self.value() == '1month':
+            start_date = now - timedelta(days=30)
+            return queryset.filter(sales_items__sales_order__order_date__gte=start_date)
+        return queryset # Default จะไปจัดการใน get_queryset
 
 # ✅ 1. Inline รายการสินค้า (แบบ Read-Only สำหรับหน้าการเงิน)
 class PurchaseItemReadOnlyInline(admin.TabularInline):
@@ -1483,3 +1507,141 @@ class CustomerAdmin(DocumentLockMixin, admin.ModelAdmin): # ✅ ใส่ Mixin 
         model = CustomerProductContract
         extra = 0
     inlines = [ContractInline]
+
+@admin.register(SalesReport)
+class SalesReportAdmin(admin.ModelAdmin):
+    list_display = (
+        'name', 'get_total_qty', 'get_total_revenue', 
+        'get_total_cost_buy', 'get_total_cost_bom', 'get_profit_margin'
+    )
+    list_filter = (DatePeriodFilter, 'category', 'tags')
+    search_fields = ('name', 'barcodes__code')
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        
+        # 1. ดักกรองสถานะ: เอาเฉพาะ 'Completed' (ปิดใบขาย) และ 'Shipped' (ส่งแล้ว)
+        # 2. ดักกรองช่วงเวลาจาก Filter (DatePeriodFilter ที่เราสร้างไว้ก่อนหน้านี้)
+        period = request.GET.get('period', '1year')
+        now = timezone.now()
+        
+        date_query = Q(salesitem__sales_order__status__in=['Shipped', 'Completed'])
+        
+        if period == '1year':
+            date_query &= Q(salesitem__sales_order__order_date__year=now.year)
+        elif period == '4months':
+            date_query &= Q(salesitem__sales_order__order_date__gte=now - timedelta(days=120))
+        elif period == '1month':
+            date_query &= Q(salesitem__sales_order__order_date__gte=now - timedelta(days=30))
+
+        # 🎯 คำนวณด้วย Annotation (ทำที่ Database จะเร็วมาก)
+        return qs.annotate(
+            # จำนวนที่ส่งของแล้วรวม
+            total_qty=Sum('salesitem__quantity_shipped', filter=date_query),
+            # ยอดขายรวม (ราคาใน SalesItem * จำนวนที่ส่งจริง) ไม่รวม VAT/DC/Rebate เพราะดึงจาก Item โดยตรง
+            total_sales_val=Sum(
+                F('salesitem__sale_price') * F('salesitem__quantity_shipped'), 
+                filter=date_query,
+                output_field=DecimalField()
+            )
+        ).filter(total_qty__gt=0) # โชว์เฉพาะตัวที่ขายได้
+
+    # --- วิธีแสดงผลในตาราง ---
+
+    @admin.display(description="จำนวนขาย (ส่งแล้ว)")
+    def get_total_qty(self, obj):
+        return f"{obj.total_qty or 0:,.0f} {obj.unit}"
+
+    @admin.display(description="ยอดขายรวม (Net)")
+    def get_total_revenue(self, obj):
+        return f"{obj.total_sales_val or 0:,.2f}"
+
+    @admin.display(description="ต้นทุนรวม (Buy Price)")
+    def get_total_cost_buy(self, obj):
+        # คำนวณ: buy_price หน้าสินค้า * จำนวนที่ส่งจริง
+        cost = (obj.buy_price or 0) * (obj.total_qty or 0)
+        return f"{cost:,.2f}"
+
+    @admin.display(description="ต้นทุน BOM")
+    def get_total_cost_bom(self, obj):
+        # ดึง Property production_cost_avg มาคำนวณ
+        bom_unit_cost = obj.production_cost_avg or 0
+        total_bom_cost = Decimal(str(bom_unit_cost)) * (obj.total_qty or 0)
+        return f"{total_bom_cost:,.2f}"
+
+    @admin.display(description="กำไร (vs Buy Price)")
+    def get_profit_margin(self, obj):
+        revenue = obj.total_sales_val or 0
+        buy_cost = (obj.buy_price or 0) * (obj.total_qty or 0)
+        profit = revenue - buy_cost
+        percent = (profit / revenue * 100) if revenue > 0 else 0
+        
+        color = "#28a745" if profit > 0 else "#dc3545"
+        return format_html('<b style="color: {};">{:,.2f} ({:.1f}%)</b>', color, profit, percent)
+    list_display = (
+        'name', 'get_qty_sold', 'get_total_sales', 
+        'get_total_buy_cost', 'get_total_bom_cost', 'get_gross_profit'
+    )
+    list_filter = (DatePeriodFilter, 'tags', ('sales_items__sales_order__customer', admin.RelatedOnlyFieldListFilter))
+    search_fields = ('name', 'barcodes__code')
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        
+        # กรองเฉพาะรายการที่ขายสำเร็จแล้ว (Status 'completed' หรือตามที่เปรมตั้งไว้)
+        # และกรองตามช่วงวันที่เลือก
+        period = request.GET.get('period', '1year')
+        date_filter = Q(sales_items__sales_order__status='completed') # ปรับสถานะตามระบบเปรมนะ
+        
+        now = timezone.now()
+        if period == '1year':
+            date_filter &= Q(sales_items__sales_order__order_date__year=now.year)
+        elif period == '4months':
+            date_filter &= Q(sales_items__sales_order__order_date__gte=now - timedelta(days=120))
+        elif period == '1month':
+            date_filter &= Q(sales_items__sales_order__order_date__gte=now - timedelta(days=30))
+
+        # คำนวณรวบยอด
+        qs = qs.annotate(
+            total_qty_sold=Sum('sales_items__quantity', filter=date_filter),
+            total_revenue=Sum(F('sales_items__unit_price') * F('sales_items__quantity'), filter=date_filter),
+        )
+        
+        # กรองออกเฉพาะสินค้าที่มียอดขายในช่วงเวลานั้น
+        return qs.filter(total_qty_sold__gt=0)
+
+    # --- ส่วนการแสดงผลฟิลด์ต่างๆ ---
+
+    @admin.display(description="จำนวนขายรวม")
+    def get_qty_sold(self, obj):
+        return f"{obj.total_qty_sold or 0:,.0f} {obj.unit}"
+
+    @admin.display(description="ยอดขายรวม (Net)")
+    def get_total_sales(self, obj):
+        return f"{obj.total_revenue or 0:,.2f}"
+
+    @admin.display(description="ต้นทุนรวม (Buy Price)")
+    def get_total_buy_cost(self, obj):
+        # ต้นทุนจาก buy_price ในหน้าสินค้า * จำนวนที่ขายได้
+        cost = (obj.buy_price or 0) * (obj.total_qty_sold or 0)
+        return f"{cost:,.2f}"
+
+    @admin.display(description="ต้นทุน BOM")
+    def get_total_bom_cost(self, obj):
+        # ใช้ค่าต้นทุนผลิตเฉลี่ยที่เปรมมีอยู่แล้ว * จำนวนที่ขายได้
+        avg_cost = getattr(obj, 'production_cost_avg', 0)
+        # ล้าง format ตัวเลข (ถ้าเป็น string)
+        if isinstance(avg_cost, str):
+            import re
+            avg_cost = float(re.sub(r'[^\d.]', '', avg_cost) or 0)
+        
+        cost = (avg_cost or 0) * (obj.total_qty_sold or 0)
+        return f"{cost:,.2f}"
+
+    @admin.display(description="กำไรเบื้องต้น (vs Buy)")
+    def get_gross_profit(self, obj):
+        revenue = obj.total_revenue or 0
+        cost = (obj.buy_price or 0) * (obj.total_qty_sold or 0)
+        profit = float(revenue) - float(cost)
+        color = "#28a745" if profit > 0 else "#dc3545"
+        return format_html('<b style="color: {};">{:,.2f}</b>', color, profit)

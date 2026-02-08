@@ -771,7 +771,7 @@ class CustomerProductContract(models.Model):
         return f"{self.customer.company_name} - {self.product.name}"
 
     class Meta:
-        verbose_name_plural = "T2 ราคาสัญญา & DC/Rebate"
+        verbose_name_plural = "T2.ราคาสัญญา&DC/Rebate"
         unique_together = ('customer', 'product')
 
 # --- T2.2 ระบบปรับปรุงสต็อก (Stock Adjustment) ---
@@ -801,4 +801,10 @@ class StockAdjustment(models.Model):
         super().save(*args, **kwargs)
 
     class Meta:
-        verbose_name_plural = "T3 บันทึกการปรับสต็อก"
+        verbose_name_plural = "T3.บันทึกการปรับสต็อก"
+
+class SalesReport(Product): # ใช้ Product เป็นฐาน
+    class Meta:
+        proxy = True
+        verbose_name = "C5.รายงานยอดขายตามสินค้า"
+        verbose_name_plural = "C5.รายงานยอดขายตามสินค้า"
