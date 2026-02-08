@@ -1,4 +1,5 @@
 from django.contrib import admin
+from git import Tag
 # 1. เปลี่ยนชื่อที่ปรากฏบนหัวเอกสาร (Header สีน้ำเงิน)
 admin.site.site_header = "Meebun ERP"
 
@@ -488,6 +489,9 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
 
+    # ✅ ใช้ตัวนี้แทน filter_horizontal หรือ filter_vertical ค่ะ
+    autocomplete_fields = ['tags']
+
     def get_search_results(self, request, queryset, search_term):
         queryset, use_distinct = super().get_search_results(request, queryset, search_term)
 
@@ -516,62 +520,10 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
                         pass
         
         return queryset, use_distinct
-    
-    # 🎯 1. เปลี่ยนจาก horizontal เป็น vertical
-    filter_vertical = ('tags',)
+
 
     # 🎯 2. ปรับ CSS สำหรับแนวตั้งโดยเฉพาะ (เน้นความคลีน)
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
-        style_and_script = mark_safe("""
-            <style>
-                /* จัดระเบียบกล่องแนวตั้ง */
-                .selector { width: 100% !important; max-width: 600px !important; }
-                .selector-available, .selector-chosen { width: 100% !important; float: none !important; }
-                
-                /* จัดปุ่มลูกศรให้อยู่ตรงกลางระหว่างบน-ล่าง */
-                .selector-chooser { 
-                    width: 100% !important; 
-                    height: 40px !important; 
-                    display: flex !important; 
-                    justify-content: center !important; 
-                    align-items: center !important;
-                    margin: 5px 0 !important;
-                    transform: rotate(90deg); /* หมุนลูกศรให้ชี้ขึ้น-ลง */
-                }
-
-                /* ลบข้อความรกๆ ภาษาอังกฤษ */
-                .selector p, .selector-clearall, .help-block, .help { 
-                    display: none !important; 
-                }
-
-                /* เปลี่ยนหัวข้อเป็นภาษาไทย */
-                .selector-available h2 { font-size: 0 !important; margin-bottom: 5px !important; }
-                .selector-available h2:before { 
-                    content: "📦 กลุ่มสินค้าที่มี (เลือกจากที่นี่)"; 
-                    font-size: 14px; font-weight: bold; color: #444;
-                }
-
-                .selector-chosen h2 { font-size: 0 !important; margin-top: 10px !important; margin-bottom: 5px !important; }
-                .selector-chosen h2:before { 
-                    content: "✅ กลุ่มที่เลือก (รายการปัจจุบัน)"; 
-                    font-size: 14px; font-weight: bold; color: #28a745;
-                }
-
-                /* ปรับขนาดกล่อง */
-                .selector select { height: 200px !important; border-radius: 4px !important; width: 100% !important; }
-            </style>
-            
-            <script>
-                document.addEventListener("DOMContentLoaded", function() {
-                    // ดักลบขยะซ้ำอีกรอบเผื่อ JS ของ Django สร้างใหม่
-                    setInterval(() => {
-                        document.querySelectorAll('.selector p, .selector-clearall').forEach(el => el.style.display = 'none');
-                    }, 1000);
-                });
-            </script>
-        """)
-
-        context['title'] = mark_safe(f"{context['title']} {style_and_script}")
         return super().render_change_form(request, context, add, change, form_url, obj)
 
     # ✅ 3. ตัวโชว์ Tag ในหน้ารวมรายการสินค้า (โค้ดเปรมดีอยู่แล้วครับ)
@@ -1531,3 +1483,10 @@ class CustomerAdmin(DocumentLockMixin, admin.ModelAdmin): # ✅ ใส่ Mixin 
         model = CustomerProductContract
         extra = 0
     inlines = [ContractInline]
+
+@admin.register(ProductTag)
+class ProductTagAdmin(admin.ModelAdmin):
+    # ✅ สำคัญที่สุด: ต้องมีบรรทัดนี้ เพื่อให้หน้า Product ค้นหาแท็กเจอค่ะ
+    search_fields = ['name'] 
+    
+    list_display = ('name', 'color', 'created_at')
