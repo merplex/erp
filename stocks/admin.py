@@ -1633,4 +1633,5 @@ class SalesReportAdmin(admin.ModelAdmin):
         buy_cost = (obj.buy_price or 0) * (obj.total_qty or 0)
         profit = revenue - buy_cost
         color = "#28a745" if profit > 0 else "#dc3545"
-        return format_html('<b style="color: {};">{:,.2f}</b>', color, profit)
+        profit_display = "{:,.2f}".format(profit)
+        return format_html('<b style="color: {};">{}</b>', color, profit_display)
