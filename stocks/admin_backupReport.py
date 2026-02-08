@@ -1,4 +1,5 @@
 from django.contrib import admin
+from .models import ProductTag
 # 1. เปลี่ยนชื่อที่ปรากฏบนหัวเอกสาร (Header สีน้ำเงิน)
 admin.site.site_header = "Meebun ERP"
 
@@ -488,6 +489,9 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
 
+    # ✅ ใช้ตัวนี้แทน filter_horizontal หรือ filter_vertical ค่ะ
+    autocomplete_fields = ['tags']
+
     def get_search_results(self, request, queryset, search_term):
         queryset, use_distinct = super().get_search_results(request, queryset, search_term)
 
@@ -516,57 +520,10 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
                         pass
         
         return queryset, use_distinct
-    
-    formfield_overrides = {
-        models.ManyToManyField: {'widget': forms.CheckboxSelectMultiple},
-    }
 
+
+    # 🎯 2. ปรับ CSS สำหรับแนวตั้งโดยเฉพาะ (เน้นความคลีน)
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
-        # ✅ ปรับ CSS ใหม่ ให้รองรับโครงสร้าง Checkbox ของเปรมครับ
-        style = mark_safe("""
-            <style>
-                .field-tags .related-widget-wrapper,
-                .field-tags ul,
-                .field-tags div {
-                    display: flex !important;
-                    flex-direction: row !important;
-                    flex-wrap: wrap !important;
-                    gap: 10px !important;
-                    align-items: center !important;
-                }
-
-                .field-tags ul li {
-                    display: inline-block !important;
-                    margin: 0 !important;
-                    padding: 0 !important;
-                }
-
-                .field-tags label {
-                    display: inline-flex !important;
-                    flex-direction: row !important;
-                    align-items: center !important;
-                    background: #e9ecef !important;
-                    border: 1px solid #ced4da !important;
-                    border-radius: 20px !important;
-                    padding: 4px 15px !important;
-                    margin: 0 !important;
-                    cursor: pointer;
-                    white-space: nowrap !important; 
-                }
-
-                .field-tags input[type="checkbox"] {
-                    margin: 0 8px 0 0 !important;
-                    vertical-align: middle !important;
-                }
-
-                .field-tags ul li:before { content: none !important; }
-                .field-tags br { display: none !important; } 
-            </style>
-        """)
-
-        context['title'] = mark_safe(f"{context['title']} {style}")
-        
-        # อย่าลืมคำว่า return นะครับ เดี๋ยวพังแบบมะกี้
         return super().render_change_form(request, context, add, change, form_url, obj)
 
     # ✅ 3. ตัวโชว์ Tag ในหน้ารวมรายการสินค้า (โค้ดเปรมดีอยู่แล้วครับ)
