@@ -1516,9 +1516,9 @@ class SalesReportAdmin(admin.ModelAdmin):
         'name', 'get_total_qty', 'get_total_revenue', 
         'get_total_cost_buy', 'get_total_cost_bom', 'get_profit_margin'
     )
-    list_filter = (DatePeriodFilter, 'category', 'tags',('salesitem__sales_order__customer', admin.RelatedOnlyFieldListFilter), # Path: salesitem -> sales_order -> customer
+    list_filter = (DatePeriodFilter, 'category', 'tags',('sales_items__sales_order__customer', admin.RelatedOnlyFieldListFilter), # Path: salesitem -> sales_order -> customer
     )
-    search_fields = ('name', 'barcodes__code', 'salesitem__sales_order__customer__company_name') # Path: customer__company_name
+    search_fields = ('name', 'barcodes__code') # Path: customer__company_name
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
