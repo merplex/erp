@@ -1516,8 +1516,7 @@ class SalesReportAdmin(admin.ModelAdmin):
         'name', 'get_total_qty', 'get_total_revenue', 
         'get_total_cost_buy', 'get_total_cost_bom', 'get_profit_margin'
     )
-    list_filter = (DatePeriodFilter, 'category', 'tags',('sales_items__sales_order__customer', admin.RelatedOnlyFieldListFilter), # Path: salesitem -> sales_order -> customer
-    )
+    list_filter = (DatePeriodFilter, 'category', 'tags')
     search_fields = ('name', 'barcodes__code')
 
     def get_queryset(self, request):
@@ -1634,5 +1633,4 @@ class SalesReportAdmin(admin.ModelAdmin):
         buy_cost = (obj.buy_price or 0) * (obj.total_qty or 0)
         profit = revenue - buy_cost
         color = "#28a745" if profit > 0 else "#dc3545"
-        profit_display = "{:,.2f}".format(profit)
-        return format_html('<b style="color: {};">{}</b>', color, profit_display)
+        return format_html('<b style="color: {};">{:,.2f}</b>', color, profit)
