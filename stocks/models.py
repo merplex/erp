@@ -490,7 +490,7 @@ class IncomeReport(SalesOrder):
 
 class SalesItem(models.Model):
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='items')
-    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    product = models.ForeignKey(Product, on_delete=models.CASCAD, related_name='sales_items')
     quantity_ordered = models.PositiveIntegerField(verbose_name="จำนวนที่สั่งขาย")
     quantity_shipped = models.PositiveIntegerField(default=0, verbose_name="ส่งสะสม")
     # ✅ เพิ่ม 2 ฟิลด์นี้เพื่อทำ auto production ค่ะ
