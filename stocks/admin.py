@@ -517,9 +517,7 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
         
         return queryset, use_distinct
     
-    formfield_overrides = {
-        models.ManyToManyField: {'widget': forms.CheckboxSelectMultiple},
-    }
+    filter_horizontal = ('tags',)
 
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
         # ✅ ปรับ CSS ใหม่สำหรับ Jazzmin (Bootstrap 4)
