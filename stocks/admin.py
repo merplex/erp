@@ -526,7 +526,8 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
 
     # แต่เพื่อให้ง่ายที่สุด เปรมใช้ render_change_form ท่า "เจาะจง ID" นี้แทนครับ:
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
-        style = mark_safe("""
+        # ✅ รวมทั้ง CSS (จัดหน้าตา) และ JavaScript (ลบขยะ)
+        style_and_script = mark_safe("""
             <style>
                 /* --- 1. ลบส่วนรก (Instructions & Click to clear) --- */
                 #id_tags_from ~ p, 
@@ -537,12 +538,13 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
                     display: none !important; 
                 }
 
-                /* --- 2. จัดระเบียบกล่องและลูกศร (ป้องกันโดนบีบ) --- */
+                /* --- 2. จัดระเบียบกล่องและลูกศร --- */
                 .selector { 
                     display: flex !important; 
                     flex-direction: row !important;
                     align-items: center !important; 
                     width: 100% !important;
+                    max-width: 900px !important;
                 }
                 .selector-available, .selector-chosen { 
                     flex: 1 1 45% !important; 
@@ -566,23 +568,24 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
                     font-size: 14px !important; font-weight: bold; color: #28a745;
                 }
 
-                /* --- 4. ปรับขนาดกล่องและปุ่ม Choose all ให้สะอาด --- */
-                .selector select { height: 250px !important; border-radius: 4px !important; }
-                .selector-chooseall, .selector-removeall { 
-                    margin-top: 5px !important; 
-                    font-size: 11px !important;
-                    color: #666 !important;
-                }
+                /* --- 4. ปรับขนาดกล่องเลือก --- */
+                .selector select { height: 280px !important; border-radius: 4px !important; }
             </style>
+            
             <script>
                 document.addEventListener("DOMContentLoaded", function() {
-                    setTimeout(function() {
-                        // สั่งลบข้อความภาษาอังกฤษที่รกๆ
-                        document.querySelectorAll('.selector p, .selector-clearall').forEach(el => el.style.display = 'none');
-                    }, 500); // รอให้ระบบสร้างกล่องเสร็จ 0.5 วินาทีแล้วค่อยลบ
+                    function cleanUp() {
+                        // สั่งลบข้อความที่ CSS เข้าไม่ถึง
+                        document.querySelectorAll('.selector p, .selector-clearall, .help').forEach(el => {
+                            if (el.closest('.field-tags')) { el.style.display = 'none'; }
+                        });
+                    }
+                    setTimeout(cleanUp, 500); // รันครั้งแรกหลังโหลด
+                    setInterval(cleanUp, 2000); // รันซ้ำทุก 2 วิ (เผื่อมีการกดเพิ่มแท็กใหม่แล้วมันเด้งกลับมา)
                 });
             </script>
         """)
+
         context['title'] = mark_safe(f"{context['title']} {style}")
         return super().render_change_form(request, context, add, change, form_url, obj)
 
