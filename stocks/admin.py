@@ -649,7 +649,7 @@ class BOMAdmin(DocumentLockMixin,admin.ModelAdmin):
 class PurchaseOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('po_number', 'supplier', 'order_date', 'status', 'get_diff')
     list_filter = ('status', 'order_date', 'supplier')
-    search_fields = ('po_number', 'invoice_no_supplier', 'items__product__barcodes__code', 'supplier__company_name')
+    search_fields = ('po_number', 'invoice_no_supplier', 'items__product__name', 'supplier__company_name')
     inlines = [PurchaseItemInline, PurchaseReceiptLogInline]
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
     readonly_fields = ('created_by', 'status')
