@@ -1768,22 +1768,34 @@ class ShipmentAccounting(SalesDeliveryLog):
 
 @admin.register(ShipmentAccounting)
 class ShipmentAccountingAdmin(admin.ModelAdmin):
+    # 🎯 เพิ่ม get_revenue_no_vat เข้าไปในหน้าจอตามที่เปรมต้องการ
     list_display = (
         'shipped_date', 'get_so_number', 'product', 'quantity_shipped', 
-        'get_revenue_inc_vat', 'get_dc_value', 'get_rebate_value',
+        'get_revenue_no_vat', 'get_revenue_inc_vat', 
+        'get_dc_value', 'get_rebate_value',
         'is_revenue_confirmed', 'is_dc_confirmed', 'is_rebate_confirmed'
     )
-    list_filter = (('shipped_date', admin.DateFieldListFilter), 'is_revenue_confirmed')
+    list_filter = (('shipped_date', admin.DateFieldListFilter), 'is_revenue_confirmed', 'sales_order__customer')
     ordering = ('-shipped_date', 'sales_order__so_number')
 
-    # 🎯 1. คำนวณยอดเงินรวม (Inc. VAT) จากยอดส่งจริง
+    # 🎯 1. คำนวณยอดรวม (Inc. VAT) - แก้จาก .sales_items เป็น .items แล้ว
     def get_revenue_inc_vat(self, obj):
-        item = obj.sales_order.sales_items.filter(product=obj.product).first()
+        item = obj.sales_order.items.filter(product=obj.product).first()
         price = item.sale_price if item else 0
         return f"{price * obj.quantity_shipped:,.2f}"
-    get_revenue_inc_vat.short_description = "ยอดรวม (บาท)"
+    get_revenue_inc_vat.short_description = "ยอดรวม VAT"
 
-    # 🎯 2. ดึง DC % จาก Contract มาคำนวณ
+    # 🎯 2. คำนวณยอดแยกส่วน Non-VAT (ยอดก่อนภาษี)
+    def get_revenue_no_vat(self, obj):
+        item = obj.sales_order.items.filter(product=obj.product).first()
+        if item:
+            total_inc_vat = item.sale_price * obj.quantity_shipped
+            total_no_vat = float(total_inc_vat) / 1.07
+            return f"{total_no_vat:,.2f}"
+        return "0.00"
+    get_revenue_no_vat.short_description = "ยอด Non-VAT"
+
+    # 🎯 3. ดึง DC % - แก้จาก .sales_items เป็น .items แล้ว
     def get_dc_value(self, obj):
         from .models import CustomerProductContract
         contract = CustomerProductContract.objects.filter(
@@ -1792,15 +1804,14 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
         ).first()
         
         if contract:
-            # สมมติยอดขายรวม VAT คือฐานในการหัก DC
-            item = obj.sales_order.sales_items.filter(product=obj.product).first()
+            item = obj.sales_order.items.filter(product=obj.product).first()
             revenue = (item.sale_price * obj.quantity_shipped) if item else 0
             dc_amt = (revenue * contract.dc_percent) / 100
             return format_html('<span>{}% (<b>฿{:,.2f}</b>)</span>', contract.dc_percent, dc_amt)
         return "-"
     get_dc_value.short_description = "ยอด DC"
 
-    # 🎯 3. ดึง Rebate % จาก Contract มาคำนวณ
+    # 🎯 4. ดึง Rebate %
     def get_rebate_value(self, obj):
         from .models import CustomerProductContract
         contract = CustomerProductContract.objects.filter(
@@ -1816,32 +1827,10 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
         return "-"
     get_rebate_value.short_description = "ยอด Rebate"
 
-    # 🎯 4. คำนวณยอดแยกส่วน Non-VAT (ยอดก่อนภาษี)
-    def get_revenue_no_vat(self, obj):
-        item = obj.sales_order.items.filter(product=obj.product).first()
-        if item:
-            # คำนวณถอยหลัง 7% (หรือใช้ฟิลด์ vat_percent จาก SO ถ้ามี)
-            total_inc_vat = item.sale_price * obj.quantity_shipped
-            total_no_vat = float(total_inc_vat) / 1.07
-            return f"{total_no_vat:,.2f}"
-        return "0.00"
-    get_revenue_no_vat.short_description = "ยอด Non-VAT"
-
-    # 🎯 5. ดึงเลขที่ใบสั่งซื้อ (ตัวการที่ทำให้ Error E108)
     def get_so_number(self, obj):
-        # ดึงเลข so_number จากตาราง SalesOrder
         return obj.sales_order.so_number
     get_so_number.short_description = "เลขที่ใบสั่งซื้อ"
 
-    # 🎯 6. ฟังก์ชันทำลิงก์กดกระโดดไปหน้า C3 ได้เลย (เผื่อบัญชีอยากเช็ค)
-    def sales_order_link(self, obj):
-        from django.urls import reverse
-        from django.utils.html import format_html
-        url = reverse("admin:stocks_salesorder_change", args=[obj.sales_order.id])
-        return format_html('<a href="{}" style="font-weight:bold;">{}</a>', url, obj.sales_order.so_number)
-    sales_order_link.short_description = "ลิงก์ใบสั่งซื้อ"
-
-    # 🎯 Action ยืนยันยอด
     actions = ['confirm_selected_items']
     @admin.action(description="✅ ยืนยันยอดรายการที่เลือก (สินค้า/DC/Rebate)")
     def confirm_selected_items(self, request, queryset):
