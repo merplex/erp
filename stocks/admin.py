@@ -1809,7 +1809,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
         ).first()
         
         if contract:
-            item = obj.sales_order.sales_items.filter(product=obj.product).first()
+            item = obj.sales_order.items.filter(product=obj.product).first()
             revenue = (item.sale_price * obj.quantity_shipped) if item else 0
             reb_amt = (revenue * contract.rebate_percent) / 100
             return format_html('<span>{}% (<b>฿{:,.2f}</b>)</span>', contract.rebate_percent, reb_amt)
