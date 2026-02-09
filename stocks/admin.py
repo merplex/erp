@@ -963,7 +963,6 @@ class StockPlanningAdmin(admin.ModelAdmin):
     list_display = ('name', 'category', 'stock_quantity', 'get_pending_in', 'get_pending_out', 'get_pending_prod', 'get_available', 'buy_price')
     list_filter = ('category', 'suppliers', ProductOnlyFilter, BuyPriceRangeFilter)
     search_fields = ('name', 'barcodes__code', 'tags__name')
- 
     # 🎯 1. แผนรับ (PO): สั่ง - รับจริง (รวม Draft)
     def get_pending_in(self, obj):
         from .models import PurchaseItem # 👈 เรียกใช้ Model ตรงๆ
