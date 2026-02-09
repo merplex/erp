@@ -111,7 +111,7 @@ class DatePeriodFilter(admin.SimpleListFilter):
         if self.value() == '1month':
             start_date = now - timedelta(days=30)
             return queryset.filter(sales_items__sales_order__order_date__gte=start_date)
-        return queryset.filter(sales_items__sales_order__order_date__year=now.year)
+        return queryset # Default จะไปจัดการใน get_queryset
 
 # ✅ 1. Inline รายการสินค้า (แบบ Read-Only สำหรับหน้าการเงิน)
 class PurchaseItemReadOnlyInline(admin.TabularInline):
@@ -1523,32 +1523,42 @@ class SalesReportAdmin(admin.ModelAdmin):
     # ใน stocks/admin.py
 
     def get_queryset(self, request):
-        # 🎯 จุดที่ 1: เติม .distinct() ทันทีหลัง super() 
-        # เพื่อป้องกันไม่ให้สินค้าโผล่มาซ้ำจากการ Join ตารางลูกค้า/รายการขาย
-        qs = super().get_queryset(request).distinct()
+        qs = super().get_queryset(request) # ✨ ตัวนี้จะรับค่า Search บาร์โค้ดมาให้เปรม
         
         period = request.GET.get('period', '1year')
         now = timezone.now()
         
-        # 🎯 จุดที่ 2: ตรวจสอบว่าชื่อสถานะใน DB ตรงกับ 'Shipped' หรือ 'ปิดงาน/ครบถ้วน' ไหม
-        date_query = Q(sales_items__sales_order__status__in=['Shipped', 'Completed', 'ปิดงาน/ครบถ้วน', 'ส่งบางส่วน'])
+        # 1. สร้างเงื่อนไขวันที่ (ดึงมาจาก Filter ที่เปรมกด)
+        date_filter = Q(sales_order__status__in=['Shipped', 'Completed', 'ปิดงาน/ครบถ้วน', 'ส่งบางส่วน'])
         
         if period == '1year':
-            date_query &= Q(sales_items__sales_order__order_date__year=now.year)
-        # ... elif อื่นๆ ของเปรม ...
+            date_filter &= Q(sales_order__order_date__year=now.year)
+        elif period == '4months':
+            date_filter &= Q(sales_order__order_date__gte=now - timedelta(days=120))
+        elif period == '1month':
+            date_filter &= Q(sales_order__order_date__gte=now - timedelta(days=30))
 
-        qs = qs.annotate(
-            total_qty=Sum('sales_items__quantity_shipped', filter=date_query),
-            total_sales_val=Sum(
-                F('sales_items__sale_price') * F('sales_items__quantity_shipped'), 
-                filter=date_query,
-                output_field=DecimalField()
-            )
-        )
+        # 2. ใช้ Subquery: ไปบวกยอด "ส่งสำเร็จ" ของสินค้านั้นๆ มาให้จบในตัวมันเอง
+        # วิธีนี้จะป้องกันยอดเบิ้ล 3 เท่าได้ 100% ครับ
+        shipped_subquery = SalesItem.objects.filter(
+            product=OuterRef('pk'), # 🎯 เชื่อมกับสินค้าทีละตัว
+            **{f"{k}": v for k, v in date_filter.children} # ใส่เงื่อนไขวันที่และสถานะ
+        ).values('product').annotate(
+            total=Sum('quantity_shipped') # 🎯 บวกเฉพาะยอดส่งสำเร็จ
+        ).values('total')
 
-        # 🎯 จุดที่ 3: "ไม้ตาย" ที่ทำให้ Search ทำงานแม่น
-        # เราจะกรองทิ้ง "สินค้าที่ไม่มีส่วนเกี่ยวข้องกับยอดขายในเงื่อนไขที่เรา Search" 
-        return qs.filter(total_qty__gt=0)
+        revenue_subquery = SalesItem.objects.filter(
+            product=OuterRef('pk'),
+            **{f"{k}": v for k, v in date_filter.children}
+        ).values('product').annotate(
+            total=Sum(F('sale_price') * F('quantity_shipped'), output_field=DecimalField())
+        ).values('total')
+
+        # 3. เอาผลลัพธ์มาแปะที่รายงาน
+        return qs.annotate(
+            total_qty=Subquery(shipped_subquery),
+            total_sales_val=Subquery(revenue_subquery)
+        ).filter(total_qty__gt=0) # โชว์เฉพาะตัวที่มียอดส่ง
     
     # 🎯 หัวใจหลัก: คำนวณยอดรวมของทั้งหน้า (Grand Total)
     def changelist_view(self, request, extra_context=None):
