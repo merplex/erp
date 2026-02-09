@@ -490,7 +490,7 @@ class IncomeReport(SalesOrder):
 
 class SalesItem(models.Model):
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='items')
-    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    product = models.ForeignKey(Product, on_delete=models.CASCADE,related_name='sales_items')
     quantity_ordered = models.PositiveIntegerField(verbose_name="จำนวนที่สั่งขาย")
     quantity_shipped = models.PositiveIntegerField(default=0, verbose_name="ส่งสะสม")
     # ✅ เพิ่ม 2 ฟิลด์นี้เพื่อทำ auto production ค่ะ
@@ -771,7 +771,7 @@ class CustomerProductContract(models.Model):
         return f"{self.customer.company_name} - {self.product.name}"
 
     class Meta:
-        verbose_name_plural = "T2 ราคาสัญญา & DC/Rebate"
+        verbose_name_plural = "T2. ราคาสัญญา&DC/Rebate"
         unique_together = ('customer', 'product')
 
 # --- T2.2 ระบบปรับปรุงสต็อก (Stock Adjustment) ---
@@ -801,4 +801,10 @@ class StockAdjustment(models.Model):
         super().save(*args, **kwargs)
 
     class Meta:
-        verbose_name_plural = "T3 บันทึกการปรับสต็อก"
+        verbose_name_plural = "T3. บันทึกการปรับสต็อก"
+
+class SalesReport(Product): # ใช้ Product เป็นฐาน
+    class Meta:
+        proxy = True
+        verbose_name = "C5. รายงานยอดขายตามสินค้า"
+        verbose_name_plural = "C5. รายงานยอดขายตามสินค้า"
