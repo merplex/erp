@@ -111,7 +111,7 @@ class DatePeriodFilter(admin.SimpleListFilter):
         if self.value() == '1month':
             start_date = now - timedelta(days=30)
             return queryset.filter(sales_items__sales_order__order_date__gte=start_date)
-        return queryset # Default จะไปจัดการใน get_queryset
+        return queryset.filter(sales_items__sales_order__order_date__year=now.year)
 
 # ✅ 1. Inline รายการสินค้า (แบบ Read-Only สำหรับหน้าการเงิน)
 class PurchaseItemReadOnlyInline(admin.TabularInline):
@@ -481,7 +481,7 @@ class SalesDeliveryLogInline(admin.TabularInline):
             resolved = request.resolver_match
             if resolved and 'object_id' in resolved.kwargs:
                 so_id = resolved.kwargs['object_id']
-                kwargs["queryset"] = Product.objects.filter(salesitem__sales_order_id=so_id).distinct()
+                kwargs["queryset"] = Product.objects.filter(sales_items__sales_order_id=so_id).distinct()
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 class ProductionLogInline(admin.TabularInline):
