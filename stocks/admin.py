@@ -1838,19 +1838,36 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
 
     # 🎯 1. ยอดรวม VAT (Inc. VAT)
     def get_revenue_inc_vat(self, obj):
+        # ✅ ต้องเปลี่ยนมาใช้ .items เหมือนกับตัว Non-VAT ครับ
         item = obj.sales_order.items.filter(product=obj.product).first()
-        price = item.sale_price if item else 0
-        return f"{price * obj.quantity_shipped:,.2f}"
+        if item:
+            # ยอดรวม VAT คือ ราคาที่บันทึกไว้คูณกับจำนวนที่ส่งจริง
+            total_inc_vat = item.sale_price * obj.quantity_shipped
+            return f"{total_inc_vat:,.2f}"
+        return "0.00"
     get_revenue_inc_vat.short_description = "ยอดรวม VAT"
 
     # 🎯 2. ยอดก่อนภาษี (Non-VAT)
     def get_revenue_no_vat(self, obj):
+    # 1. ดึงรายการสินค้าเพื่อเอาราคาขาย (ใช้ .items ตามที่เราแก้รอบแรก)
         item = obj.sales_order.items.filter(product=obj.product).first()
-        if item:
-            # คำนวณด้วย LaTeX: $$Total_{no\_vat} = \frac{Total_{inc\_vat}}{1.07}$$
+        
+        if item and obj.sales_order.customer:
+            # 2. ดึงค่า VAT จากลูกค้าโดยตรง
+            customer_vat = obj.sales_order.customer.vat  # เป็น Decimal อยู่แล้วตามที่เปรมบอก
+            
+            # 3. คำนวณยอดรวม (Inc. VAT)
             total_inc_vat = item.sale_price * obj.quantity_shipped
-            total_no_vat = float(total_inc_vat) / 1.07
+            
+            # 4. คำนวณตัวหาร (Vat Divisor)
+            # สูตร: 1 + (vat / 100)
+            vat_divisor = Decimal('1') + (customer_vat / Decimal('100'))
+            
+            # 5. ยอด Non-VAT = ยอดรวม / ตัวหาร
+            total_no_vat = total_inc_vat / vat_divisor
+            
             return f"{total_no_vat:,.2f}"
+        
         return "0.00"
     get_revenue_no_vat.short_description = "ยอด Non-VAT"
 
