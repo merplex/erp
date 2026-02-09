@@ -1747,10 +1747,13 @@ class ShipmentReconciliationAdmin(admin.ModelAdmin):
     search_fields = ('sales_order__so_number', 'product__name')
     ordering = ('-shipped_date',)
 
+    # 🎯 2. เพิ่ม Description และ Order Field ให้วันที่
     def short_shipped_date(self, obj):
         if obj.shipped_date:
             return obj.shipped_date.strftime('%d/%m/%y %H:%M')
         return "-"
+    short_shipped_date.short_description = "วันที่ส่ง"
+    short_shipped_date.admin_order_field = 'shipped_date'
 
     # --- คำนวณยอดเงินตามจำนวนที่ส่งจริง ---
     def get_revenue_inc_vat(self, obj):
@@ -1787,7 +1790,7 @@ class ShipmentReconciliationAdmin(admin.ModelAdmin):
 
 
     # --- Action ยืนยันยอดแบบแยกส่วน ---
-    actions = ['confirm_all_selected', 'confirm_only_dc']
+    actions = ['confirm_dc_only', 'confirm_rebate_only', 'confirm_revenue_only','confirm_all_selected']
     
     @admin.action(description="💰 ยืนยันเฉพาะยอดรับเงิน (Revenue)")
     def confirm_revenue_only(self, request, queryset):
