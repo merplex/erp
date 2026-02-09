@@ -29,8 +29,29 @@ from django.http import HttpResponse, HttpResponseRedirect
 from django.template.response import TemplateResponse
 from django.urls import reverse # ✅ 3บรรทัดนี้ สำหรับระบบล็อคเอกสาร
 from django.contrib.contenttypes.models import ContentType
-from datetime import timedelta
+from datetime import timedelta,datetime,date
 from decimal import Decimal
+
+# 📅 คลาสพิเศษสำหรับสร้างช่องเลือกวันที่ "เริ่มต้น - สิ้นสุด" เอง
+class DateRangeFilter(admin.FieldListFilter):
+    template = 'admin/date_range_filter.html' # ถ้าเปรมไม่มีไฟล์นี้ มันจะใช้ตัวสำรองให้ครับ
+
+    def __init__(self, field, request, params, model, model_admin, field_path):
+        super().__init__(field, request, params, model, model_admin, field_path)
+        self.lookup_kwarg_gte = f'{field_path}__date__gte'
+        self.lookup_kwarg_lte = f'{field_path}__date__lte'
+        self.lookup_val_gte = params.get(self.lookup_kwarg_gte)
+        self.lookup_val_lte = params.get(self.lookup_kwarg_lte)
+
+    def expected_parameters(self):
+        return [self.lookup_kwarg_gte, self.lookup_kwarg_lte]
+
+    def choices(self, changelist):
+        yield {
+            'selected': self.lookup_val_gte is None and self.lookup_val_lte is None,
+            'query_string': changelist.get_query_string(remove=[self.lookup_kwarg_gte, self.lookup_kwarg_lte]),
+            'display': 'ทั้งหมด',
+        }
 
 class DocumentLockMixin:
     def change_view(self, request, object_id, form_url='', extra_context=None):
@@ -1771,13 +1792,48 @@ class ShipmentAccounting(SalesDeliveryLog):
 @admin.register(ShipmentAccounting)
 class ShipmentAccountingAdmin(admin.ModelAdmin):
     list_display = (
-        'shipped_date', 'get_so_number', 'product', 'quantity_shipped', 
+        'short_shipped_date', 'get_so_number', 'product', 'quantity_shipped', 
         'get_revenue_no_vat', 'get_revenue_inc_vat', 
         'get_dc_value', 'get_rebate_value',
         'is_revenue_confirmed', 'is_dc_confirmed', 'is_rebate_confirmed'
     )
-    list_filter = (('shipped_date', admin.DateFieldListFilter), 'is_revenue_confirmed', 'sales_order__customer')
+    search_fields = ('sales_order__so_number', 'product__name', 'product__barcode') 
+    list_filter = (
+        ('shipped_date', admin.AllValuesFieldListFilter), # จะมีรายการวันที่ที่มีข้อมูลโชว์ขึ้นมาให้เลือกเป็นวันๆ
+        'is_revenue_confirmed', 'is_dc_confirmed', 'is_rebate_confirmed',
+        'sales_order__customer'
+    )
     ordering = ('-shipped_date', 'sales_order__so_number')
+
+    def short_shipped_date(self, obj):
+        if obj.shipped_date:
+            return obj.shipped_date.strftime('%d/%m/%y %H:%M')
+        return "-"
+    short_shipped_date.short_description = "วันที่ส่ง"
+    short_shipped_date.admin_order_field = 'shipped_date' # ทำให้ยังกดเรียงวันที่ได้
+
+    # --- 📊 สรุปยอดตาม Filter (โชว์ Banner สีเหลือง) ---
+    def changelist_view(self, request, extra_context=None):
+        cl = self.get_changelist_instance(request)
+        qs = cl.get_queryset(request)
+        
+        sum_vat, sum_dc, sum_rebate = 0, 0, 0
+        for obj in qs:
+            item = obj.sales_order.items.filter(product=obj.product).first()
+            if item:
+                rev = item.sale_price * obj.quantity_shipped
+                sum_vat += rev
+                from .models import CustomerProductContract
+                c = CustomerProductContract.objects.filter(customer=obj.sales_order.customer, product=obj.product).first()
+                if c:
+                    sum_dc += (rev * c.dc_percent) / 100
+                    sum_rebate += (rev * c.rebate_percent) / 100
+
+        if qs.exists():
+            msg = f"📊 สรุปยอดช่วงที่เลือก: VAT ฿{sum_vat:,.2f} | DC ฿{sum_dc:,.2f} | Rebate ฿{sum_rebate:,.2f}"
+            messages.info(request, msg)
+
+        return super().changelist_view(request, extra_context=extra_context)
 
     # 🎯 1. ยอดรวม VAT (Inc. VAT)
     def get_revenue_inc_vat(self, obj):
@@ -1834,6 +1890,21 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     def get_so_number(self, obj):
         return obj.sales_order.so_number
     get_so_number.short_description = "เลขที่ใบสั่งซื้อ"
+
+    @admin.action(description="💰 ยืนยันเฉพาะยอดรับเงิน (Revenue)")
+    def confirm_revenue_only(self, request, queryset):
+        queryset.update(is_revenue_confirmed=True)
+        self.message_user(request, "ยืนยันยอดรับเงินเรียบร้อยแล้ว")
+
+    @admin.action(description="🚚 ยืนยันเฉพาะค่า DC")
+    def confirm_dc_only(self, request, queryset):
+        queryset.update(is_dc_confirmed=True)
+        self.message_user(request, "ยืนยันยอด DC เรียบร้อยแล้ว")
+
+    @admin.action(description="🎁 ยืนยันเฉพาะยอด Rebate")
+    def confirm_rebate_only(self, request, queryset):
+        queryset.update(is_rebate_confirmed=True)
+        self.message_user(request, "ยืนยันยอด Rebate เรียบร้อยแล้ว")
 
     actions = ['confirm_selected_items']
     @admin.action(description="✅ ยืนยันยอดรายการที่เลือก (สินค้า/DC/Rebate)")
