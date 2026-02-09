@@ -142,23 +142,3 @@ STORAGES = {
 # บังคับให้คุกกี้ส่งผ่าน HTTPS เท่านั้น (Railway เป็น HTTPS)
 CSRF_COOKIE_SECURE = True
 SESSION_COOKIE_SECURE = True
-JAZZMIN_SETTINGS = {
-    "site_title": "Meebun ERP",
-    "site_header": "Meebun ERP",
-    "site_brand": "Meebun ERP Admin",
-    "welcome_sign": "ยินดีต้อนรับสู่ระบบจัดการ Meebunpanit",
-    "copyright": "Meebunpanit Co., Ltd",
-    "search_model": ["stocks.Product", "stocks.SalesOrder"], # ช่องค้นหาด่วนบน Header
-    "show_ui_builder": True, # ✅ เปิดตัวปรับแต่งสีขวาล่าง (เปรมสามารถจิ้มเลือกสีที่ชอบได้เองเลยค่ะ)
-    
-    # เมนู Sidebar
-    "navigation_expanded": True,
-    "icons": {
-        "auth": "fas fa-users-cog",
-        "auth.user": "fas fa-user",
-        "stocks.Product": "fas fa-box",
-        "stocks.SalesOrder": "fas fa-file-invoice-dollar",
-        "stocks.PurchaseOrder": "fas fa-shopping-cart",
-        "stocks.ProductionOrder": "fas fa-industry",
-    },
-}
