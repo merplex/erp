@@ -1520,31 +1520,36 @@ class SalesReportAdmin(admin.ModelAdmin):
     )
     search_fields = ('name', 'barcodes__code', 'sales_items__sales_order__customer__company_name') # Path: customer__company_name
 
+    # ใน stocks/admin.py
+
     def get_queryset(self, request):
-        qs = super().get_queryset(request)
+        # 🎯 จุดที่ 1: เติม .distinct() ทันทีหลัง super() 
+        # เพื่อป้องกันไม่ให้สินค้าโผล่มาซ้ำจากการ Join ตารางลูกค้า/รายการขาย
+        qs = super().get_queryset(request).distinct()
+        
         period = request.GET.get('period', '1year')
         now = timezone.now()
         
-        # กรองสถานะที่ปิดใบงานแล้ว
-        date_query = Q(sales_items__sales_order__status__in=['Shipped', 'Completed'])
+        # 🎯 จุดที่ 2: ตรวจสอบว่าชื่อสถานะใน DB ตรงกับ 'Shipped' หรือ 'ปิดงาน/ครบถ้วน' ไหม
+        date_query = Q(sales_items__sales_order__status__in=['Shipped', 'Completed', 'ปิดงาน/ครบถ้วน', 'ส่งบางส่วน'])
         
         if period == '1year':
             date_query &= Q(sales_items__sales_order__order_date__year=now.year)
-        elif period == '4months':
-            date_query &= Q(sales_items__sales_order__order_date__gte=now - timedelta(days=120))
-        elif period == '1month':
-            date_query &= Q(sales_items__sales_order__order_date__gte=now - timedelta(days=30))
+        # ... elif อื่นๆ ของเปรม ...
 
-        # คำนวณรายบรรทัด
-        return qs.annotate(
+        qs = qs.annotate(
             total_qty=Sum('sales_items__quantity_shipped', filter=date_query),
             total_sales_val=Sum(
                 F('sales_items__sale_price') * F('sales_items__quantity_shipped'), 
                 filter=date_query,
                 output_field=DecimalField()
             )
-        ).filter(total_qty__gt=0)
+        )
 
+        # 🎯 จุดที่ 3: "ไม้ตาย" ที่ทำให้ Search ทำงานแม่น
+        # เราจะกรองทิ้ง "สินค้าที่ไม่มีส่วนเกี่ยวข้องกับยอดขายในเงื่อนไขที่เรา Search" 
+        return qs.filter(total_qty__gt=0)
+    
     # 🎯 หัวใจหลัก: คำนวณยอดรวมของทั้งหน้า (Grand Total)
     def changelist_view(self, request, extra_context=None):
         response = super().changelist_view(request, extra_context)
