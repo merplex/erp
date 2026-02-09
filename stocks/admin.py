@@ -213,9 +213,16 @@ class SalesPaymentInline(admin.TabularInline):
     get_status_from_logs.short_description = "สถานะรับเงิน"
 
     def has_change_permission(self, request, obj=None):
-        # 🎯 ถ้าใบสั่งซื้อนี้มียอดที่คอนเฟิร์มใน C6 แล้ว ห้ามแก้หน้า C3 เด็ดขาด
-        if obj and obj.salesdeliverylog_set.filter(is_revenue_confirmed=True).exists():
-            return False
+        # 🎯 ถ้าใบสั่งขายนี้มียอดที่คอนเฟิร์มใน C6 แล้ว ห้ามแก้หน้า C3
+        if obj:
+            from .models import SalesDeliveryLog # 👈 Import มาใช้ตรงๆ
+            already_confirmed = SalesDeliveryLog.objects.filter(
+                sales_order=obj, 
+                is_revenue_confirmed=True
+            ).exists()
+            
+            if already_confirmed:
+                return False
         return True
     
 # ---------------------------------------------------------
@@ -823,17 +830,33 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
 
     def get_confirmed_status(self, obj):
         # ไปแอบดูใน Log ว่ามีการติ๊กรับชำระเงินหรือยัง
-        confirmed = obj.sales_order.salesdeliverylog_set.filter(is_revenue_confirmed=True).exists()
+        from .models import SalesDeliveryLog # 👈 Import มาใช้ตรงๆ
+        
+        # ใช้ obj (ที่เป็น SalesOrder) ไปหาใน Log
+        confirmed = SalesDeliveryLog.objects.filter(
+            sales_order=obj, 
+            is_revenue_confirmed=True
+        ).exists()
+        
         if confirmed:
-            return format_html('<span style="color:green;">✔ ยืนยันยอดจากใบส่งของแล้ว</span>')
-        return "รอยืนยันยอด"
+            return format_html('<span style="color:green;"><b>✔ ยืนยันยอดจากใบส่งของแล้ว</b></span>')
+        return format_html('<span style="color:gray;">รอยืนยันยอด</span>')
+        
     get_confirmed_status.short_description = "สถานะการตรวจสอบ"
 
     def has_change_permission(self, request, obj=None):
-        # 🎯 ถ้ามีการยืนยันใน C6 แล้ว ห้ามมือบอนมาแก้ใน C3!
-        if obj and obj.salesdeliverylog_set.filter(is_revenue_confirmed=True).exists():
-            return False
-        return True
+        if obj:
+            # ดึง Model หลักมาเช็กตรงๆ เลยว่ามีการ Confirm หรือยัง
+            from .models import SalesDeliveryLog 
+            already_confirmed = SalesDeliveryLog.objects.filter(
+                sales_order=obj, 
+                is_revenue_confirmed=True
+            ).exists()
+            
+            if already_confirmed:
+                return False # สั่งล็อก ห้ามแก้ไข
+                
+        return super().has_change_permission(request, obj)
 
 @admin.register(ProductionOrder)
 class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
