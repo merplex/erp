@@ -1815,10 +1815,10 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
             return format_html('<span>{}% (<b>฿{:,.2f}</b>)</span>', contract.rebate_percent, reb_amt)
         return "-"
     get_rebate_value.short_description = "ยอด Rebate"
-    
+
     # 🎯 4. คำนวณยอดแยกส่วน Non-VAT (ยอดก่อนภาษี)
     def get_revenue_no_vat(self, obj):
-        item = obj.sales_order.sales_items.filter(product=obj.product).first()
+        item = obj.sales_order.items.filter(product=obj.product).first()
         if item:
             # คำนวณถอยหลัง 7% (หรือใช้ฟิลด์ vat_percent จาก SO ถ้ามี)
             total_inc_vat = item.sale_price * obj.quantity_shipped
