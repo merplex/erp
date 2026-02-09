@@ -1732,8 +1732,8 @@ class SalesReportAdmin(admin.ModelAdmin):
 class ShipmentReconciliation(SalesDeliveryLog):
     class Meta:
         proxy = True
-        verbose_name = 'C6. ตรวจสอบรายรับและ Rebate (ตามใบส่ง)'
-        verbose_name_plural = 'C6. ตรวจสอบรายรับและ Rebate (ตามใบส่ง)'
+        verbose_name = 'C6. ตรวจสอบรายรับ&DC&Rebate (ใบส่งของ)'
+        verbose_name_plural = 'C6. ตรวจสอบรายรับ&DC&Rebate (ใบส่งของ)'
 
 @admin.register(ShipmentReconciliation)
 class ShipmentReconciliationAdmin(admin.ModelAdmin):
@@ -1750,7 +1750,7 @@ class ShipmentReconciliationAdmin(admin.ModelAdmin):
     # --- คำนวณยอดเงินตามจำนวนที่ส่งจริง ---
     def get_revenue_inc_vat(self, obj):
         # ดึงราคาขายจาก SalesItem มาคูณยอดส่งในใบนี้
-        item = obj.sales_order.sales_items.filter(product=obj.product).first()
+        item = obj.sales_order.items.filter(product=obj.product).first()
         if item:
             total = item.sale_price * obj.quantity_shipped
             return f"{total:,.2f}"
@@ -1758,7 +1758,7 @@ class ShipmentReconciliationAdmin(admin.ModelAdmin):
     get_revenue_inc_vat.short_description = "ยอดรวม VAT"
 
     def get_revenue_no_vat(self, obj):
-        item = obj.sales_order.sales_items.filter(product=obj.product).first()
+        item = obj.sales_order.items.filter(product=obj.product).first()
         if item:
             total = (item.sale_price * obj.quantity_shipped) / 1.07
             return f"{total:,.2f}"
