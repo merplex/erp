@@ -1784,7 +1784,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
         'sales_order__customer'
     )
     
-    search_fields = ('sales_order__so_number', 'product__name', 'product__barcode') 
+    search_fields = ('sales_order__so_number', 'product__name', 'barcodes__code') 
     ordering = ('-shipped_date', 'sales_order__so_number')
 
     # --- 📅 จัดการวันที่ ---
