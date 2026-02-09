@@ -1780,7 +1780,7 @@ class ShipmentReconciliationAdmin(admin.ModelAdmin):
         return "0.00"
     get_revenue_no_vat.short_description = "ยอด Non-VAT"
 
-    
+
     # --- Action ยืนยันยอดแบบแยกส่วน ---
     actions = ['confirm_all_selected', 'confirm_only_dc']
 
@@ -1940,7 +1940,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
         queryset.update(is_rebate_confirmed=True)
         self.message_user(request, "ยืนยันยอด Rebate เรียบร้อยแล้ว")
 
-    actions = ['confirm_selected_items']
+    actions = ['confirm_revenue_only', 'confirm_dc_only', 'confirm_rebate_only', 'confirm_selected_items']
     @admin.action(description="✅ ยืนยันยอดรายการที่เลือก (สินค้า/DC/Rebate)")
     def confirm_selected_items(self, request, queryset):
         queryset.update(is_revenue_confirmed=True, is_dc_confirmed=True, is_rebate_confirmed=True)
