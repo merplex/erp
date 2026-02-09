@@ -1543,7 +1543,7 @@ class SalesReportAdmin(admin.ModelAdmin):
                 filter=date_query,
                 output_field=DecimalField()
             )
-        ).filter(total_qty__gt=0)
+        )
 
     # 🎯 หัวใจหลัก: คำนวณยอดรวมของทั้งหน้า (Grand Total)
     def changelist_view(self, request, extra_context=None):
