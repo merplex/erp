@@ -30,7 +30,7 @@ from django.template.response import TemplateResponse
 from django.urls import reverse # ✅ 3บรรทัดนี้ สำหรับระบบล็อคเอกสาร
 from django.contrib.contenttypes.models import ContentType
 from datetime import timedelta
-from datetime import datetime, date
+from django.utils import timezone
 from decimal import Decimal
 
 # 📅 คลาสพิเศษสำหรับสร้างช่องเลือกวันที่ "เริ่มต้น - สิ้นสุด" เอง
@@ -1063,7 +1063,7 @@ class ProductTagAdmin(admin.ModelAdmin):
 class PaymentDateForm(forms.Form):
     payment_date = forms.DateField(
         label="ระบุวันที่ชำระเงิน",
-        initial=datetime.date.today,
+        initial=timezone.now,
         widget=AdminDateWidget()
     )
 
