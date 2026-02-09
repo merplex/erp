@@ -19,7 +19,7 @@ from django.utils.html import format_html
 from django.core.exceptions import ValidationError
 from django.forms import TextInput
 from django.db import models # เพิ่มเพื่อรองรับ formfield_overrides
-from django.db.models import Q, Sum, F, DecimalField, ExpressionWrapper
+from django.db.models import Subquery, OuterRef,Q, Sum, F, DecimalField, ExpressionWrapper
 from django import forms # ✅ เพิ่มบรรทัดนี้ครับ ทำระบบ tag checkbox
 from django.utils.safestring import mark_safe # ✅ ต้องมีบรรทัดนี้ครับ
 # เพิ่มที่บรรทัดบนสุดของไฟล์ครับ
@@ -1523,42 +1523,47 @@ class SalesReportAdmin(admin.ModelAdmin):
     # ใน stocks/admin.py
 
     def get_queryset(self, request):
-        qs = super().get_queryset(request) # ✨ ตัวนี้จะรับค่า Search บาร์โค้ดมาให้เปรม
+        # 1. ตั้งต้นที่สินค้า (Proxy Model)
+        qs = super().get_queryset(request)
         
         period = request.GET.get('period', '1year')
         now = timezone.now()
         
-        # 1. สร้างเงื่อนไขวันที่ (ดึงมาจาก Filter ที่เปรมกด)
-        date_filter = Q(sales_order__status__in=['Shipped', 'Completed', 'ปิดงาน/ครบถ้วน', 'ส่งบางส่วน'])
+        # 2. สร้างเงื่อนไขการกรอง (เน้นที่ยอดส่งสำเร็จเท่านั้น)
+        # กรองสถานะใบสั่งซื้อที่ยอมรับได้
+        date_query = Q(sales_order__status__in=['Shipped', 'Completed', 'ปิดงาน/ครบถ้วน', 'ส่งบางส่วน'])
         
         if period == '1year':
-            date_filter &= Q(sales_order__order_date__year=now.year)
+            date_query &= Q(sales_order__order_date__year=now.year)
         elif period == '4months':
-            date_filter &= Q(sales_order__order_date__gte=now - timedelta(days=120))
+            date_query &= Q(sales_order__order_date__gte=now - timedelta(days=120))
         elif period == '1month':
-            date_filter &= Q(sales_order__order_date__gte=now - timedelta(days=30))
+            date_query &= Q(sales_order__order_date__gte=now - timedelta(days=30))
 
-        # 2. ใช้ Subquery: ไปบวกยอด "ส่งสำเร็จ" ของสินค้านั้นๆ มาให้จบในตัวมันเอง
-        # วิธีนี้จะป้องกันยอดเบิ้ล 3 เท่าได้ 100% ครับ
+        # 3. ใช้ Subquery เพื่อคำนวณยอด "ส่งสำเร็จ" (quantity_shipped) โดยเฉพาะ
+        # วิธีนี้จะดึงยอด 700 มาโชว์ (ไม่ใช่ 2,100 และไม่เบิ้ลเป็น 6,300)
         shipped_subquery = SalesItem.objects.filter(
-            product=OuterRef('pk'), # 🎯 เชื่อมกับสินค้าทีละตัว
-            **{f"{k}": v for k, v in date_filter.children} # ใส่เงื่อนไขวันที่และสถานะ
+            product=OuterRef('pk'),
+            **{f"{k}": v for k, v in date_query.children} # ส่งเงื่อนไข Shipped และวันที่เข้าไป
         ).values('product').annotate(
-            total=Sum('quantity_shipped') # 🎯 บวกเฉพาะยอดส่งสำเร็จ
+            total=Sum('quantity_shipped') # 🎯 เปลี่ยนจาก ordered เป็น shipped ตรงนี้ครับ!
         ).values('total')
 
         revenue_subquery = SalesItem.objects.filter(
             product=OuterRef('pk'),
-            **{f"{k}": v for k, v in date_filter.children}
+            **{f"{k}": v for k, v in date_query.children}
         ).values('product').annotate(
-            total=Sum(F('sale_price') * F('quantity_shipped'), output_field=DecimalField())
+            total=Sum(
+                F('sale_price') * F('quantity_shipped'), # 🎯 คำนวณรายได้จากยอดส่งจริงเท่านั้น
+                output_field=DecimalField()
+            )
         ).values('total')
 
-        # 3. เอาผลลัพธ์มาแปะที่รายงาน
+        # 4. เอาค่าที่บวกได้มาแปะในรายงาน
         return qs.annotate(
             total_qty=Subquery(shipped_subquery),
             total_sales_val=Subquery(revenue_subquery)
-        ).filter(total_qty__gt=0) # โชว์เฉพาะตัวที่มียอดส่ง
+        ).filter(total_qty__gt=0) # 🎯 โชว์เฉพาะสินค้าที่ "ส่งสำเร็จ" จริงๆ ในรอบนั้นๆ
     
     # 🎯 หัวใจหลัก: คำนวณยอดรวมของทั้งหน้า (Grand Total)
     def changelist_view(self, request, extra_context=None):
