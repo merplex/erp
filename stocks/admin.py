@@ -1520,7 +1520,30 @@ class SalesReportAdmin(admin.ModelAdmin):
     )
     search_fields = ('name', 'barcodes__code', 'sales_items__sales_order__customer__company_name') # Path: customer__company_name
 
-    # ใน stocks/admin.py
+    actions = ['calculate_selected_totals']
+    @admin.action(description="📝 สรุปยอดรวมรายการที่เลือก")
+    def calculate_selected_totals(self, request, queryset):
+        from django.db.models import Sum
+        
+        # ดึงผลรวมจากตัวแปรที่เราคำนวณไว้ใน get_queryset (total_qty และ total_sales_val)
+        # เนื่องจากเป็นค่าจากการ annotate เราสามารถใช้ Sum() ซ้ำใน aggregate ได้เลยครับ
+        totals = queryset.aggregate(
+            sum_qty=Sum('total_qty'),
+            sum_revenue=Sum('total_sales_val')
+        )
+
+        total_qty = totals['sum_qty'] or 0
+        total_revenue = totals['sum_revenue'] or 0
+        count = queryset.count()
+
+        # แสดงผลเป็นแถบข้อความสีฟ้า (Info Message) ด้านบน
+        self.message_user(
+            request,
+            f"📊 สรุปข้อมูลที่เลือก ({count} รายการ): "
+            f"ส่งสำเร็จรวม: {total_qty:,.0f} ชิ้น | "
+            f"ยอดขายรวม: ฿{total_revenue:,.2f}",
+            messages.INFO
+        )
 
     def get_queryset(self, request):
         # 1. ตั้งต้นที่สินค้า (Proxy Model)
