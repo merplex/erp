@@ -1743,7 +1743,8 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
         'confirm_selected_items', 
         'confirm_revenue_only', 
         'confirm_dc_only', 
-        'confirm_rebate_only'
+        'confirm_rebate_only',
+        'calculate_selected_totals'
     ]
 
     list_display = (
@@ -1769,6 +1770,45 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
         return "-"
     short_shipped_date.short_description = "วันที่ส่ง"
     short_shipped_date.admin_order_field = 'shipped_date'
+
+    @admin.action(description="📝 สรุปยอดรวมรายการที่เลือก (เฉพาะที่ติ๊ก)")
+    def calculate_selected_totals(self, request, queryset):
+        total_qty = 0
+        total_revenue = Decimal('0')
+        total_dc = Decimal('0')
+        total_rebate = Decimal('0')
+        count = queryset.count()
+
+        for obj in queryset:
+            # ดึงข้อมูลสินค้าเพื่อเอาราคาขาย
+            item = obj.sales_order.items.filter(product=obj.product).first()
+            if item:
+                qty = obj.quantity_shipped
+                rev = item.sale_price * qty
+                
+                total_qty += qty
+                total_revenue += rev
+                
+                # ดึง Contract เพื่อคำนวณ DC/Rebate
+                from .models import CustomerProductContract
+                c = CustomerProductContract.objects.filter(
+                    customer=obj.sales_order.customer, 
+                    product=obj.product
+                ).first()
+                
+                if c:
+                    total_dc += (rev * c.dc_percent) / Decimal('100')
+                    total_rebate += (rev * c.rebate_percent) / Decimal('100')
+
+        # แสดงผลลัพธ์เป็นข้อความ Alert สีเขียวด้านบน
+        msg = (
+            f"✅ สรุป {count} รายการที่เลือก: "
+            f"จำนวนรวม: {total_qty:,} ชิ้น | "
+            f"ยอดรวม VAT: ฿{total_revenue:,.2f} | "
+            f"DC: ฿{total_dc:,.2f} | "
+            f"Rebate: ฿{total_rebate:,.2f}"
+        )
+        self.message_user(request, msg, messages.SUCCESS)
 
     # --- 📊 สรุปยอดเงิน (Banner สีเหลือง) ---
     def changelist_view(self, request, extra_context=None):
