@@ -1810,23 +1810,38 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
 
     def get_dc_value(self, obj):
         from .models import CustomerProductContract
-        c = CustomerProductContract.objects.filter(customer=obj.sales_order.customer, product=obj.product).first()
-        if c:
+        contract = CustomerProductContract.objects.filter(
+            customer=obj.sales_order.customer, 
+            product=obj.product
+        ).first()
+        
+        if contract:
             item = obj.sales_order.items.filter(product=obj.product).first()
-            rev = (item.sale_price * obj.quantity_shipped) if item else 0
-            amt = (rev * c.dc_percent) / 100
-            return format_html('{}% (<b>฿{:,.2f}</b>)', c.dc_percent, amt)
+            revenue = (item.sale_price * obj.quantity_shipped) if item else Decimal('0')
+            dc_amt = (revenue * contract.dc_percent) / Decimal('100')
+            
+            # ✅ แก้ตรงนี้: ฟอร์แมตตัวเลขข้างนอกก่อนส่งเข้า format_html
+            formatted_amt = f"{dc_amt:,.2f}"
+            return format_html('{}% (<b>฿{}</b>)', contract.dc_percent, formatted_amt)
         return "-"
     get_dc_value.short_description = "ยอด DC"
 
+    # 🎯 4. ยอด Rebate (แก้ไขจุดที่ทำให้เกิด ValueError)
     def get_rebate_value(self, obj):
         from .models import CustomerProductContract
-        c = CustomerProductContract.objects.filter(customer=obj.sales_order.customer, product=obj.product).first()
-        if c:
+        contract = CustomerProductContract.objects.filter(
+            customer=obj.sales_order.customer, 
+            product=obj.product
+        ).first()
+        
+        if contract:
             item = obj.sales_order.items.filter(product=obj.product).first()
-            rev = (item.sale_price * obj.quantity_shipped) if item else 0
-            amt = (rev * c.rebate_percent) / 100
-            return format_html('{}% (<b>฿{:,.2f}</b>)', c.rebate_percent, amt)
+            revenue = (item.sale_price * obj.quantity_shipped) if item else Decimal('0')
+            reb_amt = (revenue * contract.rebate_percent) / Decimal('100')
+            
+            # ✅ แก้ตรงนี้เช่นกันครับ
+            formatted_amt = f"{reb_amt:,.2f}"
+            return format_html('{}% (<b>฿{}</b>)', contract.rebate_percent, formatted_amt)
         return "-"
     get_rebate_value.short_description = "ยอด Rebate"
 
