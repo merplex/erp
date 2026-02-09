@@ -561,7 +561,7 @@ class SalesItem(models.Model):
 class SalesDeliveryLog(models.Model):
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='delivery_logs')
     product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้าที่ส่ง")
-    quantity_shipped = models.PositiveIntegerField(verbose_name="จำนวนที่ส่งครั้งนี้")
+    quantity_shipped = models.PositiveIntegerField(verbose_name="จำนวน")
     shipping_no = models.CharField(max_length=100, blank=True, verbose_name="เลขใบขนส่ง/Invoice ของเรา")
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     shipped_date = models.DateTimeField(

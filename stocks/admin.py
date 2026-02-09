@@ -1729,25 +1729,40 @@ class SalesReportAdmin(admin.ModelAdmin):
         profit_display = "{:,.2f}".format(profit)
         return format_html('<b style="color: {};">{}</b>', color, profit_display)
 # --- ฟังก์ชันส่วนยืนยันยอดชำระ ยอด dc rebate ที่โดนหัก --- 
-class ShipmentReconciliation(SalesDeliveryLog):
+class ShipmentAccounting(SalesDeliveryLog):
     class Meta:
         proxy = True
-        verbose_name = 'C6. ตรวจสอบรายรับ&DC&Rebate (ใบส่งของ)'
-        verbose_name_plural = 'C6. ตรวจสอบรายรับ&DC&Rebate (ใบส่งของ)'
+        verbose_name = 'C6. ตรวจสอบรายรับ & DC Rebate'
+        verbose_name_plural = 'C6. ตรวจสอบรายรับ & DC Rebate'
 
-@admin.register(ShipmentReconciliation)
-class ShipmentReconciliationAdmin(admin.ModelAdmin):
-    # 🎯 แสดงรายการเรียงตามวันส่งของ
+# 2. ตั้งค่า Admin ตัวเดียวจบ
+@admin.register(ShipmentAccounting)
+class ShipmentAccountingAdmin(admin.ModelAdmin):
+    # ✅ เพิ่ม Action ที่ต้องการให้โชว์แยกกันใน List นี้ครับ
+    actions = [
+        'confirm_selected_items', 
+        'confirm_revenue_only', 
+        'confirm_dc_only', 
+        'confirm_rebate_only'
+    ]
+
     list_display = (
-        'short_shipped_date', 'get_so_number', 'product', 'quantity_shipped',
-        'get_revenue_no_vat', 'get_revenue_inc_vat',
+        'short_shipped_date', 'get_so_number', 'product', 'quantity_shipped', 
+        'get_revenue_no_vat', 'get_revenue_inc_vat', 
+        'get_dc_value', 'get_rebate_value',
         'is_revenue_confirmed', 'is_dc_confirmed', 'is_rebate_confirmed'
     )
-    list_filter = (('shipped_date', admin.DateFieldListFilter), 'is_revenue_confirmed', 'sales_order__customer')
-    search_fields = ('sales_order__so_number', 'product__name')
-    ordering = ('-shipped_date',)
+    
+    list_filter = (
+        ('shipped_date', admin.DateFieldListFilter), 
+        'is_revenue_confirmed', 'is_dc_confirmed', 'is_rebate_confirmed',
+        'sales_order__customer'
+    )
+    
+    search_fields = ('sales_order__so_number', 'product__name', 'product__barcode') 
+    ordering = ('-shipped_date', 'sales_order__so_number')
 
-    # 🎯 2. เพิ่ม Description และ Order Field ให้วันที่
+    # --- 📅 จัดการวันที่ ---
     def short_shipped_date(self, obj):
         if obj.shipped_date:
             return obj.shipped_date.strftime('%d/%m/%y %H:%M')
@@ -1755,43 +1770,67 @@ class ShipmentReconciliationAdmin(admin.ModelAdmin):
     short_shipped_date.short_description = "วันที่ส่ง"
     short_shipped_date.admin_order_field = 'shipped_date'
 
-    # --- คำนวณยอดเงินตามจำนวนที่ส่งจริง ---
+    # --- 📊 สรุปยอดเงิน (Banner สีเหลือง) ---
+    def changelist_view(self, request, extra_context=None):
+        cl = self.get_changelist_instance(request)
+        qs = cl.get_queryset(request)
+        
+        sum_vat = sum_dc = sum_rebate = Decimal('0') # ใช้ Decimal ป้องกัน Error
+        for obj in qs:
+            item = obj.sales_order.items.filter(product=obj.product).first()
+            if item:
+                rev = item.sale_price * obj.quantity_shipped
+                sum_vat += rev
+                from .models import CustomerProductContract
+                c = CustomerProductContract.objects.filter(customer=obj.sales_order.customer, product=obj.product).first()
+                if c:
+                    sum_dc += (rev * c.dc_percent) / Decimal('100')
+                    sum_rebate += (rev * c.rebate_percent) / Decimal('100')
+
+        if qs.exists():
+            msg = f"📊 สรุปยอดช่วงที่เลือก: ยอดรวม ฿{sum_vat:,.2f} | DC ฿{sum_dc:,.2f} | Rebate ฿{sum_rebate:,.2f}"
+            messages.info(request, msg)
+
+        return super().changelist_view(request, extra_context=extra_context)
+
+    # --- 💰 ฟังก์ชันคำนวณเงินต่างๆ ---
     def get_revenue_inc_vat(self, obj):
-        # ดึงราคาขายจาก SalesItem มาคูณยอดส่งในใบนี้
         item = obj.sales_order.items.filter(product=obj.product).first()
-        if item:
-            total = item.sale_price * obj.quantity_shipped
-            return f"{total:,.2f}"
-        return "0.00"
+        return f"{(item.sale_price * obj.quantity_shipped):,.2f}" if item else "0.00"
     get_revenue_inc_vat.short_description = "ยอดรวม VAT"
 
     def get_revenue_no_vat(self, obj):
-    # 1. ดึงรายการสินค้าเพื่อเอาราคาขาย (ใช้ .items ตามที่เราแก้รอบแรก)
         item = obj.sales_order.items.filter(product=obj.product).first()
-        
         if item and obj.sales_order.customer:
-            # 2. ดึงค่า VAT จากลูกค้าโดยตรง
-            customer_vat = obj.sales_order.customer.vat  # เป็น Decimal อยู่แล้วตามที่เปรมบอก
-            
-            # 3. คำนวณยอดรวม (Inc. VAT)
-            total_inc_vat = item.sale_price * obj.quantity_shipped
-            
-            # 4. คำนวณตัวหาร (Vat Divisor)
-            # สูตร: 1 + (vat / 100)
-            vat_divisor = Decimal('1') + (customer_vat / Decimal('100'))
-            
-            # 5. ยอด Non-VAT = ยอดรวม / ตัวหาร
-            total_no_vat = total_inc_vat / vat_divisor
-            
-            return f"{total_no_vat:,.2f}"
-        
+            vat_divisor = Decimal('1') + (obj.sales_order.customer.vat / Decimal('100'))
+            no_vat = (item.sale_price * obj.quantity_shipped) / vat_divisor
+            return f"{no_vat:,.2f}"
         return "0.00"
     get_revenue_no_vat.short_description = "ยอด Non-VAT"
 
+    def get_dc_value(self, obj):
+        from .models import CustomerProductContract
+        c = CustomerProductContract.objects.filter(customer=obj.sales_order.customer, product=obj.product).first()
+        if c:
+            item = obj.sales_order.items.filter(product=obj.product).first()
+            rev = (item.sale_price * obj.quantity_shipped) if item else 0
+            amt = (rev * c.dc_percent) / 100
+            return format_html('{}% (<b>฿{:,.2f}</b>)', c.dc_percent, amt)
+        return "-"
+    get_dc_value.short_description = "ยอด DC"
 
-    # --- Action ยืนยันยอดแบบแยกส่วน ---
-    actions = ['confirm_dc_only', 'confirm_rebate_only', 'confirm_revenue_only','confirm_all_selected']
-    
+    def get_rebate_value(self, obj):
+        from .models import CustomerProductContract
+        c = CustomerProductContract.objects.filter(customer=obj.sales_order.customer, product=obj.product).first()
+        if c:
+            item = obj.sales_order.items.filter(product=obj.product).first()
+            rev = (item.sale_price * obj.quantity_shipped) if item else 0
+            amt = (rev * c.rebate_percent) / 100
+            return format_html('{}% (<b>฿{:,.2f}</b>)', c.rebate_percent, amt)
+        return "-"
+    get_rebate_value.short_description = "ยอด Rebate"
+
+    # --- ✅ Actions ---
     @admin.action(description="💰 ยืนยันเฉพาะยอดรับเงิน (Revenue)")
     def confirm_revenue_only(self, request, queryset):
         queryset.update(is_revenue_confirmed=True)
@@ -1807,149 +1846,11 @@ class ShipmentReconciliationAdmin(admin.ModelAdmin):
         queryset.update(is_rebate_confirmed=True)
         self.message_user(request, "ยืนยันยอด Rebate เรียบร้อยแล้ว")
 
-    @admin.action(description="✅ ยืนยันยอดสินค้า + DC + Rebate (ครบ)")
-    def confirm_all_selected(self, request, queryset):
-        queryset.update(
-            is_revenue_confirmed=True, 
-            is_dc_confirmed=True, 
-            is_rebate_confirmed=True,
-            confirmed_date=timezone.now()
-        )
-        self.message_user(request, "ยืนยันยอดครบทุกส่วนแล้ว รายการจะไม่หายไปแต่สถานะจะเปลี่ยนเป็น True")
-
-    def get_so_number(self, obj):
-        return obj.sales_order.so_number
-    get_so_number.short_description = "เลขที่ใบสั่งซื้อ"
-
-class ShipmentAccounting(SalesDeliveryLog):
-    class Meta:
-        proxy = True
-        verbose_name = 'C6. ตรวจสอบรายรับ & DC Rebate'
-        verbose_name_plural = 'C6. ตรวจสอบรายรับ & DC Rebate'
-
-# stocks/admin.py
-
-@admin.register(ShipmentAccounting)
-class ShipmentAccountingAdmin(admin.ModelAdmin):
-    list_display = (
-        'short_shipped_date', 'get_so_number', 'product', 'quantity_shipped', 
-        'get_revenue_no_vat', 'get_revenue_inc_vat', 
-        'get_dc_value', 'get_rebate_value',
-        'is_revenue_confirmed', 'is_dc_confirmed', 'is_rebate_confirmed'
-    )
-    search_fields = ('sales_order__so_number', 'product__name', 'product__barcode') 
-    list_filter = (
-        ('shipped_date', admin.AllValuesFieldListFilter), # จะมีรายการวันที่ที่มีข้อมูลโชว์ขึ้นมาให้เลือกเป็นวันๆ
-        'is_revenue_confirmed', 'is_dc_confirmed', 'is_rebate_confirmed',
-        'sales_order__customer'
-    )
-    ordering = ('-shipped_date', 'sales_order__so_number')
-
-    def short_shipped_date(self, obj):
-        if obj.shipped_date:
-            return obj.shipped_date.strftime('%d/%m/%y %H:%M')
-        return "-"
-    short_shipped_date.short_description = "วันที่ส่ง"
-    short_shipped_date.admin_order_field = 'shipped_date' # ทำให้ยังกดเรียงวันที่ได้
-
-    # --- 📊 สรุปยอดตาม Filter (โชว์ Banner สีเหลือง) ---
-    def changelist_view(self, request, extra_context=None):
-        cl = self.get_changelist_instance(request)
-        qs = cl.get_queryset(request)
-        
-        sum_vat, sum_dc, sum_rebate = 0, 0, 0
-        for obj in qs:
-            item = obj.sales_order.items.filter(product=obj.product).first()
-            if item:
-                rev = item.sale_price * obj.quantity_shipped
-                sum_vat += rev
-                from .models import CustomerProductContract
-                c = CustomerProductContract.objects.filter(customer=obj.sales_order.customer, product=obj.product).first()
-                if c:
-                    sum_dc += (rev * c.dc_percent) / 100
-                    sum_rebate += (rev * c.rebate_percent) / 100
-
-        if qs.exists():
-            msg = f"📊 สรุปยอดช่วงที่เลือก: VAT ฿{sum_vat:,.2f} | DC ฿{sum_dc:,.2f} | Rebate ฿{sum_rebate:,.2f}"
-            messages.info(request, msg)
-
-        return super().changelist_view(request, extra_context=extra_context)
-
-    # 🎯 1. ยอดรวม VAT (Inc. VAT)
-    def get_revenue_inc_vat(self, obj):
-        # ✅ ต้องเปลี่ยนมาใช้ .items เหมือนกับตัว Non-VAT ครับ
-        item = obj.sales_order.items.filter(product=obj.product).first()
-        if item:
-            # ยอดรวม VAT คือ ราคาที่บันทึกไว้คูณกับจำนวนที่ส่งจริง
-            total_inc_vat = item.sale_price * obj.quantity_shipped
-            return f"{total_inc_vat:,.2f}"
-        return "0.00"
-    get_revenue_inc_vat.short_description = "ยอดรวม VAT"
-
-    # 🎯 2. ยอดก่อนภาษี (Non-VAT)
-    def get_revenue_no_vat(self, obj):
-    # 1. ดึงรายการสินค้าเพื่อเอาราคาขาย (ใช้ .items ตามที่เราแก้รอบแรก)
-        item = obj.sales_order.items.filter(product=obj.product).first()
-        
-        if item and obj.sales_order.customer:
-            # 2. ดึงค่า VAT จากลูกค้าโดยตรง
-            customer_vat = obj.sales_order.customer.vat  # เป็น Decimal อยู่แล้วตามที่เปรมบอก
-            
-            # 3. คำนวณยอดรวม (Inc. VAT)
-            total_inc_vat = item.sale_price * obj.quantity_shipped
-            
-            # 4. คำนวณตัวหาร (Vat Divisor)
-            # สูตร: 1 + (vat / 100)
-            vat_divisor = Decimal('1') + (customer_vat / Decimal('100'))
-            
-            # 5. ยอด Non-VAT = ยอดรวม / ตัวหาร
-            total_no_vat = total_inc_vat / vat_divisor
-            
-            return f"{total_no_vat:,.2f}"
-        
-        return "0.00"
-    get_revenue_no_vat.short_description = "ยอด Non-VAT"
-
-    # 🎯 3. ยอด DC (แก้บั๊ก ValueError)
-    def get_dc_value(self, obj):
-        from .models import CustomerProductContract
-        contract = CustomerProductContract.objects.filter(
-            customer=obj.sales_order.customer, 
-            product=obj.product
-        ).first()
-        
-        if contract:
-            item = obj.sales_order.items.filter(product=obj.product).first()
-            revenue = (item.sale_price * obj.quantity_shipped) if item else 0
-            dc_amt = (revenue * contract.dc_percent) / 100
-            # ✅ แก้ตรงนี้: ฟอร์แมตตัวเลขใน f-string ให้เสร็จก่อน แล้วส่งเป็น {} ธรรมดา
-            return format_html('<span>{}% (<b>฿{}</b>)</span>', contract.dc_percent, f"{dc_amt:,.2f}")
-        return "-"
-    get_dc_value.short_description = "ยอด DC"
-
-    # 🎯 4. ยอด Rebate (แก้บั๊ก ValueError)
-    def get_rebate_value(self, obj):
-        from .models import CustomerProductContract
-        contract = CustomerProductContract.objects.filter(
-            customer=obj.sales_order.customer, 
-            product=obj.product
-        ).first()
-        
-        if contract:
-            item = obj.sales_order.items.filter(product=obj.product).first()
-            revenue = (item.sale_price * obj.quantity_shipped) if item else 0
-            reb_amt = (revenue * contract.rebate_percent) / 100
-            # ✅ แก้ตรงนี้เช่นกันครับ
-            return format_html('<span>{}% (<b>฿{}</b>)</span>', contract.rebate_percent, f"{reb_amt:,.2f}")
-        return "-"
-    get_rebate_value.short_description = "ยอด Rebate"
-
-    def get_so_number(self, obj):
-        return obj.sales_order.so_number
-    get_so_number.short_description = "เลขที่ใบสั่งซื้อ"
-
-    actions = ['confirm_selected_items']
-    @admin.action(description="✅ ยืนยันยอดรายการที่เลือก (สินค้า/DC/Rebate)")
+    @admin.action(description="✅ ยืนยันยอดทั้งหมด (ครบทุกส่วน)")
     def confirm_selected_items(self, request, queryset):
         queryset.update(is_revenue_confirmed=True, is_dc_confirmed=True, is_rebate_confirmed=True)
-        self.message_user(request, "ยืนยันยอดสำเร็จ ข้อมูลจะไปปรากฏในหน้า C3 (Read-only)")
+        self.message_user(request, "ยืนยันยอดสำเร็จครบถ้วน")
+
+    def get_so_number(self, obj):
+        return obj.sales_order.so_number
+    get_so_number.short_description = "เลขที่ SO"
