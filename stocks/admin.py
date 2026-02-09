@@ -1007,7 +1007,7 @@ class StockPlanningAdmin(admin.ModelAdmin):
         total = on_hand + p_in - p_out + p_prod
         color = "red" if total < 0 else "blue"
         return format_html('<b style="color: {};">{}</b>', color, total)
-    get_available.short_description = "พร้อมขาย (Available)"
+    get_available.short_description = "คาดการณ์ (Plan)"
 
 @admin.register(ProductCategory)
 class ProductCategoryAdmin(admin.ModelAdmin):
