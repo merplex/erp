@@ -1516,9 +1516,9 @@ class SalesReportAdmin(admin.ModelAdmin):
         'name', 'get_total_qty', 'get_total_revenue', 
         'get_total_cost_buy', 'get_total_cost_bom', 'get_profit_margin'
     )
-    list_filter = (DatePeriodFilter, 'category', 'tags',('sales_items__sales_order__customer', admin.RelatedOnlyFieldListFilter), # Path: salesitem -> sales_order -> customer
+    list_filter = (DatePeriodFilter, 'category', 'tags',('salesitem__sales_order__customer', admin.RelatedOnlyFieldListFilter), # Path: salesitem -> sales_order -> customer
     )
-    search_fields = ('name', 'barcodes__code') # Path: customer__company_name
+    search_fields = ('name', 'barcodes__code', 'salesitem__sales_order__customer__company_name') # Path: customer__company_name
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
@@ -1526,24 +1526,24 @@ class SalesReportAdmin(admin.ModelAdmin):
         now = timezone.now()
         
         # กรองสถานะที่ปิดใบงานแล้ว
-        date_query = Q(sales_items__sales_order__status__in=['Shipped', 'Completed'])
+        date_query = Q(salesitem__sales_order__status__in=['Shipped', 'Completed'])
         
         if period == '1year':
-            date_query &= Q(sales_items__sales_order__order_date__year=now.year)
+            date_query &= Q(salesitem__sales_order__order_date__year=now.year)
         elif period == '4months':
-            date_query &= Q(sales_items__sales_order__order_date__gte=now - timedelta(days=120))
+            date_query &= Q(salesitem__sales_order__order_date__gte=now - timedelta(days=120))
         elif period == '1month':
-            date_query &= Q(sales_items__sales_order__order_date__gte=now - timedelta(days=30))
+            date_query &= Q(salesitem__sales_order__order_date__gte=now - timedelta(days=30))
 
         # คำนวณรายบรรทัด
         return qs.annotate(
-            total_qty=Sum('sales_items__quantity_shipped', filter=date_query),
+            total_qty=Sum('salesitem__quantity_shipped', filter=date_query),
             total_sales_val=Sum(
-                F('sales_items__sale_price') * F('sales_items__quantity_shipped'), 
+                F('salesitem__sale_price') * F('salesitem__quantity_shipped'), 
                 filter=date_query,
                 output_field=DecimalField()
             )
-        )
+        ).filter(total_qty__gt=0)
 
     # 🎯 หัวใจหลัก: คำนวณยอดรวมของทั้งหน้า (Grand Total)
     def changelist_view(self, request, extra_context=None):
