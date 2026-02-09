@@ -1472,7 +1472,7 @@ class IncomeReportAdmin(DocumentLockMixin, admin.ModelAdmin):
         return format_html('<b style="color:{}; font-size:1.1em;">{}</b>', color, f"{max(0, bal):,.2f}")
     get_balance_due_display.short_description = "ยอดเงินคงค้าง (Balance Due)"
 
-@admin.register(ShipmentPaymentReport)
+#@admin.register(ShipmentPaymentReport)
 class ShipmentPaymentReportAdmin(admin.ModelAdmin):
     # ✅ โชว์มูลค่าที่ส่ง และวันที่จะได้รับเงินของยอดนั้นๆ
     list_display = ['payment_due_date', 'get_so_number', 'get_customer', 'quantity_shipped', 'get_shipment_value_display', 'get_dc_display','get_rebate_display', 'get_total_with_vat_display']
