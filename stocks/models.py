@@ -568,13 +568,17 @@ class SalesDeliveryLog(models.Model):
         default=timezone.now, db_index=True,
         verbose_name="วันที่ส่งของ"
     )
-
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
-
     dc_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="ยอดหัก DC")
     rebate_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="ยอดหัก Rebate")
     shipment_value = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="ยอดรวมสินค้า (ก่อนหัก)")
     payment_due_date = models.DateField(blank=True, null=True, verbose_name="วันกำหนดรับเงิน")
+    is_revenue_confirmed = models.BooleanField(default=False, verbose_name="ยืนยันยอดรับเงิน")
+    is_dc_confirmed = models.BooleanField(default=False, verbose_name="ยืนยัน DC")
+    is_rebate_confirmed = models.BooleanField(default=False, verbose_name="ยืนยัน Rebate")
+    confirmed_date = models.DateTimeField(null=True, blank=True)
+    # 🎯 ฟิลด์อ้างอิงการจ่ายเงิน (ถ้ามี)
+    payment_note = models.CharField(max_length=255, blank=True, verbose_name="หมายเหตุการจ่าย")
 
     def save(self, *args, **kwargs):
         is_new = self.pk is None

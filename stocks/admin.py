@@ -182,6 +182,20 @@ class SalesPaymentInline(admin.TabularInline):
     verbose_name = "💰 รายการรับเงิน"
     verbose_name_plural = "ประวัติการรับเงิน (กรอกเองกรณีแบ่งจ่าย / หรือกด Action หน้ารวมเพื่อรับเต็มจำนวน)"
     fields = ('payment_date', 'amount', 'remark', 'evidence')
+    readonly_fields = ('get_status_from_logs',)
+
+    def get_status_from_logs(self, obj):
+        # 🎯 สายไฟเชื่อมข้อมูล: ไปดึงยอดที่ยืนยันแล้วจาก SalesDeliveryLog มาโชว์
+        # ถ้าเปรมอยากให้ล็อคยอดอัตโนมัติ เราจะใช้ readonly_fields คลุมทับอีกทีครับ
+        return "ยืนยันแล้วจากหน้า C6" if obj.sales_order.salesdeliverylog_set.filter(is_revenue_confirmed=True).exists() else "รอยืนยัน"
+    get_status_from_logs.short_description = "สถานะรับเงิน"
+
+    def has_change_permission(self, request, obj=None):
+        # 🎯 ถ้าใบสั่งซื้อนี้มียอดที่คอนเฟิร์มใน C6 แล้ว ห้ามแก้หน้า C3 เด็ดขาด
+        if obj and obj.salesdeliverylog_set.filter(is_revenue_confirmed=True).exists():
+            return False
+        return True
+    
 # ---------------------------------------------------------
 # Inline แสดงรายการสินค้าในหน้ากลุ่มสินค้า (Category)
 # ---------------------------------------------------------
@@ -698,7 +712,7 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_filter = ('status', 'order_date', 'customer')
     search_fields = ('so_number', 'po_no_customer', 'customer__company_name', 
         'items__product__barcodes__code')
-    inlines = [SalesItemInline, SalesDeliveryLogInline]
+    inlines = [SalesItemInline, SalesDeliveryLogInline, SalesPaymentInline]
     readonly_fields = ('created_by', 'status') # ล็อค status ให้ระบบจัดการออโต้
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
     actions = ['mark_as_completed']
@@ -785,6 +799,19 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
         if created_count > 0:
             messages.success(request, f"ระบบได้สร้างใบผลิต (PD) ให้โดยอัตโนมัติจำนวน {created_count} รายการแล้วค่ะ")
 
+    def get_confirmed_status(self, obj):
+        # ไปแอบดูใน Log ว่ามีการติ๊กรับชำระเงินหรือยัง
+        confirmed = obj.sales_order.salesdeliverylog_set.filter(is_revenue_confirmed=True).exists()
+        if confirmed:
+            return format_html('<span style="color:green;">✔ ยืนยันยอดจากใบส่งของแล้ว</span>')
+        return "รอยืนยันยอด"
+    get_confirmed_status.short_description = "สถานะการตรวจสอบ"
+
+    def has_change_permission(self, request, obj=None):
+        # 🎯 ถ้ามีการยืนยันใน C6 แล้ว ห้ามมือบอนมาแก้ใน C3!
+        if obj and obj.salesdeliverylog_set.filter(is_revenue_confirmed=True).exists():
+            return False
+        return True
 
 @admin.register(ProductionOrder)
 class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
@@ -1679,3 +1706,144 @@ class SalesReportAdmin(admin.ModelAdmin):
         color = "#28a745" if profit > 0 else "#dc3545"
         profit_display = "{:,.2f}".format(profit)
         return format_html('<b style="color: {};">{}</b>', color, profit_display)
+# --- ฟังก์ชันส่วนยืนยันยอดชำระ ยอด dc rebate ที่โดนหัก --- 
+class ShipmentReconciliation(SalesDeliveryLog):
+    class Meta:
+        proxy = True
+        verbose_name = 'C6. ตรวจสอบรายรับและ Rebate (ตามใบส่ง)'
+        verbose_name_plural = 'C6. ตรวจสอบรายรับและ Rebate (ตามใบส่ง)'
+
+@admin.register(ShipmentReconciliation)
+class ShipmentReconciliationAdmin(admin.ModelAdmin):
+    # 🎯 แสดงรายการเรียงตามวันส่งของ
+    list_display = (
+        'shipped_date', 'get_so_number', 'product', 'quantity_shipped',
+        'get_revenue_no_vat', 'get_revenue_inc_vat',
+        'is_revenue_confirmed', 'is_dc_confirmed', 'is_rebate_confirmed'
+    )
+    list_filter = (('shipped_date', admin.DateFieldListFilter), 'is_revenue_confirmed', 'sales_order__customer')
+    search_fields = ('sales_order__so_number', 'product__name')
+    ordering = ('-shipped_date',)
+
+    # --- คำนวณยอดเงินตามจำนวนที่ส่งจริง ---
+    def get_revenue_inc_vat(self, obj):
+        # ดึงราคาขายจาก SalesItem มาคูณยอดส่งในใบนี้
+        item = obj.sales_order.sales_items.filter(product=obj.product).first()
+        if item:
+            total = item.sale_price * obj.quantity_shipped
+            return f"{total:,.2f}"
+        return "0.00"
+    get_revenue_inc_vat.short_description = "ยอดรวม VAT"
+
+    def get_revenue_no_vat(self, obj):
+        item = obj.sales_order.sales_items.filter(product=obj.product).first()
+        if item:
+            total = (item.sale_price * obj.quantity_shipped) / 1.07
+            return f"{total:,.2f}"
+        return "0.00"
+    get_revenue_no_vat.short_description = "ยอด Non-VAT"
+
+    # --- Action ยืนยันยอดแบบแยกส่วน ---
+    actions = ['confirm_all_selected', 'confirm_only_dc']
+
+    @admin.action(description="✅ ยืนยันยอดสินค้า + DC + Rebate (ครบ)")
+    def confirm_all_selected(self, request, queryset):
+        queryset.update(
+            is_revenue_confirmed=True, 
+            is_dc_confirmed=True, 
+            is_rebate_confirmed=True,
+            confirmed_date=timezone.now()
+        )
+        self.message_user(request, "ยืนยันยอดครบทุกส่วนแล้ว รายการจะไม่หายไปแต่สถานะจะเปลี่ยนเป็น True")
+
+    def get_so_number(self, obj):
+        return obj.sales_order.so_number
+    get_so_number.short_description = "เลขที่ใบสั่งซื้อ"
+
+class ShipmentAccounting(SalesDeliveryLog):
+    class Meta:
+        proxy = True
+        verbose_name = 'C6. ตรวจสอบรายรับ & DC Rebate'
+        verbose_name_plural = 'C6. ตรวจสอบรายรับ & DC Rebate'
+
+@admin.register(ShipmentAccounting)
+class ShipmentAccountingAdmin(admin.ModelAdmin):
+    list_display = (
+        'shipped_date', 'get_so_number', 'product', 'quantity_shipped', 
+        'get_revenue_inc_vat', 'get_dc_value', 'get_rebate_value',
+        'is_revenue_confirmed', 'is_dc_confirmed', 'is_rebate_confirmed'
+    )
+    list_filter = (('shipped_date', admin.DateFieldListFilter), 'is_revenue_confirmed')
+    ordering = ('-shipped_date', 'sales_order__so_number')
+
+    # 🎯 1. คำนวณยอดเงินรวม (Inc. VAT) จากยอดส่งจริง
+    def get_revenue_inc_vat(self, obj):
+        item = obj.sales_order.sales_items.filter(product=obj.product).first()
+        price = item.sale_price if item else 0
+        return f"{price * obj.quantity_shipped:,.2f}"
+    get_revenue_inc_vat.short_description = "ยอดรวม (บาท)"
+
+    # 🎯 2. ดึง DC % จาก Contract มาคำนวณ
+    def get_dc_value(self, obj):
+        from .models import CustomerProductContract
+        contract = CustomerProductContract.objects.filter(
+            customer=obj.sales_order.customer, 
+            product=obj.product
+        ).first()
+        
+        if contract:
+            # สมมติยอดขายรวม VAT คือฐานในการหัก DC
+            item = obj.sales_order.sales_items.filter(product=obj.product).first()
+            revenue = (item.sale_price * obj.quantity_shipped) if item else 0
+            dc_amt = (revenue * contract.dc_percent) / 100
+            return format_html('<span>{}% (<b>฿{:,.2f}</b>)</span>', contract.dc_percent, dc_amt)
+        return "-"
+    get_dc_value.short_description = "ยอด DC"
+
+    # 🎯 3. ดึง Rebate % จาก Contract มาคำนวณ
+    def get_rebate_value(self, obj):
+        from .models import CustomerProductContract
+        contract = CustomerProductContract.objects.filter(
+            customer=obj.sales_order.customer, 
+            product=obj.product
+        ).first()
+        
+        if contract:
+            item = obj.sales_order.sales_items.filter(product=obj.product).first()
+            revenue = (item.sale_price * obj.quantity_shipped) if item else 0
+            reb_amt = (revenue * contract.rebate_percent) / 100
+            return format_html('<span>{}% (<b>฿{:,.2f}</b>)</span>', contract.rebate_percent, reb_amt)
+        return "-"
+    get_rebate_value.short_description = "ยอด Rebate"
+    
+    # 🎯 4. คำนวณยอดแยกส่วน Non-VAT (ยอดก่อนภาษี)
+    def get_revenue_no_vat(self, obj):
+        item = obj.sales_order.sales_items.filter(product=obj.product).first()
+        if item:
+            # คำนวณถอยหลัง 7% (หรือใช้ฟิลด์ vat_percent จาก SO ถ้ามี)
+            total_inc_vat = item.sale_price * obj.quantity_shipped
+            total_no_vat = float(total_inc_vat) / 1.07
+            return f"{total_no_vat:,.2f}"
+        return "0.00"
+    get_revenue_no_vat.short_description = "ยอด Non-VAT"
+
+    # 🎯 5. ดึงเลขที่ใบสั่งซื้อ (ตัวการที่ทำให้ Error E108)
+    def get_so_number(self, obj):
+        # ดึงเลข so_number จากตาราง SalesOrder
+        return obj.sales_order.so_number
+    get_so_number.short_description = "เลขที่ใบสั่งซื้อ"
+
+    # 🎯 6. ฟังก์ชันทำลิงก์กดกระโดดไปหน้า C3 ได้เลย (เผื่อบัญชีอยากเช็ค)
+    def sales_order_link(self, obj):
+        from django.urls import reverse
+        from django.utils.html import format_html
+        url = reverse("admin:stocks_salesorder_change", args=[obj.sales_order.id])
+        return format_html('<a href="{}" style="font-weight:bold;">{}</a>', url, obj.sales_order.so_number)
+    sales_order_link.short_description = "ลิงก์ใบสั่งซื้อ"
+
+    # 🎯 Action ยืนยันยอด
+    actions = ['confirm_selected_items']
+    @admin.action(description="✅ ยืนยันยอดรายการที่เลือก (สินค้า/DC/Rebate)")
+    def confirm_selected_items(self, request, queryset):
+        queryset.update(is_revenue_confirmed=True, is_dc_confirmed=True, is_rebate_confirmed=True)
+        self.message_user(request, "ยืนยันยอดสำเร็จ ข้อมูลจะไปปรากฏในหน้า C3 (Read-only)")
