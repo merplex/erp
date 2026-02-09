@@ -323,7 +323,7 @@ class PendingSaleInline(admin.TabularInline):
         return super().get_queryset(request).filter(
             quantity_ordered__gt=F('quantity_shipped')
         ).exclude(
-            sales_order__status__in=['Shipped', 'Completed', 'Cancelled']
+            sales_order__status__in=['Completed', 'Cancelled']
         )
 
     def get_pending(self, obj):
