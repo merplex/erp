@@ -1766,9 +1766,10 @@ class ShipmentAccounting(SalesDeliveryLog):
         verbose_name = 'C6. ตรวจสอบรายรับ & DC Rebate'
         verbose_name_plural = 'C6. ตรวจสอบรายรับ & DC Rebate'
 
+# stocks/admin.py
+
 @admin.register(ShipmentAccounting)
 class ShipmentAccountingAdmin(admin.ModelAdmin):
-    # 🎯 เพิ่ม get_revenue_no_vat เข้าไปในหน้าจอตามที่เปรมต้องการ
     list_display = (
         'shipped_date', 'get_so_number', 'product', 'quantity_shipped', 
         'get_revenue_no_vat', 'get_revenue_inc_vat', 
@@ -1778,24 +1779,25 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     list_filter = (('shipped_date', admin.DateFieldListFilter), 'is_revenue_confirmed', 'sales_order__customer')
     ordering = ('-shipped_date', 'sales_order__so_number')
 
-    # 🎯 1. คำนวณยอดรวม (Inc. VAT) - แก้จาก .sales_items เป็น .items แล้ว
+    # 🎯 1. ยอดรวม VAT (Inc. VAT)
     def get_revenue_inc_vat(self, obj):
         item = obj.sales_order.items.filter(product=obj.product).first()
         price = item.sale_price if item else 0
         return f"{price * obj.quantity_shipped:,.2f}"
     get_revenue_inc_vat.short_description = "ยอดรวม VAT"
 
-    # 🎯 2. คำนวณยอดแยกส่วน Non-VAT (ยอดก่อนภาษี)
+    # 🎯 2. ยอดก่อนภาษี (Non-VAT)
     def get_revenue_no_vat(self, obj):
         item = obj.sales_order.items.filter(product=obj.product).first()
         if item:
+            # คำนวณด้วย LaTeX: $$Total_{no\_vat} = \frac{Total_{inc\_vat}}{1.07}$$
             total_inc_vat = item.sale_price * obj.quantity_shipped
             total_no_vat = float(total_inc_vat) / 1.07
             return f"{total_no_vat:,.2f}"
         return "0.00"
     get_revenue_no_vat.short_description = "ยอด Non-VAT"
 
-    # 🎯 3. ดึง DC % - แก้จาก .sales_items เป็น .items แล้ว
+    # 🎯 3. ยอด DC (แก้บั๊ก ValueError)
     def get_dc_value(self, obj):
         from .models import CustomerProductContract
         contract = CustomerProductContract.objects.filter(
@@ -1807,11 +1809,12 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
             item = obj.sales_order.items.filter(product=obj.product).first()
             revenue = (item.sale_price * obj.quantity_shipped) if item else 0
             dc_amt = (revenue * contract.dc_percent) / 100
-            return format_html('<span>{}% (<b>฿{:,.2f}</b>)</span>', contract.dc_percent, dc_amt)
+            # ✅ แก้ตรงนี้: ฟอร์แมตตัวเลขใน f-string ให้เสร็จก่อน แล้วส่งเป็น {} ธรรมดา
+            return format_html('<span>{}% (<b>฿{}</b>)</span>', contract.dc_percent, f"{dc_amt:,.2f}")
         return "-"
     get_dc_value.short_description = "ยอด DC"
 
-    # 🎯 4. ดึง Rebate %
+    # 🎯 4. ยอด Rebate (แก้บั๊ก ValueError)
     def get_rebate_value(self, obj):
         from .models import CustomerProductContract
         contract = CustomerProductContract.objects.filter(
@@ -1823,7 +1826,8 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
             item = obj.sales_order.items.filter(product=obj.product).first()
             revenue = (item.sale_price * obj.quantity_shipped) if item else 0
             reb_amt = (revenue * contract.rebate_percent) / 100
-            return format_html('<span>{}% (<b>฿{:,.2f}</b>)</span>', contract.rebate_percent, reb_amt)
+            # ✅ แก้ตรงนี้เช่นกันครับ
+            return format_html('<span>{}% (<b>฿{}</b>)</span>', contract.rebate_percent, f"{reb_amt:,.2f}")
         return "-"
     get_rebate_value.short_description = "ยอด Rebate"
 
