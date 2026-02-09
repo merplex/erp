@@ -1739,13 +1739,18 @@ class ShipmentReconciliation(SalesDeliveryLog):
 class ShipmentReconciliationAdmin(admin.ModelAdmin):
     # 🎯 แสดงรายการเรียงตามวันส่งของ
     list_display = (
-        'shipped_date', 'get_so_number', 'product', 'quantity_shipped',
+        'short_shipped_date', 'get_so_number', 'product', 'quantity_shipped',
         'get_revenue_no_vat', 'get_revenue_inc_vat',
         'is_revenue_confirmed', 'is_dc_confirmed', 'is_rebate_confirmed'
     )
     list_filter = (('shipped_date', admin.DateFieldListFilter), 'is_revenue_confirmed', 'sales_order__customer')
     search_fields = ('sales_order__so_number', 'product__name')
     ordering = ('-shipped_date',)
+
+    def short_shipped_date(self, obj):
+        if obj.shipped_date:
+            return obj.shipped_date.strftime('%d/%m/%y %H:%M')
+        return "-"
 
     # --- คำนวณยอดเงินตามจำนวนที่ส่งจริง ---
     def get_revenue_inc_vat(self, obj):
@@ -1783,6 +1788,21 @@ class ShipmentReconciliationAdmin(admin.ModelAdmin):
 
     # --- Action ยืนยันยอดแบบแยกส่วน ---
     actions = ['confirm_all_selected', 'confirm_only_dc']
+    
+    @admin.action(description="💰 ยืนยันเฉพาะยอดรับเงิน (Revenue)")
+    def confirm_revenue_only(self, request, queryset):
+        queryset.update(is_revenue_confirmed=True)
+        self.message_user(request, "ยืนยันยอดรับเงินเรียบร้อยแล้ว")
+
+    @admin.action(description="🚚 ยืนยันเฉพาะค่า DC")
+    def confirm_dc_only(self, request, queryset):
+        queryset.update(is_dc_confirmed=True)
+        self.message_user(request, "ยืนยันยอด DC เรียบร้อยแล้ว")
+
+    @admin.action(description="🎁 ยืนยันเฉพาะยอด Rebate")
+    def confirm_rebate_only(self, request, queryset):
+        queryset.update(is_rebate_confirmed=True)
+        self.message_user(request, "ยืนยันยอด Rebate เรียบร้อยแล้ว")
 
     @admin.action(description="✅ ยืนยันยอดสินค้า + DC + Rebate (ครบ)")
     def confirm_all_selected(self, request, queryset):
@@ -1925,22 +1945,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
         return obj.sales_order.so_number
     get_so_number.short_description = "เลขที่ใบสั่งซื้อ"
 
-    @admin.action(description="💰 ยืนยันเฉพาะยอดรับเงิน (Revenue)")
-    def confirm_revenue_only(self, request, queryset):
-        queryset.update(is_revenue_confirmed=True)
-        self.message_user(request, "ยืนยันยอดรับเงินเรียบร้อยแล้ว")
-
-    @admin.action(description="🚚 ยืนยันเฉพาะค่า DC")
-    def confirm_dc_only(self, request, queryset):
-        queryset.update(is_dc_confirmed=True)
-        self.message_user(request, "ยืนยันยอด DC เรียบร้อยแล้ว")
-
-    @admin.action(description="🎁 ยืนยันเฉพาะยอด Rebate")
-    def confirm_rebate_only(self, request, queryset):
-        queryset.update(is_rebate_confirmed=True)
-        self.message_user(request, "ยืนยันยอด Rebate เรียบร้อยแล้ว")
-
-    actions = ['confirm_revenue_only', 'confirm_dc_only', 'confirm_rebate_only', 'confirm_selected_items']
+    actions = ['confirm_selected_items']
     @admin.action(description="✅ ยืนยันยอดรายการที่เลือก (สินค้า/DC/Rebate)")
     def confirm_selected_items(self, request, queryset):
         queryset.update(is_revenue_confirmed=True, is_dc_confirmed=True, is_rebate_confirmed=True)
