@@ -684,12 +684,46 @@ class ProductionOrder(models.Model):
     status = models.CharField(max_length=20, default='Draft', choices=STATUS_CHOICES)
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    
+    bom = models.ForeignKey('BOM', on_delete=models.SET_NULL, null=True, blank=True, verbose_name="สูตรที่ใช้ผลิต")
+
+    @property
+    def quantity_pending_receipt(self):
+        """สำหรับหน้า C1: ยอดที่ยังผลิตไม่ครบ (รอรับ)"""
+        if self.status in ['Completed', 'Cancelled']:
+            return 0
+        return max(0, self.quantity_planned - self.quantity_actual)
+    
+    def generate_material_usage(self):
+        """ก๊อปปี้รายการจาก BOM มาลงตารางใช้จริง"""
+        if self.bom:
+            # 🛑 1. ล้างของเก่าออกก่อน (เผื่อมีการกด Save ซ้ำเพื่ออัปเดตสูตร)
+            self.material_usages.all().delete()
+            
+            # 🛑 2. เปลี่ยนจาก .items.all() เป็น .ingredients.all() ตามโค้ดเดิมของเปรม
+            for ing in self.bom.ingredients.all(): 
+                # สูตร: (ปริมาณใน BOM) * (จำนวนที่วางแผนผลิต)
+                total_needed = ing.quantity * self.quantity_planned
+                
+                ProductionMaterialUsage.objects.create(
+                    production_order=self,
+                    raw_material=ing.material, # ใช้ ing.material ตามโครงสร้าง BOM ของเปรม
+                    planned_qty=total_needed,
+                    actual_qty_to_use=total_needed
+                )
+
     def save(self, *args, **kwargs):
+        # 1. รันเลขที่ใบ PD
         if not self.pd_number: 
             self.pd_number = generate_number('PD', ProductionOrder, 'pd_number')
         
-        # ✅ เพิ่มจุดที่ 1: ตรรกะการเปลี่ยนสถานะอัตโนมัติ
-        if self.status not in ['Completed', 'Cancelled']: # ไม่แก้สถานะถ้าปิดงานหรือยกเลิกไปแล้ว
+        # 2. Auto ดึง BOM ล่าสุดมาแปะถ้ายังไม่ได้เลือก
+        if not self.bom and self.product:
+            # ใช้ related_name 'bom_formulas' ตามที่เปรมตั้งไว้ใน BOM
+            self.bom = self.product.bom_formulas.order_by('-id').first()
+
+        # 3. ตรรกะสถานะ (ของเปรม)
+        if self.status not in ['Completed', 'Cancelled']:
             if self.quantity_actual <= 0:
                 self.status = 'Draft'
             elif self.quantity_actual < self.quantity_planned:
@@ -697,8 +731,21 @@ class ProductionOrder(models.Model):
             elif self.quantity_actual >= self.quantity_planned:
                 self.status = 'Finished'
         
+        # ✅ บันทึกข้อมูลหลักก่อนเพื่อให้มี ID (Primary Key)
         super().save(*args, **kwargs)
+
+        # 4. แตกรายการวัตถุดิบหลังจาก Save สำเร็จ (ต้องอยู่ภายใต้ฟังก์ชัน save)
+        # เราเช็กว่ามี BOM และยังไม่มีรายการวัตถุดิบถูกสร้างมาก่อน (ป้องกันการสร้างซ้ำเวลาแก้ไขใบเดิม)
+        if self.bom and not self.material_usages.exists():
+            for ing in self.bom.ingredients.all():
+                ProductionMaterialUsage.objects.create(
+                    production_order=self,
+                    raw_material=ing.material, # ใช้ .material ตามโครงสร้างสูตร
+                    planned_qty=ing.quantity * self.quantity_planned,
+                    actual_qty_to_use=ing.quantity * self.quantity_planned
+                )
     class Meta: verbose_name_plural = "B3. ใบสั่งผลิต (Productions)"
+
 
 class ProductionLog(models.Model):
     production_order = models.ForeignKey(ProductionOrder, on_delete=models.CASCADE, related_name='production_logs')
@@ -706,23 +753,35 @@ class ProductionLog(models.Model):
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     finished_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่เสร็จ")
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
+
     def save(self, *args, **kwargs):
         if not self.pk:
             prod_order = self.production_order
-            # เพิ่มสต็อกสินค้าสำเร็จรูป
+            
+            # 1. เพิ่มสต็อกสินค้าสำเร็จรูป (FG)
             prod_order.product.stock_quantity += self.quantity_finished
             prod_order.product.save()
 
-            # ตัดสต็อกวัตถุดิบ (BOM)
-            bom = prod_order.product.bom_formulas.first()
-            if bom:
-                for ing in bom.ingredients.all():
-                    ing.material.stock_quantity -= (ing.quantity * self.quantity_finished)
-                    ing.material.save()
+            # 2. 🎯 ตัดสต็อกวัตถุดิบ/Package จาก "รายการที่จองไว้ในใบ PD" (ไม่ใช่จาก BOM กลาง)
+            # วิธีนี้จะทำให้เปรมแก้จำนวนใช้จริงในหน้า PD ได้ และระบบจะตัดตามนั้น
+            usage_ratio = Decimal(str(self.quantity_finished)) / Decimal(str(prod_order.quantity_planned))
+            
+            # เปลี่ยนจาก prod_order.bom.items เป็น prod_order.material_usages
+            for usage in prod_order.material_usages.all():
+                # คำนวณยอดตัดจาก 'จำนวนที่ระบุไว้ในใบสั่งผลิต'
+                deduct_qty = usage.actual_qty_to_use * usage_ratio
+                
+                # หักสต็อกจริงของวัตถุดิบตัวนั้น
+                usage.raw_material.stock_quantity -= deduct_qty
+                usage.raw_material.save()
 
-            # อัปเดตยอดสะสมในใบสั่งผลิต
+                # ✅ บันทึกสะสมไว้ว่าตัดไปเท่าไหร่แล้ว เพื่อให้หน้า C1 คำนวณยอด "รอใช้" ได้แม่นยำ
+                usage.used_so_far += deduct_qty
+                usage.save()
+
+            # 3. อัปเดตยอดสะสมในใบสั่งผลิต
             prod_order.quantity_actual += self.quantity_finished
-            prod_order.save() # การ save ตรงนี้จะไปกระตุ้นสถานะใน ProductionOrder เองครับ
+            prod_order.save() 
             
         super().save(*args, **kwargs)
 
@@ -735,7 +794,7 @@ class ProductionLog(models.Model):
         prod_order.product.save()
 
         # 2. คืนสต็อกวัตถุดิบ (บวกกลับเข้าสต็อก)
-        bom = prod_order.product.bom_formulas.first()
+        bom = prod_order.bom or prod_order.product.bom_formulas.first()
         if bom:
             for ing in bom.ingredients.all():
                 ing.material.stock_quantity += (ing.quantity * self.quantity_finished)
@@ -812,3 +871,54 @@ class SalesReport(Product): # ใช้ Product เป็นฐาน
         proxy = True
         verbose_name = "C5. รายงานยอดขายตามสินค้า"
         verbose_name_plural = "C5. รายงานยอดขายตามสินค้า"
+
+# --- 5. Proxy Model สำหรับหน้า C6 (Shipment Accounting) ---
+# --- ในไฟล์ models.py ---
+# --- ในไฟล์ models.py ---
+from decimal import Decimal # 👈 อย่าลืม import ไว้ด้านบนสุดของไฟล์นะครับ
+
+class ShipmentAccounting(SalesDeliveryLog):
+    class Meta:
+        proxy = True
+        verbose_name = "C6. การทำบัญชี DC/Rebate"
+        verbose_name_plural = "C6. การทำบัญชี DC/Rebate"
+
+    # ✅ เปลี่ยนชื่อเป็น calculate_revenue_total ตามที่ Admin เรียกหา
+    def calculate_revenue_total(self):
+        """
+        คำนวณยอดรับเงินเต็ม (รวม VAT) โดยไม่หัก DC/Rebate
+        ลำดับ VAT: SO -> Customer -> 0%
+        """
+        so = self.sales_order
+        if not so:
+            return Decimal('0')
+
+        # ดึงค่า VAT
+        vat_p = so.vat_percent if so.vat_percent is not None else (so.customer.vat if so.customer else Decimal('0'))
+        
+        # ยอดสินค้าก่อนภาษี (ใช้ค่าจาก shipment_value ที่เปรมบอกว่ามีอยู่แล้ว)
+        base_revenue = self.shipment_value or Decimal('0')
+        
+        # คำนวณยอดรวมภาษี
+        total = base_revenue * (Decimal('1') + (Decimal(str(vat_p)) / Decimal('100')))
+        return total
+
+    # 💡 ถ้าเปรมอยากเก็บชื่อเดิมไว้ใช้ที่อื่นด้วย ก็ทำ Alias ไว้แบบนี้ครับ
+    def calculate_gross_revenue(self):
+        return self.calculate_revenue_total()
+
+
+class ProductionMaterialUsage(models.Model):
+    """รายการวัตถุดิบที่ "จอง" ไว้สำหรับใบสั่งผลิตนี้"""
+    production_order = models.ForeignKey(ProductionOrder, on_delete=models.CASCADE, related_name='material_usages')
+    raw_material = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="วัตถุดิบ/Package")
+    planned_qty = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="จำนวนตามสูตร (Total)")
+    actual_qty_to_use = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="จำนวนที่ต้องใช้จริง (ปรับแต่งได้)")
+    used_so_far = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="ตัดสต็อกไปแล้ว")
+
+    @property
+    def pending_use(self):
+        """สำหรับหน้า C1: ยอดรอใช้ (ที่ยังไม่ถูกตัดสต็อก)"""
+        if self.production_order.status in ['Completed', 'Cancelled']:
+            return 0
+        return max(0, self.actual_qty_to_use - self.used_so_far)

@@ -561,32 +561,43 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
     # ✅ ใช้ตัวนี้แทน filter_horizontal หรือ filter_vertical ค่ะ
     autocomplete_fields = ['tags']
 
+    # --- ให้การค้นหา ใช้ รูปแบบ และ หรือ ได้ ---
     def get_search_results(self, request, queryset, search_term):
-        queryset, use_distinct = super().get_search_results(request, queryset, search_term)
+        # 🎯 1. จัดการระบบ OR (|) ก่อน
+        if '|' in search_term:
+            import operator
+            from django.db.models import Q
+            from functools import reduce
+            parts = [p.strip() for p in search_term.split('|') if p.strip()]
+            q_objects = []
+            for part in parts:
+                q_part = Q()
+                for field in self.search_fields:
+                    q_part |= Q(**{f"{field}__icontains": part})
+                q_objects.append(q_part)
+            queryset = queryset.filter(reduce(operator.or_, q_objects))
+            use_distinct = False
+        else:
+            # ถ้าไม่มี | ให้ค้นหาปกติ
+            queryset, use_distinct = super().get_search_results(request, queryset, search_term)
 
-        # เช็คว่านี่คือการค้นหาจากระบบ Autocomplete หรือไม่
+        # 🎯 2. จัดการระบบ Autocomplete สำหรับ PO (ล็อคตาม Supplier)
         if 'autocomplete' in request.path:
             referer = request.META.get('HTTP_REFERER', '')
-            
-            # ถ้าค้นหามาจากหน้า Purchase Order (ใบสั่งซื้อ)
             if 'purchaseorder' in referer:
                 import re
-                # แกะรหัส ID ของใบสั่งซื้อจาก URL (เช่น .../purchaseorder/3/change/)
                 match = re.search(r'purchaseorder/(\d+)/change/', referer)
                 if match:
                     po_id = match.group(1)
-                    from .models import PurchaseOrder, Product
+                    from .models import PurchaseOrder
                     from django.db.models import Q
-                    
                     try:
                         po = PurchaseOrder.objects.get(pk=po_id)
                         if po.supplier:
-                            # 🎯 ล็อคทันที: เอาเฉพาะที่ Supplier นี้ขาย หรือรายการที่ไม่ใช่สินค้า
                             queryset = queryset.filter(
                                 Q(product_suppliers__supplier=po.supplier) | Q(is_product=False)
                             )
-                    except PurchaseOrder.DoesNotExist:
-                        pass
+                    except PurchaseOrder.DoesNotExist: pass
         
         return queryset, use_distinct
 
@@ -784,22 +795,50 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
 
     # ❗ ต้องเพิ่มฟังก์ชันนี้เข้าไปด้วย ระบบถึงจะหาตัวสร้างใบ PD เจอครับ
     def create_auto_production_order(self, sales_item, user):
-        import datetime
-        from .models import ProductionOrder
-        today_str = datetime.date.today().strftime('%Y%m%d')
-        count = ProductionOrder.objects.filter(pd_number__contains=today_str).count() + 1
-        pd_no = f"PD-{today_str}-{count:03d}"
+        """
+        ฟังก์ชันช่วยสร้างใบผลิตอัตโนมัติจากรายการขาย
+        """
+        from .models import ProductionOrder, BOM
+        
+        # 🛑 1. เช็กเงื่อนไข BOM ก่อนสร้าง (Logic ป้องกัน Error)
+        # ต้องมีการติ๊ก has_bom และต้องมีข้อมูลสูตรในระบบจริง
+        has_bom_data = BOM.objects.filter(product=sales_item.product).exists()
+        if not getattr(sales_item.product, 'has_bom', False) or not has_bom_data:
+            return None # คืนค่า None เพื่อให้ตัว Action รู้ว่าตัวนี้สร้างไม่ได้
 
+        # ✅ 2. สร้างใบผลิต (ปล่อยให้ model.save() รันเลข PD เอง)
         return ProductionOrder.objects.create(
-            pd_number=pd_no,
             product=sales_item.product,
-            quantity_planned=sales_item.quantity_ordered,
+            quantity_planned=sales_item.quantity, # ใช้ชื่อฟิลด์ใหม่ที่เปรมแก้
             status='Draft',
             order_date=datetime.date.today(),
             created_by=user,
             notes=f"สร้างอัตโนมัติจาก SO: {sales_item.sales_order.so_number}"
         )
     
+    @admin.action(description='⚡ เปิดใบสั่งผลิต (Auto PD)')
+    def make_production_order(self, request, queryset):
+        created_count = 0
+        fail_list = []
+
+        for so in queryset:
+            for item in so.items.all():
+                # เรียกใช้ฟังก์ชัน Engine ที่เราปรับปรุง
+                new_pd = self.create_auto_production_order(item, request.user)
+                
+                if new_pd:
+                    created_count += 1
+                else:
+                    fail_list.append(f"{item.product.name} ({so.so_number})")
+
+        # สรุปผลบนแถบแจ้งเตือน
+        if created_count > 0:
+            self.message_user(request, f"✅ สร้างสำเร็จ {created_count} รายการ", messages.SUCCESS)
+        
+        if fail_list:
+            msg = "⚠️ ข้ามรายการที่ไม่มี BOM: " + ", ".join(fail_list)
+            self.message_user(request, msg, messages.WARNING)
+            
     # ✅ ฟังก์ชันสร้างใบผลิตอัตโนมัติ
     def save_formset(self, request, form, formset, change):
         created_count = 0
@@ -846,26 +885,27 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
 
     def has_change_permission(self, request, obj=None):
         if obj:
-            # ดึง Model หลักมาเช็กตรงๆ เลยว่ามีการ Confirm หรือยัง
-            from .models import SalesDeliveryLog 
-            already_confirmed = SalesDeliveryLog.objects.filter(
-                sales_order=obj, 
-                is_revenue_confirmed=True
-            ).exists()
-            
-            if already_confirmed:
-                return False # สั่งล็อก ห้ามแก้ไข
-                
+            # 🔒 เปลี่ยนจากเช็ก Confirmation เป็นเช็กสถานะใบสั่งขาย
+            if obj.status == 'Completed':
+                return False # ล็อคเฉพาะตอนกด "เสร็จงาน/ปิดงาน" เท่านั้น
         return super().has_change_permission(request, obj)
+    
+class ProductionMaterialUsageInline(admin.TabularInline):
+    model = ProductionMaterialUsage
+    extra = 0
+    fields = ['raw_material', 'planned_qty', 'actual_qty_to_use', 'used_so_far']
+    readonly_fields = ['planned_qty', 'used_so_far'] # สองฟิลด์นี้ให้ระบบคำนวณเอง
+    verbose_name = "ส่วนประกอบ/Package ตามสูตร"
 
 @admin.register(ProductionOrder)
 class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
+    fields = ['product', 'bom', 'quantity_planned', 'status', 'notes']
     list_display = ('pd_number', 'product', 'quantity_planned', 'quantity_actual', 'get_diff', 'status')
     list_filter = ('status', 'order_date', 'product')
     search_fields = ('pd_number', 'product__name')
-    inlines = [ProductionLogInline]
+    inlines = [ProductionMaterialUsageInline,ProductionLogInline]
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
-    readonly_fields = ('created_by', 'status') 
+    readonly_fields = ('pd_number','quantity_actual',  'created_by', 'status') 
     
     actions = ['mark_as_completed']
 
@@ -933,10 +973,18 @@ class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
             obj.save() # สั่ง Save ตรงนี้ สถานะใน models.py จะถูกคำนวณใหม่ทันที
         else:
             formset.save()
-            
+
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        # 🎯 1. สำหรับฟิลด์ Product: กรองเอาเฉพาะสินค้าที่มีการติ๊ก 'มี BOM'
         if db_field.name == "product":
             kwargs["queryset"] = Product.objects.filter(has_bom=True)
+
+        # 🎯 2. สำหรับฟิลด์ BOM: กรองสูตรผลิตให้ตรงกับตัวสินค้าที่เลือกในใบนี้
+        # หมายเหตุ: ใน Inline ของ Django ตัวแปร 'obj' คือตัวแม่ (Parent) จะถูกส่งมาทาง kwargs
+        obj = kwargs.get('obj') 
+        if db_field.name == "bom" and obj and hasattr(obj, 'product'):
+            kwargs["queryset"] = BOM.objects.filter(product=obj.product)
+
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 class BuyPriceRangeFilter(admin.SimpleListFilter):
@@ -988,22 +1036,53 @@ class StockPlanningAdmin(admin.ModelAdmin):
     get_pending_out.short_description = "แผนส่ง (SO)"
 
     # 3. แก้ไขแผนผลิต (PD): ให้ครอบคลุมทุกสถานะที่ยังผลิตไม่เสร็จ
+    # 3. แก้ไขแผนผลิต (PD): ครอบคลุมทั้งยอด "รอรับ" และยอด "รอใช้ (จอง)"
     def get_pending_prod(self, obj):
-        orders = obj.productionorder_set.filter(
+        from .models import ProductionOrder, ProductionMaterialUsage
+        from django.db.models import Sum, F
+        
+        # 🎯 ขาที่ 1: ยอดรอรับ (สำหรับสินค้า C ที่เราผลิตเอง)
+        orders = ProductionOrder.objects.filter(
+            product=obj,
             status__in=['Draft', 'Started', 'Finished']
         )
-        total = sum((o.quantity_planned - o.quantity_actual) for o in orders)
-        return total if total > 0 else 0
+        # ส่วนต่างที่ยังผลิตไม่ครบ
+        pending_receipt = sum((o.quantity_planned - o.quantity_actual) for o in orders)
+        
+        # 🎯 ขาที่ 2: ยอดรอใช้ (สำหรับสินค้า A, B ที่ถูกจองไปใช้ในใบผลิต)
+        usages = ProductionMaterialUsage.objects.filter(
+            raw_material=obj,
+            production_order__status__in=['Draft', 'Started', 'Finished']
+        )
+        # ส่วนต่างที่จองไว้แต่ยังไม่ได้ตัดสต็อกจริง
+        pending_usage = sum((u.actual_qty_to_use - u.used_so_far) for u in usages)
+        
+        # ผลรวมสุทธิ: (รอรับเข้ามา) - (รอใช้หายไป)
+        # ถ้าเป็น A, B ค่าจะออกมาเป็น "ติดลบ" เช่น -5000 เพื่อโชว์ว่าโดนจอง
+        net_impact = pending_receipt - pending_usage
+        
+        if net_impact == 0: return 0
+        
+        color = "#28a745" if net_impact > 0 else "#dc3545" # เขียวถ้าเพิ่ม แดงถ้าลด
+        return format_html('<span style="color: {};">{}</span>', color, net_impact)
+
     get_pending_prod.short_description = "แผนผลิต (PD)"
 
-    # ... (get_available และส่วนอื่นๆ เหมือนเดิม) ...
-
+    # 🎯 แก้ไขสูตรคาดการณ์ (Plan) ให้รองรับเลขติดลบจาก PD
     def get_available(self, obj):
+        # ดึงค่าดิบๆ มาคำนวณ (ต้องแก้ฟังก์ชัน get_pending_prod ให้คืนค่าตัวเลขด้วย หรือแยกดึงค่า)
         on_hand = obj.stock_quantity
         p_in = self.get_pending_in(obj)
         p_out = self.get_pending_out(obj)
-        p_prod = self.get_pending_prod(obj)
-        total = on_hand + p_in - p_out + p_prod
+        
+        # ดึงยอดสุทธิจาก PD (เขียนแยกมาเพื่อใช้คำนวณ)
+        p_receipt = sum((o.quantity_planned - o.quantity_actual) for o in obj.productionorder_set.filter(status__in=['Draft', 'Started', 'Finished']))
+        from .models import ProductionMaterialUsage
+        p_usage = sum((u.actual_qty_to_use - u.used_so_far) for u in ProductionMaterialUsage.objects.filter(raw_material=obj, production_order__status__in=['Draft', 'Started', 'Finished']))
+        
+        # สูตร: Stock + PO - SO + (รอรับ - รอใช้)
+        total = on_hand + p_in - p_out + (p_receipt - p_usage)
+        
         color = "red" if total < 0 else "blue"
         return format_html('<b style="color: {};">{}</b>', color, total)
     get_available.short_description = "คาดการณ์ (Plan)"
@@ -1442,34 +1521,40 @@ class IncomeReportAdmin(DocumentLockMixin, admin.ModelAdmin):
         return format_html('<b style="color:#007bff;">{}</b>', formatted_total)
     get_grand_total_display.short_description = "💰 ยอดสุทธิ (Grand Total)"
 
+    # 🎯 1. ฟังก์ชันช่วยคำนวณยอดรับ (เฉพาะยอดบวก) เพื่อไม่ให้ค่าใช้จ่ายมาดึงยอด Paid ลง
+    def get_revenue_only_paid(self, obj):
+        from django.db.models import Sum
+        # ✅ ใช้ .payments เพราะเป็น related_name ที่เปรมตั้งไว้
+        total = obj.payments.filter(amount__gt=0).aggregate(Sum('amount'))['amount__sum'] or 0
+        return total
+
+    # 🎯 2. แก้ไขการแสดงผลยอดรับเงิน
     def get_total_paid_display(self, obj):
-        value = f"{obj.total_paid:,.2f}"
+        # เปลี่ยนจาก obj.total_paid มาใช้ฟังก์ชันใหม่ที่เราสร้าง
+        paid_amount = self.get_revenue_only_paid(obj)
+        value = f"{paid_amount:,.2f}"
         return format_html('<b style="color:#28a745;">{}</b>', value)
     get_total_paid_display.short_description = "✅ รับแล้ว"
 
+    # 🎯 3. แก้ไขการคำนวณยอดคงค้าง (Balance Due)
     def calculate_balance_due(self, obj):
         subtotal = getattr(obj, 'total_items_price', 0) or 0
         vat_p = getattr(obj, 'vat_percent', 0) or 0
-        # ยอดรวมภาษี
+        # ยอดรวมภาษี (Grand Total)
         grand_total = subtotal + (subtotal * vat_p / 100)
-        # หักยอดที่รับเงินมาแล้ว
-        paid = getattr(obj, 'total_paid', 0) or 0
+        
+        # หักเฉพาะยอดที่รับเงินมาจริง (ยอดบวก) ไม่เอา DC/Rebate มาลบซ้ำที่นี่
+        paid = self.get_revenue_only_paid(obj)
+        
         return grand_total - paid
 
-    # สำหรับโชว์ในหน้าตาราง (List View)
-    def get_balance_due_list(self, obj):
-        bal = self.calculate_balance_due(obj)
-        if bal <= 0:
-            return format_html('<span style="color:green; font-weight:bold;">0.00</span>')
-        return format_html('<span style="color:red; font-weight:bold;">-{}</span>', f"{bal:,.2f}")
-    get_balance_due_list.short_description = "ยอดคงค้าง"
-
-    # สำหรับโชว์ในหน้าแก้ไข (Detail View / Fieldsets)
-    def get_balance_due_display(self, obj):
-        bal = self.calculate_balance_due(obj)
-        color = "green" if bal <= 0 else "red"
-        return format_html('<b style="color:{}; font-size:1.1em;">{}</b>', color, f"{max(0, bal):,.2f}")
-    get_balance_due_display.short_description = "ยอดเงินคงค้าง (Balance Due)"
+    # 🎯 4. (แถม) ฟังก์ชันดูยอดที่โดนหักไป (DC + Rebate) เพื่อความโปร่งใส
+    def get_total_deductions_display(self, obj):
+        from django.db.models import Sum
+        # ✅ ใช้ .payments และกรองเฉพาะยอดติดลบ (DC/Rebate)
+        total = obj.payments.filter(amount__lt=0).aggregate(Sum('amount'))['amount__sum'] or 0
+        return format_html('<span style="color:#6c757d;">{:,.2f}</span>', total)
+    get_total_deductions_display.short_description = "➖ ยอดหักสะสม"
 
 #@admin.register(ShipmentPaymentReport)
 class ShipmentPaymentReportAdmin(admin.ModelAdmin):
@@ -1593,7 +1678,31 @@ class SalesReportAdmin(admin.ModelAdmin):
     )
     search_fields = ('name', 'barcodes__code', 'sales_items__sales_order__customer__company_name') # Path: customer__company_name
 
+    # --- ให้การค้นหา ใช้ รูปแบบ และ หรือ ได้ ---
+    def get_search_results(self, request, queryset, search_term):
+        # ถ้าคนหาใช้เครื่องหมาย | ให้แยกคำแล้วใช้ Logic OR
+        if '|' in search_term:
+            import operator
+            from django.db.models import Q
+            from functools import reduce
+
+            parts = [p.strip() for p in search_term.split('|') if p.strip()]
+            # สร้าง Query แบบ (field1 OR field2) OR (field1 OR field2)
+            q_objects = []
+            for part in parts:
+                q_part = Q()
+                for field in self.search_fields:
+                    q_part |= Q(**{f"{field}__icontains": part})
+                q_objects.append(q_part)
+            
+            queryset = queryset.filter(reduce(operator.or_, q_objects))
+            return queryset, False
+        
+        # ถ้าไม่มี | ก็ให้ทำงานแบบปกติ (AND)
+        return super().get_search_results(request, queryset, search_term)
+
     actions = ['calculate_selected_totals']
+
     @admin.action(description="📝 สรุปยอดรวมรายการที่เลือก")
     def calculate_selected_totals(self, request, queryset):
         from django.db.models import Sum
@@ -1752,12 +1861,7 @@ class SalesReportAdmin(admin.ModelAdmin):
         color = "#28a745" if profit > 0 else "#dc3545"
         profit_display = "{:,.2f}".format(profit)
         return format_html('<b style="color: {};">{}</b>', color, profit_display)
-# --- ฟังก์ชันส่วนยืนยันยอดชำระ ยอด dc rebate ที่โดนหัก --- 
-class ShipmentAccounting(SalesDeliveryLog):
-    class Meta:
-        proxy = True
-        verbose_name = 'C6. ตรวจสอบรายรับ & DC Rebate'
-        verbose_name_plural = 'C6. ตรวจสอบรายรับ & DC Rebate'
+
 
 # 2. ตั้งค่า Admin ตัวเดียวจบ
 @admin.register(ShipmentAccounting)
@@ -1786,6 +1890,29 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     
     search_fields = ('sales_order__so_number', 'product__name', 'product__barcodes__code') 
     ordering = ('-shipped_date', 'sales_order__so_number')
+
+    # --- ให้การค้นหา ใช้ รูปแบบ และ หรือ ได้ ---
+    def get_search_results(self, request, queryset, search_term):
+        # ถ้าคนหาใช้เครื่องหมาย | ให้แยกคำแล้วใช้ Logic OR
+        if '|' in search_term:
+            import operator
+            from django.db.models import Q
+            from functools import reduce
+
+            parts = [p.strip() for p in search_term.split('|') if p.strip()]
+            # สร้าง Query แบบ (field1 OR field2) OR (field1 OR field2)
+            q_objects = []
+            for part in parts:
+                q_part = Q()
+                for field in self.search_fields:
+                    q_part |= Q(**{f"{field}__icontains": part})
+                q_objects.append(q_part)
+            
+            queryset = queryset.filter(reduce(operator.or_, q_objects))
+            return queryset, False
+        
+        # ถ้าไม่มี | ก็ให้ทำงานแบบปกติ (AND)
+        return super().get_search_results(request, queryset, search_term)
 
     # --- 📅 จัดการวันที่ ---
     def short_shipped_date(self, obj):
@@ -1859,15 +1986,14 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
 
     # --- 💰 ฟังก์ชันคำนวณเงินต่างๆ ---
     def get_revenue_inc_vat(self, obj):
-        item = obj.sales_order.items.filter(product=obj.product).first()
-        return f"{(item.sale_price * obj.quantity_shipped):,.2f}" if item else "0.00"
+        return f"{obj.calculate_revenue_total():,.2f}" # ✅ เรียกจาก Model สั้นๆ
     get_revenue_inc_vat.short_description = "ยอดรวม VAT"
 
     def get_revenue_no_vat(self, obj):
         item = obj.sales_order.items.filter(product=obj.product).first()
-        if item and obj.sales_order.customer:
-            vat_divisor = Decimal('1') + (obj.sales_order.customer.vat / Decimal('100'))
-            no_vat = (item.sale_price * obj.quantity_shipped) / vat_divisor
+        if item:
+            # 🎯 ไม่ต้องหาร vat_divisor แล้วครับ เพราะราคา item.sale_price คือราคา Non-VAT อยู่แล้ว
+            no_vat = item.sale_price * obj.quantity_shipped
             return f"{no_vat:,.2f}"
         return "0.00"
     get_revenue_no_vat.short_description = "ยอด Non-VAT"
@@ -1909,27 +2035,77 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
         return "-"
     get_rebate_value.short_description = "ยอด Rebate"
 
+    # 🎯 5. ยอด ที่ยืนยันทั้งหมด จะถูกบันทึกย้อนไปใน salesorder และ incomereport
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        if obj.is_revenue_confirmed:
+            from .models import SalesPayment
+            SalesPayment.objects.update_or_create(
+                order=obj.sales_order,
+                remark__icontains=f"ยอดส่งของ {obj.shipping_no}",
+                defaults={
+                    'amount': obj.calculate_revenue_total(), # ✅ ใช้ตัวเลขดิบๆ ไปบันทึก
+                    'payment_date': obj.confirmed_date or obj.shipped_date,
+                    'remark': f"✔ ยอดส่งของเลขที่ {obj.shipping_no}"
+                }
+            )
+
+        # 🎯 [SECTION 2] ยืนยันยอด Rebate (รายการหัก 1)
+        if obj.is_rebate_confirmed and obj.rebate_amount > 0:
+            rebate_ref = f"หัก Rebate จากใบส่งของ {obj.shipping_no}"
+            if not SalesPayment.objects.filter(order=obj.sales_order, notes__icontains=rebate_ref).exists():
+                SalesPayment.objects.create(
+                    order=obj.sales_order,
+                    amount=-obj.rebate_amount, # ติดลบเพื่อหักยอด
+                    payment_date=obj.confirmed_date,
+                    notes=f"⚠ {rebate_ref}"
+                )
+
+        # 🎯 [SECTION 3] ยืนยันยอด DC (รายการหัก 2)
+        if obj.is_dc_confirmed and obj.dc_amount > 0:
+            dc_ref = f"หักค่า DC จากใบส่งของ {obj.shipping_no}"
+            if not SalesPayment.objects.filter(order=obj.sales_order, notes__icontains=dc_ref).exists():
+                SalesPayment.objects.create(
+                    order=obj.sales_order,
+                    amount=-obj.dc_amount, # ติดลบเพื่อหักยอด
+                    payment_date=obj.confirmed_date,
+                    notes=f"📦 {dc_ref}"
+                )
 
     # --- ✅ Actions ---
     @admin.action(description="💰 ยืนยันเฉพาะยอดรับเงิน (Revenue)")
     def confirm_revenue_only(self, request, queryset):
-        queryset.update(is_revenue_confirmed=True)
-        self.message_user(request, "ยืนยันยอดรับเงินเรียบร้อยแล้ว")
+        for obj in queryset:
+            obj.is_revenue_confirmed = True
+            # 🔥 บังคับเรียก save_model เพื่อให้สร้าง SalesPaymentLog
+            self.save_model(request, obj, None, True) 
+        self.message_user(request, f"ยืนยันยอดรับเงิน {queryset.count()} รายการ และสร้างประวัติเงินแล้ว")
 
     @admin.action(description="🚚 ยืนยันเฉพาะค่า DC")
     def confirm_dc_only(self, request, queryset):
-        queryset.update(is_dc_confirmed=True)
-        self.message_user(request, "ยืนยันยอด DC เรียบร้อยแล้ว")
+        for obj in queryset:
+            obj.is_dc_confirmed = True
+            # 🔥 บังคับเรียก save_model เพื่อให้สร้างรายการหักเงิน
+            self.save_model(request, obj, None, True)
+        self.message_user(request, f"ยืนยันยอด DC {queryset.count()} รายการ และหักยอดจ่ายแล้ว")
 
     @admin.action(description="🎁 ยืนยันเฉพาะยอด Rebate")
     def confirm_rebate_only(self, request, queryset):
-        queryset.update(is_rebate_confirmed=True)
-        self.message_user(request, "ยืนยันยอด Rebate เรียบร้อยแล้ว")
+        for obj in queryset:
+            obj.is_rebate_confirmed = True
+            # 🔥 บังคับเรียก save_model เพื่อให้สร้างรายการหักเงิน
+            self.save_model(request, obj, None, True)
+        self.message_user(request, f"ยืนยันยอด Rebate {queryset.count()} รายการ และหักยอดจ่ายแล้ว")
 
     @admin.action(description="✅ ยืนยันยอดทั้งหมด (ครบทุกส่วน)")
     def confirm_selected_items(self, request, queryset):
-        queryset.update(is_revenue_confirmed=True, is_dc_confirmed=True, is_rebate_confirmed=True)
-        self.message_user(request, "ยืนยันยอดสำเร็จครบถ้วน")
+        for obj in queryset:
+            obj.is_revenue_confirmed = True
+            obj.is_dc_confirmed = True
+            obj.is_rebate_confirmed = True
+            # สั่ง Save ทีละตัวเพื่อให้ save_model ที่เราเขียนไว้ทำงาน
+            self.save_model(request, obj, None, True)
+        self.message_user(request, f"ยืนยันและบันทึกประวัติการเงิน {queryset.count()} รายการแล้ว")
 
     def get_so_number(self, obj):
         return obj.sales_order.so_number
