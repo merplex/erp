@@ -1859,19 +1859,8 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     def get_revenue_no_vat(self, obj):
         item = obj.sales_order.items.filter(product=obj.product).first()
         if item:
-            # 🎯 1. หาค่า VAT ที่ถูกต้อง (ลำดับ: SO -> Customer -> 0)
-            so = obj.sales_order
-            vat_p = so.vat_percent if so.vat_percent is not None else (so.customer.vat if so.customer else Decimal('0'))
-            
-            # 🎯 2. คำนวณตัวหาร (Vat Divisor)
-            # เช่น ถ้า VAT 7% ตัวหารคือ 1.07
-            vat_divisor = Decimal('1') + (Decimal(str(vat_p)) / Decimal('100'))
-            
-            # 🎯 3. คำนวณยอดก่อนภาษี
-            # $NonVAT = \frac{Price \times Qty}{1 + \frac{VAT}{100}}$
-            total_sales = item.sale_price * obj.quantity_shipped
-            no_vat = total_sales / vat_divisor
-            
+            # 🎯 ไม่ต้องหาร vat_divisor แล้วครับ เพราะราคา item.sale_price คือราคา Non-VAT อยู่แล้ว
+            no_vat = item.sale_price * obj.quantity_shipped
             return f"{no_vat:,.2f}"
         return "0.00"
     get_revenue_no_vat.short_description = "ยอด Non-VAT"
