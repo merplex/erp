@@ -693,16 +693,36 @@ class ProductionOrder(models.Model):
         if self.status in ['Completed', 'Cancelled']:
             return 0
         return max(0, self.quantity_planned - self.quantity_actual)
+    
+    def generate_material_usage(self):
+        """ก๊อปปี้รายการจาก BOM มาลงตารางใช้จริง"""
+        if self.bom:
+            # 🛑 1. ล้างของเก่าออกก่อน (เผื่อมีการกด Save ซ้ำเพื่ออัปเดตสูตร)
+            self.material_usages.all().delete()
+            
+            # 🛑 2. เปลี่ยนจาก .items.all() เป็น .ingredients.all() ตามโค้ดเดิมของเปรม
+            for ing in self.bom.ingredients.all(): 
+                # สูตร: (ปริมาณใน BOM) * (จำนวนที่วางแผนผลิต)
+                total_needed = ing.quantity * self.quantity_planned
+                
+                ProductionMaterialUsage.objects.create(
+                    production_order=self,
+                    raw_material=ing.material, # ใช้ ing.material ตามโครงสร้าง BOM ของเปรม
+                    planned_qty=total_needed,
+                    actual_qty_to_use=total_needed
+                )
 
     def save(self, *args, **kwargs):
+        # 1. รันเลขที่ใบ PD
         if not self.pd_number: 
             self.pd_number = generate_number('PD', ProductionOrder, 'pd_number')
         
-        # ✅ Auto ดึง BOM ล่าสุดมาแปะถ้ายังไม่ได้เลือก
+        # 2. Auto ดึง BOM ล่าสุดมาแปะถ้ายังไม่ได้เลือก
         if not self.bom and self.product:
-            self.bom = BOM.objects.filter(product=self.product).order_by('-id').first()
+            # ใช้ related_name 'bom_formulas' ตามที่เปรมตั้งไว้ใน BOM
+            self.bom = self.product.bom_formulas.order_by('-id').first()
 
-        # ✅ ตรรกะสถานะ (ของเปรม)
+        # 3. ตรรกะสถานะ (ของเปรม)
         if self.status not in ['Completed', 'Cancelled']:
             if self.quantity_actual <= 0:
                 self.status = 'Draft'
@@ -711,19 +731,19 @@ class ProductionOrder(models.Model):
             elif self.quantity_actual >= self.quantity_planned:
                 self.status = 'Finished'
         
+        # ✅ บันทึกข้อมูลหลักก่อนเพื่อให้มี ID (Primary Key)
         super().save(*args, **kwargs)
 
-    # 🎯 4. จุดสำคัญ: แตกรายการวัตถุดิบหลังจาก Save หัวใบงานแล้ว
-        # เช็กว่ามี BOM และยังไม่มีรายการวัตถุดิบถูกสร้างมาก่อน (ป้องกันการสร้างซ้ำ)
+        # 4. แตกรายการวัตถุดิบหลังจาก Save สำเร็จ (ต้องอยู่ภายใต้ฟังก์ชัน save)
+        # เราเช็กว่ามี BOM และยังไม่มีรายการวัตถุดิบถูกสร้างมาก่อน (ป้องกันการสร้างซ้ำเวลาแก้ไขใบเดิม)
         if self.bom and not self.material_usages.exists():
             for ing in self.bom.ingredients.all():
                 ProductionMaterialUsage.objects.create(
                     production_order=self,
-                    raw_material=ing.material, # ใช้ .material ตามโครงสร้างสูตรของเปรม
+                    raw_material=ing.material, # ใช้ .material ตามโครงสร้างสูตร
                     planned_qty=ing.quantity * self.quantity_planned,
                     actual_qty_to_use=ing.quantity * self.quantity_planned
                 )
-                
     class Meta: verbose_name_plural = "B3. ใบสั่งผลิต (Productions)"
 
 
