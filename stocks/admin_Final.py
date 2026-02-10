@@ -1909,6 +1909,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
         return "-"
     get_rebate_value.short_description = "ยอด Rebate"
 
+
     # --- ✅ Actions ---
     @admin.action(description="💰 ยืนยันเฉพาะยอดรับเงิน (Revenue)")
     def confirm_revenue_only(self, request, queryset):

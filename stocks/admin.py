@@ -1442,34 +1442,40 @@ class IncomeReportAdmin(DocumentLockMixin, admin.ModelAdmin):
         return format_html('<b style="color:#007bff;">{}</b>', formatted_total)
     get_grand_total_display.short_description = "💰 ยอดสุทธิ (Grand Total)"
 
+    # 🎯 1. ฟังก์ชันช่วยคำนวณยอดรับ (เฉพาะยอดบวก) เพื่อไม่ให้ค่าใช้จ่ายมาดึงยอด Paid ลง
+    def get_revenue_only_paid(self, obj):
+        from django.db.models import Sum
+        # กรองเอาเฉพาะยอดที่เป็นบวก (Revenue) เท่านั้น
+        total = obj.salespaymentlog_set.filter(amount__gt=0).aggregate(Sum('amount'))['amount__sum'] or 0
+        return total
+
+    # 🎯 2. แก้ไขการแสดงผลยอดรับเงิน
     def get_total_paid_display(self, obj):
-        value = f"{obj.total_paid:,.2f}"
+        # เปลี่ยนจาก obj.total_paid มาใช้ฟังก์ชันใหม่ที่เราสร้าง
+        paid_amount = self.get_revenue_only_paid(obj)
+        value = f"{paid_amount:,.2f}"
         return format_html('<b style="color:#28a745;">{}</b>', value)
     get_total_paid_display.short_description = "✅ รับแล้ว"
 
+    # 🎯 3. แก้ไขการคำนวณยอดคงค้าง (Balance Due)
     def calculate_balance_due(self, obj):
         subtotal = getattr(obj, 'total_items_price', 0) or 0
         vat_p = getattr(obj, 'vat_percent', 0) or 0
-        # ยอดรวมภาษี
+        # ยอดรวมภาษี (Grand Total)
         grand_total = subtotal + (subtotal * vat_p / 100)
-        # หักยอดที่รับเงินมาแล้ว
-        paid = getattr(obj, 'total_paid', 0) or 0
+        
+        # หักเฉพาะยอดที่รับเงินมาจริง (ยอดบวก) ไม่เอา DC/Rebate มาลบซ้ำที่นี่
+        paid = self.get_revenue_only_paid(obj)
+        
         return grand_total - paid
 
-    # สำหรับโชว์ในหน้าตาราง (List View)
-    def get_balance_due_list(self, obj):
-        bal = self.calculate_balance_due(obj)
-        if bal <= 0:
-            return format_html('<span style="color:green; font-weight:bold;">0.00</span>')
-        return format_html('<span style="color:red; font-weight:bold;">-{}</span>', f"{bal:,.2f}")
-    get_balance_due_list.short_description = "ยอดคงค้าง"
-
-    # สำหรับโชว์ในหน้าแก้ไข (Detail View / Fieldsets)
-    def get_balance_due_display(self, obj):
-        bal = self.calculate_balance_due(obj)
-        color = "green" if bal <= 0 else "red"
-        return format_html('<b style="color:{}; font-size:1.1em;">{}</b>', color, f"{max(0, bal):,.2f}")
-    get_balance_due_display.short_description = "ยอดเงินคงค้าง (Balance Due)"
+    # 🎯 4. (แถม) ฟังก์ชันดูยอดที่โดนหักไป (DC + Rebate) เพื่อความโปร่งใส
+    def get_total_deductions_display(self, obj):
+        from django.db.models import Sum
+        # กรองเอาเฉพาะยอดติดลบ (ค่าธรรมเนียมต่างๆ)
+        total = obj.salespaymentlog_set.filter(amount__lt=0).aggregate(Sum('amount'))['amount__sum'] or 0
+        return format_html('<span style="color:#6c757d;">{:,.2f}</span>', total)
+    get_total_deductions_display.short_description = "➖ ยอดหักสะสม"
 
 #@admin.register(ShipmentPaymentReport)
 class ShipmentPaymentReportAdmin(admin.ModelAdmin):
@@ -1908,6 +1914,46 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
             return format_html('{}% (<b>฿{}</b>)', contract.rebate_percent, formatted_amt)
         return "-"
     get_rebate_value.short_description = "ยอด Rebate"
+
+    # 🎯 5. ยอด ที่ยืนยันทั้งหมด จะถูกบันทึกย้อนไปใน salesorder และ incomereport
+    def save_model(self, request, obj, form, change):
+        # 1. บันทึกข้อมูลของใบส่งของ (C6)
+        super().save_model(request, obj, form, change)
+
+        from .models import SalesPaymentLog
+
+        # 🎯 [SECTION 1] ยืนยันยอดรับเงิน (รายรับหลัก)
+        if obj.is_revenue_confirmed:
+            revenue_ref = f"ยอดส่งของเลขที่ {obj.shipping_no}"
+            if not SalesPaymentLog.objects.filter(sales_order=obj.sales_order, notes__icontains=revenue_ref).exists():
+                SalesPaymentLog.objects.create(
+                    sales_order=obj.sales_order,
+                    amount=obj.shipment_value,
+                    payment_date=obj.confirmed_date or obj.shipped_date,
+                    notes=f"✔ {revenue_ref}"
+                )
+
+        # 🎯 [SECTION 2] ยืนยันยอด Rebate (รายการหัก 1)
+        if obj.is_rebate_confirmed and obj.rebate_amount > 0:
+            rebate_ref = f"หัก Rebate จากใบส่งของ {obj.shipping_no}"
+            if not SalesPaymentLog.objects.filter(sales_order=obj.sales_order, notes__icontains=rebate_ref).exists():
+                SalesPaymentLog.objects.create(
+                    sales_order=obj.sales_order,
+                    amount=-obj.rebate_amount, # ติดลบเพื่อหักยอด
+                    payment_date=obj.confirmed_date,
+                    notes=f"⚠ {rebate_ref}"
+                )
+
+        # 🎯 [SECTION 3] ยืนยันยอด DC (รายการหัก 2)
+        if obj.is_dc_confirmed and obj.dc_amount > 0:
+            dc_ref = f"หักค่า DC จากใบส่งของ {obj.shipping_no}"
+            if not SalesPaymentLog.objects.filter(sales_order=obj.sales_order, notes__icontains=dc_ref).exists():
+                SalesPaymentLog.objects.create(
+                    sales_order=obj.sales_order,
+                    amount=-obj.dc_amount, # ติดลบเพื่อหักยอด
+                    payment_date=obj.confirmed_date,
+                    notes=f"📦 {dc_ref}"
+                )
 
     # --- ✅ Actions ---
     @admin.action(description="💰 ยืนยันเฉพาะยอดรับเงิน (Revenue)")
