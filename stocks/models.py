@@ -712,7 +712,20 @@ class ProductionOrder(models.Model):
                 self.status = 'Finished'
         
         super().save(*args, **kwargs)
+
+    # 🎯 4. จุดสำคัญ: แตกรายการวัตถุดิบหลังจาก Save หัวใบงานแล้ว
+        # เช็กว่ามี BOM และยังไม่มีรายการวัตถุดิบถูกสร้างมาก่อน (ป้องกันการสร้างซ้ำ)
+        if self.bom and not self.material_usages.exists():
+            for ing in self.bom.ingredients.all():
+                ProductionMaterialUsage.objects.create(
+                    production_order=self,
+                    raw_material=ing.material, # ใช้ .material ตามโครงสร้างสูตรของเปรม
+                    planned_qty=ing.quantity * self.quantity_planned,
+                    actual_qty_to_use=ing.quantity * self.quantity_planned
+                )
+                
     class Meta: verbose_name_plural = "B3. ใบสั่งผลิต (Productions)"
+
 
 class ProductionLog(models.Model):
     production_order = models.ForeignKey(ProductionOrder, on_delete=models.CASCADE, related_name='production_logs')
