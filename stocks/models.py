@@ -814,24 +814,36 @@ class SalesReport(Product): # ใช้ Product เป็นฐาน
         verbose_name_plural = "C5. รายงานยอดขายตามสินค้า"
 
 # --- 5. Proxy Model สำหรับหน้า C6 (Shipment Accounting) ---
-class ShipmentAccounting(SalesDeliveryLog): # 👈 ใช้ SalesDeliveryLog เป็นฐาน
+# --- ในไฟล์ models.py ---
+# --- ในไฟล์ models.py ---
+from decimal import Decimal # 👈 อย่าลืม import ไว้ด้านบนสุดของไฟล์นะครับ
+
+class ShipmentAccounting(SalesDeliveryLog):
     class Meta:
         proxy = True
         verbose_name = "C6. การทำบัญชี DC/Rebate"
         verbose_name_plural = "C6. การทำบัญชี DC/Rebate"
 
-    def calculate_gross_revenue(self):
+    # ✅ เปลี่ยนชื่อเป็น calculate_revenue_total ตามที่ Admin เรียกหา
+    def calculate_revenue_total(self):
         """
         คำนวณยอดรับเงินเต็ม (รวม VAT) โดยไม่หัก DC/Rebate
         ลำดับ VAT: SO -> Customer -> 0%
         """
-        from decimal import Decimal
         so = self.sales_order
+        if not so:
+            return Decimal('0')
+
         # ดึงค่า VAT
         vat_p = so.vat_percent if so.vat_percent is not None else (so.customer.vat if so.customer else Decimal('0'))
         
-        # ยอดสินค้าก่อนภาษี
-        base_revenue = self.shipment_value # ฟิลด์นี้มีค่าจากการ Save แล้ว
+        # ยอดสินค้าก่อนภาษี (ใช้ค่าจาก shipment_value ที่เปรมบอกว่ามีอยู่แล้ว)
+        base_revenue = self.shipment_value or Decimal('0')
         
-        # ยอดรวมภาษี (ยอดที่ลูกค้าต้องจ่ายจริง)
-        return base_revenue * (Decimal('1') + (Decimal(str(vat_p)) / Decimal('100')))
+        # คำนวณยอดรวมภาษี
+        total = base_revenue * (Decimal('1') + (Decimal(str(vat_p)) / Decimal('100')))
+        return total
+
+    # 💡 ถ้าเปรมอยากเก็บชื่อเดิมไว้ใช้ที่อื่นด้วย ก็ทำ Alias ไว้แบบนี้ครับ
+    def calculate_gross_revenue(self):
+        return self.calculate_revenue_total()
