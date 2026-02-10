@@ -795,22 +795,50 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
 
     # ❗ ต้องเพิ่มฟังก์ชันนี้เข้าไปด้วย ระบบถึงจะหาตัวสร้างใบ PD เจอครับ
     def create_auto_production_order(self, sales_item, user):
-        import datetime
-        from .models import ProductionOrder
-        today_str = datetime.date.today().strftime('%Y%m%d')
-        count = ProductionOrder.objects.filter(pd_number__contains=today_str).count() + 1
-        pd_no = f"PD-{today_str}-{count:03d}"
+        """
+        ฟังก์ชันช่วยสร้างใบผลิตอัตโนมัติจากรายการขาย
+        """
+        from .models import ProductionOrder, BOM
+        
+        # 🛑 1. เช็กเงื่อนไข BOM ก่อนสร้าง (Logic ป้องกัน Error)
+        # ต้องมีการติ๊ก has_bom และต้องมีข้อมูลสูตรในระบบจริง
+        has_bom_data = BOM.objects.filter(product=sales_item.product).exists()
+        if not getattr(sales_item.product, 'has_bom', False) or not has_bom_data:
+            return None # คืนค่า None เพื่อให้ตัว Action รู้ว่าตัวนี้สร้างไม่ได้
 
+        # ✅ 2. สร้างใบผลิต (ปล่อยให้ model.save() รันเลข PD เอง)
         return ProductionOrder.objects.create(
-            pd_number=pd_no,
             product=sales_item.product,
-            quantity_planned=sales_item.quantity_ordered,
+            quantity_planned=sales_item.quantity, # ใช้ชื่อฟิลด์ใหม่ที่เปรมแก้
             status='Draft',
             order_date=datetime.date.today(),
             created_by=user,
             notes=f"สร้างอัตโนมัติจาก SO: {sales_item.sales_order.so_number}"
         )
     
+    @admin.action(description='⚡ เปิดใบสั่งผลิต (Auto PD)')
+    def make_production_order(self, request, queryset):
+        created_count = 0
+        fail_list = []
+
+        for so in queryset:
+            for item in so.items.all():
+                # เรียกใช้ฟังก์ชัน Engine ที่เราปรับปรุง
+                new_pd = self.create_auto_production_order(item, request.user)
+                
+                if new_pd:
+                    created_count += 1
+                else:
+                    fail_list.append(f"{item.product.name} ({so.so_number})")
+
+        # สรุปผลบนแถบแจ้งเตือน
+        if created_count > 0:
+            self.message_user(request, f"✅ สร้างสำเร็จ {created_count} รายการ", messages.SUCCESS)
+        
+        if fail_list:
+            msg = "⚠️ ข้ามรายการที่ไม่มี BOM: " + ", ".join(fail_list)
+            self.message_user(request, msg, messages.WARNING)
+            
     # ✅ ฟังก์ชันสร้างใบผลิตอัตโนมัติ
     def save_formset(self, request, form, formset, change):
         created_count = 0
@@ -861,13 +889,21 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
             if obj.status == 'Completed':
                 return False # ล็อคเฉพาะตอนกด "เสร็จงาน/ปิดงาน" เท่านั้น
         return super().has_change_permission(request, obj)
+    
+class ProductionMaterialUsageInline(admin.TabularInline):
+    model = ProductionMaterialUsage
+    extra = 0
+    fields = ['raw_material', 'planned_qty', 'actual_qty_to_use', 'used_so_far']
+    readonly_fields = ['planned_qty', 'used_so_far'] # สองฟิลด์นี้ให้ระบบคำนวณเอง
+    verbose_name = "ส่วนประกอบ/Package ตามสูตร"
 
 @admin.register(ProductionOrder)
 class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
+    fields = ['pd_number', 'product', 'bom', 'quantity_planned', 'quantity_actual', 'status', 'notes']
     list_display = ('pd_number', 'product', 'quantity_planned', 'quantity_actual', 'get_diff', 'status')
     list_filter = ('status', 'order_date', 'product')
     search_fields = ('pd_number', 'product__name')
-    inlines = [ProductionLogInline]
+    inlines = [ProductionMaterialUsageInline,ProductionLogInline]
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
     readonly_fields = ('created_by', 'status') 
     
@@ -939,8 +975,16 @@ class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
             formset.save()
             
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        # 🎯 1. สำหรับฟิลด์ Product: กรองเอาเฉพาะสินค้าที่มีการติ๊ก 'มี BOM'
         if db_field.name == "product":
             kwargs["queryset"] = Product.objects.filter(has_bom=True)
+
+        # 🎯 2. สำหรับฟิลด์ BOM: กรองสูตรผลิตให้ตรงกับตัวสินค้าที่เลือกในใบนี้
+        # หมายเหตุ: ใน Inline ของ Django ตัวแปร 'obj' คือตัวแม่ (Parent) จะถูกส่งมาทาง kwargs
+        obj = kwargs.get('obj') 
+        if db_field.name == "bom" and obj and hasattr(obj, 'product'):
+            kwargs["queryset"] = BOM.objects.filter(product=obj.product)
+
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 class BuyPriceRangeFilter(admin.SimpleListFilter):
