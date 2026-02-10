@@ -1036,22 +1036,53 @@ class StockPlanningAdmin(admin.ModelAdmin):
     get_pending_out.short_description = "แผนส่ง (SO)"
 
     # 3. แก้ไขแผนผลิต (PD): ให้ครอบคลุมทุกสถานะที่ยังผลิตไม่เสร็จ
+    # 3. แก้ไขแผนผลิต (PD): ครอบคลุมทั้งยอด "รอรับ" และยอด "รอใช้ (จอง)"
     def get_pending_prod(self, obj):
-        orders = obj.productionorder_set.filter(
+        from .models import ProductionOrder, ProductionMaterialUsage
+        from django.db.models import Sum, F
+        
+        # 🎯 ขาที่ 1: ยอดรอรับ (สำหรับสินค้า C ที่เราผลิตเอง)
+        orders = ProductionOrder.objects.filter(
+            product=obj,
             status__in=['Draft', 'Started', 'Finished']
         )
-        total = sum((o.quantity_planned - o.quantity_actual) for o in orders)
-        return total if total > 0 else 0
+        # ส่วนต่างที่ยังผลิตไม่ครบ
+        pending_receipt = sum((o.quantity_planned - o.quantity_actual) for o in orders)
+        
+        # 🎯 ขาที่ 2: ยอดรอใช้ (สำหรับสินค้า A, B ที่ถูกจองไปใช้ในใบผลิต)
+        usages = ProductionMaterialUsage.objects.filter(
+            raw_material=obj,
+            production_order__status__in=['Draft', 'Started', 'Finished']
+        )
+        # ส่วนต่างที่จองไว้แต่ยังไม่ได้ตัดสต็อกจริง
+        pending_usage = sum((u.actual_qty_to_use - u.used_so_far) for u in usages)
+        
+        # ผลรวมสุทธิ: (รอรับเข้ามา) - (รอใช้หายไป)
+        # ถ้าเป็น A, B ค่าจะออกมาเป็น "ติดลบ" เช่น -5000 เพื่อโชว์ว่าโดนจอง
+        net_impact = pending_receipt - pending_usage
+        
+        if net_impact == 0: return 0
+        
+        color = "#28a745" if net_impact > 0 else "#dc3545" # เขียวถ้าเพิ่ม แดงถ้าลด
+        return format_html('<span style="color: {};">{}</span>', color, net_impact)
+
     get_pending_prod.short_description = "แผนผลิต (PD)"
 
-    # ... (get_available และส่วนอื่นๆ เหมือนเดิม) ...
-
+    # 🎯 แก้ไขสูตรคาดการณ์ (Plan) ให้รองรับเลขติดลบจาก PD
     def get_available(self, obj):
+        # ดึงค่าดิบๆ มาคำนวณ (ต้องแก้ฟังก์ชัน get_pending_prod ให้คืนค่าตัวเลขด้วย หรือแยกดึงค่า)
         on_hand = obj.stock_quantity
         p_in = self.get_pending_in(obj)
         p_out = self.get_pending_out(obj)
-        p_prod = self.get_pending_prod(obj)
-        total = on_hand + p_in - p_out + p_prod
+        
+        # ดึงยอดสุทธิจาก PD (เขียนแยกมาเพื่อใช้คำนวณ)
+        p_receipt = sum((o.quantity_planned - o.quantity_actual) for o in obj.productionorder_set.filter(status__in=['Draft', 'Started', 'Finished']))
+        from .models import ProductionMaterialUsage
+        p_usage = sum((u.actual_qty_to_use - u.used_so_far) for u in ProductionMaterialUsage.objects.filter(raw_material=obj, production_order__status__in=['Draft', 'Started', 'Finished']))
+        
+        # สูตร: Stock + PO - SO + (รอรับ - รอใช้)
+        total = on_hand + p_in - p_out + (p_receipt - p_usage)
+        
         color = "red" if total < 0 else "blue"
         return format_html('<b style="color: {};">{}</b>', color, total)
     get_available.short_description = "คาดการณ์ (Plan)"
