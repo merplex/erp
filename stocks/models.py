@@ -812,3 +812,26 @@ class SalesReport(Product): # ใช้ Product เป็นฐาน
         proxy = True
         verbose_name = "C5. รายงานยอดขายตามสินค้า"
         verbose_name_plural = "C5. รายงานยอดขายตามสินค้า"
+
+# --- 5. Proxy Model สำหรับหน้า C6 (Shipment Accounting) ---
+class ShipmentAccounting(SalesDeliveryLog): # 👈 ใช้ SalesDeliveryLog เป็นฐาน
+    class Meta:
+        proxy = True
+        verbose_name = "C6. การทำบัญชีขนส่ง (Shipment Accounting)"
+        verbose_name_plural = "C6. การทำบัญชีขนส่ง (Shipment Accounting)"
+
+    def calculate_gross_revenue(self):
+        """
+        คำนวณยอดรับเงินเต็ม (รวม VAT) โดยไม่หัก DC/Rebate
+        ลำดับ VAT: SO -> Customer -> 0%
+        """
+        from decimal import Decimal
+        so = self.sales_order
+        # ดึงค่า VAT
+        vat_p = so.vat_percent if so.vat_percent is not None else (so.customer.vat if so.customer else Decimal('0'))
+        
+        # ยอดสินค้าก่อนภาษี
+        base_revenue = self.shipment_value # ฟิลด์นี้มีค่าจากการ Save แล้ว
+        
+        # ยอดรวมภาษี (ยอดที่ลูกค้าต้องจ่ายจริง)
+        return base_revenue * (Decimal('1') + (Decimal(str(vat_p)) / Decimal('100')))

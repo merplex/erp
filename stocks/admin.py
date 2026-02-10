@@ -1858,18 +1858,28 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
 
     # --- 💰 ฟังก์ชันคำนวณเงินต่างๆ ---
     def get_revenue_inc_vat(self, obj):
-        item = obj.sales_order.items.filter(product=obj.product).first()
-        return f"{(item.sale_price * obj.quantity_shipped):,.2f}" if item else "0.00"
+        return f"{obj.calculate_revenue_total():,.2f}" # ✅ เรียกจาก Model สั้นๆ
     get_revenue_inc_vat.short_description = "ยอดรวม VAT"
 
     def get_revenue_no_vat(self, obj):
         item = obj.sales_order.items.filter(product=obj.product).first()
-        if item and obj.sales_order.customer:
-            vat_divisor = Decimal('1') + (obj.sales_order.customer.vat / Decimal('100'))
-            no_vat = (item.sale_price * obj.quantity_shipped) / vat_divisor
+        if item:
+            # 🎯 1. หาค่า VAT ที่ถูกต้อง (ลำดับ: SO -> Customer -> 0)
+            so = obj.sales_order
+            vat_p = so.vat_percent if so.vat_percent is not None else (so.customer.vat if so.customer else Decimal('0'))
+            
+            # 🎯 2. คำนวณตัวหาร (Vat Divisor)
+            # เช่น ถ้า VAT 7% ตัวหารคือ 1.07
+            vat_divisor = Decimal('1') + (Decimal(str(vat_p)) / Decimal('100'))
+            
+            # 🎯 3. คำนวณยอดก่อนภาษี
+            # $NonVAT = \frac{Price \times Qty}{1 + \frac{VAT}{100}}$
+            total_sales = item.sale_price * obj.quantity_shipped
+            no_vat = total_sales / vat_divisor
+            
             return f"{no_vat:,.2f}"
         return "0.00"
-    get_revenue_no_vat.short_description = "ยอด Non-VAT"
+    get_revenue_no_vat.short_description = "ยอด Non-VAT""
 
     def get_dc_value(self, obj):
         from .models import CustomerProductContract
@@ -1911,18 +1921,15 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     # 🎯 5. ยอด ที่ยืนยันทั้งหมด จะถูกบันทึกย้อนไปใน salesorder และ incomereport
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
-        from .models import SalesPayment # ✅ ชื่อ Model ถูกต้อง
-
         if obj.is_revenue_confirmed:
-            ref = f"ยอดจากใบส่งของ {obj.shipping_no}"
-            # ✅ ใช้ order=... และ remark=... ให้ตรงกับ Model SalesPayment
+            from .models import SalesPayment
             SalesPayment.objects.update_or_create(
-                order=obj.sales_order, 
-                remark__icontains=ref,
+                order=obj.sales_order,
+                remark__icontains=f"ยอดส่งของ {obj.shipping_no}",
                 defaults={
-                    'amount': obj.shipment_value,
+                    'amount': obj.calculate_revenue_total(), # ✅ ใช้ตัวเลขดิบๆ ไปบันทึก
                     'payment_date': obj.confirmed_date or obj.shipped_date,
-                    'remark': f"✔ {ref}"
+                    'remark': f"✔ ยอดส่งของเลขที่ {obj.shipping_no}"
                 }
             )
 
