@@ -1879,7 +1879,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
             
             return f"{no_vat:,.2f}"
         return "0.00"
-    get_revenue_no_vat.short_description = "ยอด Non-VAT""
+    get_revenue_no_vat.short_description = "ยอด Non-VAT"
 
     def get_dc_value(self, obj):
         from .models import CustomerProductContract
