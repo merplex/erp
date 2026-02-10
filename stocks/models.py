@@ -817,8 +817,8 @@ class SalesReport(Product): # ใช้ Product เป็นฐาน
 class ShipmentAccounting(SalesDeliveryLog): # 👈 ใช้ SalesDeliveryLog เป็นฐาน
     class Meta:
         proxy = True
-        verbose_name = "C6. การทำบัญชีขนส่ง (Shipment Accounting)"
-        verbose_name_plural = "C6. การทำบัญชีขนส่ง (Shipment Accounting)"
+        verbose_name = "C6. การทำบัญชี DC/Rebate"
+        verbose_name_plural = "C6. การทำบัญชี DC/Rebate"
 
     def calculate_gross_revenue(self):
         """

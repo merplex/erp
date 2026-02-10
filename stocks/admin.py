@@ -1751,12 +1751,7 @@ class SalesReportAdmin(admin.ModelAdmin):
         color = "#28a745" if profit > 0 else "#dc3545"
         profit_display = "{:,.2f}".format(profit)
         return format_html('<b style="color: {};">{}</b>', color, profit_display)
-# --- ฟังก์ชันส่วนยืนยันยอดชำระ ยอด dc rebate ที่โดนหัก --- 
-class ShipmentAccounting(SalesDeliveryLog):
-    class Meta:
-        proxy = True
-        verbose_name = 'C6. ตรวจสอบรายรับ & DC Rebate'
-        verbose_name_plural = 'C6. ตรวจสอบรายรับ & DC Rebate'
+
 
 # 2. ตั้งค่า Admin ตัวเดียวจบ
 @admin.register(ShipmentAccounting)
