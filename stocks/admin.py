@@ -1780,6 +1780,28 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     
     search_fields = ('sales_order__so_number', 'product__name', 'product__barcodes__code') 
     ordering = ('-shipped_date', 'sales_order__so_number')
+    # --- ให้การค้นหา ใช้ รูปแบบ และ หรือ ได้ ---
+    def get_search_results(self, request, queryset, search_term):
+        # ถ้าคนหาใช้เครื่องหมาย | ให้แยกคำแล้วใช้ Logic OR
+        if '|' in search_term:
+            import operator
+            from django.db.models import Q
+            from functools import reduce
+
+            parts = [p.strip() for p in search_term.split('|') if p.strip()]
+            # สร้าง Query แบบ (field1 OR field2) OR (field1 OR field2)
+            q_objects = []
+            for part in parts:
+                q_part = Q()
+                for field in self.search_fields:
+                    q_part |= Q(**{f"{field}__icontains": part})
+                q_objects.append(q_part)
+            
+            queryset = queryset.filter(reduce(operator.or_, q_objects))
+            return queryset, False
+        
+        # ถ้าไม่มี | ก็ให้ทำงานแบบปกติ (AND)
+        return super().get_search_results(request, queryset, search_term)
 
     # --- 📅 จัดการวันที่ ---
     def short_shipped_date(self, obj):
