@@ -846,16 +846,9 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
 
     def has_change_permission(self, request, obj=None):
         if obj:
-            # ดึง Model หลักมาเช็กตรงๆ เลยว่ามีการ Confirm หรือยัง
-            from .models import SalesDeliveryLog 
-            already_confirmed = SalesDeliveryLog.objects.filter(
-                sales_order=obj, 
-                is_revenue_confirmed=True
-            ).exists()
-            
-            if already_confirmed:
-                return False # สั่งล็อก ห้ามแก้ไข
-                
+            # 🔒 เปลี่ยนจากเช็ก Confirmation เป็นเช็กสถานะใบสั่งขาย
+            if obj.status == 'Completed':
+                return False # ล็อคเฉพาะตอนกด "เสร็จงาน/ปิดงาน" เท่านั้น
         return super().has_change_permission(request, obj)
 
 @admin.register(ProductionOrder)
@@ -1958,23 +1951,37 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     # --- ✅ Actions ---
     @admin.action(description="💰 ยืนยันเฉพาะยอดรับเงิน (Revenue)")
     def confirm_revenue_only(self, request, queryset):
-        queryset.update(is_revenue_confirmed=True)
-        self.message_user(request, "ยืนยันยอดรับเงินเรียบร้อยแล้ว")
+        for obj in queryset:
+            obj.is_revenue_confirmed = True
+            # 🔥 บังคับเรียก save_model เพื่อให้สร้าง SalesPaymentLog
+            self.save_model(request, obj, None, True) 
+        self.message_user(request, f"ยืนยันยอดรับเงิน {queryset.count()} รายการ และสร้างประวัติเงินแล้ว")
 
     @admin.action(description="🚚 ยืนยันเฉพาะค่า DC")
     def confirm_dc_only(self, request, queryset):
-        queryset.update(is_dc_confirmed=True)
-        self.message_user(request, "ยืนยันยอด DC เรียบร้อยแล้ว")
+        for obj in queryset:
+            obj.is_dc_confirmed = True
+            # 🔥 บังคับเรียก save_model เพื่อให้สร้างรายการหักเงิน
+            self.save_model(request, obj, None, True)
+        self.message_user(request, f"ยืนยันยอด DC {queryset.count()} รายการ และหักยอดจ่ายแล้ว")
 
     @admin.action(description="🎁 ยืนยันเฉพาะยอด Rebate")
     def confirm_rebate_only(self, request, queryset):
-        queryset.update(is_rebate_confirmed=True)
-        self.message_user(request, "ยืนยันยอด Rebate เรียบร้อยแล้ว")
+        for obj in queryset:
+            obj.is_rebate_confirmed = True
+            # 🔥 บังคับเรียก save_model เพื่อให้สร้างรายการหักเงิน
+            self.save_model(request, obj, None, True)
+        self.message_user(request, f"ยืนยันยอด Rebate {queryset.count()} รายการ และหักยอดจ่ายแล้ว")
 
     @admin.action(description="✅ ยืนยันยอดทั้งหมด (ครบทุกส่วน)")
     def confirm_selected_items(self, request, queryset):
-        queryset.update(is_revenue_confirmed=True, is_dc_confirmed=True, is_rebate_confirmed=True)
-        self.message_user(request, "ยืนยันยอดสำเร็จครบถ้วน")
+        for obj in queryset:
+            obj.is_revenue_confirmed = True
+            obj.is_dc_confirmed = True
+            obj.is_rebate_confirmed = True
+            # สั่ง Save ทีละตัวเพื่อให้ save_model ที่เราเขียนไว้ทำงาน
+            self.save_model(request, obj, None, True)
+        self.message_user(request, f"ยืนยันและบันทึกประวัติการเงิน {queryset.count()} รายการแล้ว")
 
     def get_so_number(self, obj):
         return obj.sales_order.so_number
