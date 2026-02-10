@@ -1438,8 +1438,8 @@ class IncomeReportAdmin(DocumentLockMixin, admin.ModelAdmin):
     # 🎯 1. ฟังก์ชันช่วยคำนวณยอดรับ (เฉพาะยอดบวก) เพื่อไม่ให้ค่าใช้จ่ายมาดึงยอด Paid ลง
     def get_revenue_only_paid(self, obj):
         from django.db.models import Sum
-        # กรองเอาเฉพาะยอดที่เป็นบวก (Revenue) เท่านั้น
-        total = obj.salespaymentlog_set.filter(amount__gt=0).aggregate(Sum('amount'))['amount__sum'] or 0
+        # ✅ ใช้ .payments เพราะเป็น related_name ที่เปรมตั้งไว้
+        total = obj.payments.filter(amount__gt=0).aggregate(Sum('amount'))['amount__sum'] or 0
         return total
 
     # 🎯 2. แก้ไขการแสดงผลยอดรับเงิน
@@ -1465,8 +1465,8 @@ class IncomeReportAdmin(DocumentLockMixin, admin.ModelAdmin):
     # 🎯 4. (แถม) ฟังก์ชันดูยอดที่โดนหักไป (DC + Rebate) เพื่อความโปร่งใส
     def get_total_deductions_display(self, obj):
         from django.db.models import Sum
-        # กรองเอาเฉพาะยอดติดลบ (ค่าธรรมเนียมต่างๆ)
-        total = obj.salespaymentlog_set.filter(amount__lt=0).aggregate(Sum('amount'))['amount__sum'] or 0
+        # ✅ ใช้ .payments และกรองเฉพาะยอดติดลบ (DC/Rebate)
+        total = obj.payments.filter(amount__lt=0).aggregate(Sum('amount'))['amount__sum'] or 0
         return format_html('<span style="color:#6c757d;">{:,.2f}</span>', total)
     get_total_deductions_display.short_description = "➖ ยอดหักสะสม"
 
@@ -1910,28 +1910,28 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
 
     # 🎯 5. ยอด ที่ยืนยันทั้งหมด จะถูกบันทึกย้อนไปใน salesorder และ incomereport
     def save_model(self, request, obj, form, change):
-        # 1. บันทึกข้อมูลของใบส่งของ (C6)
         super().save_model(request, obj, form, change)
+        from .models import SalesPayment # ✅ ชื่อ Model ถูกต้อง
 
-        from .models import SalesPaymentLog
-
-        # 🎯 [SECTION 1] ยืนยันยอดรับเงิน (รายรับหลัก)
         if obj.is_revenue_confirmed:
-            revenue_ref = f"ยอดส่งของเลขที่ {obj.shipping_no}"
-            if not SalesPaymentLog.objects.filter(sales_order=obj.sales_order, notes__icontains=revenue_ref).exists():
-                SalesPaymentLog.objects.create(
-                    sales_order=obj.sales_order,
-                    amount=obj.shipment_value,
-                    payment_date=obj.confirmed_date or obj.shipped_date,
-                    notes=f"✔ {revenue_ref}"
-                )
+            ref = f"ยอดจากใบส่งของ {obj.shipping_no}"
+            # ✅ ใช้ order=... และ remark=... ให้ตรงกับ Model SalesPayment
+            SalesPayment.objects.update_or_create(
+                order=obj.sales_order, 
+                remark__icontains=ref,
+                defaults={
+                    'amount': obj.shipment_value,
+                    'payment_date': obj.confirmed_date or obj.shipped_date,
+                    'remark': f"✔ {ref}"
+                }
+            )
 
         # 🎯 [SECTION 2] ยืนยันยอด Rebate (รายการหัก 1)
         if obj.is_rebate_confirmed and obj.rebate_amount > 0:
             rebate_ref = f"หัก Rebate จากใบส่งของ {obj.shipping_no}"
-            if not SalesPaymentLog.objects.filter(sales_order=obj.sales_order, notes__icontains=rebate_ref).exists():
-                SalesPaymentLog.objects.create(
-                    sales_order=obj.sales_order,
+            if not SalesPayment.objects.filter(order=obj.sales_order, notes__icontains=rebate_ref).exists():
+                SalesPayment.objects.create(
+                    order=obj.sales_order,
                     amount=-obj.rebate_amount, # ติดลบเพื่อหักยอด
                     payment_date=obj.confirmed_date,
                     notes=f"⚠ {rebate_ref}"
@@ -1940,9 +1940,9 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
         # 🎯 [SECTION 3] ยืนยันยอด DC (รายการหัก 2)
         if obj.is_dc_confirmed and obj.dc_amount > 0:
             dc_ref = f"หักค่า DC จากใบส่งของ {obj.shipping_no}"
-            if not SalesPaymentLog.objects.filter(sales_order=obj.sales_order, notes__icontains=dc_ref).exists():
-                SalesPaymentLog.objects.create(
-                    sales_order=obj.sales_order,
+            if not SalesPayment.objects.filter(order=obj.sales_order, notes__icontains=dc_ref).exists():
+                SalesPayment.objects.create(
+                    order=obj.sales_order,
                     amount=-obj.dc_amount, # ติดลบเพื่อหักยอด
                     payment_date=obj.confirmed_date,
                     notes=f"📦 {dc_ref}"
