@@ -899,13 +899,13 @@ class ProductionMaterialUsageInline(admin.TabularInline):
 
 @admin.register(ProductionOrder)
 class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
-    fields = ['pd_number', 'product', 'bom', 'quantity_planned', 'quantity_actual', 'status', 'notes']
+    fields = ['product', 'bom', 'quantity_planned', 'quantity_actual', 'status', 'notes']
     list_display = ('pd_number', 'product', 'quantity_planned', 'quantity_actual', 'get_diff', 'status')
     list_filter = ('status', 'order_date', 'product')
     search_fields = ('pd_number', 'product__name')
     inlines = [ProductionMaterialUsageInline,ProductionLogInline]
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
-    readonly_fields = ('created_by', 'status') 
+    readonly_fields = ('pd_number', 'created_by', 'status') 
     
     actions = ['mark_as_completed']
 
@@ -973,7 +973,7 @@ class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
             obj.save() # สั่ง Save ตรงนี้ สถานะใน models.py จะถูกคำนวณใหม่ทันที
         else:
             formset.save()
-            
+
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         # 🎯 1. สำหรับฟิลด์ Product: กรองเอาเฉพาะสินค้าที่มีการติ๊ก 'มี BOM'
         if db_field.name == "product":
