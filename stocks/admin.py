@@ -563,53 +563,41 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
 
     # --- ให้การค้นหา ใช้ รูปแบบ และ หรือ ได้ ---
     def get_search_results(self, request, queryset, search_term):
-        # ถ้าคนหาใช้เครื่องหมาย | ให้แยกคำแล้วใช้ Logic OR
+        # 🎯 1. จัดการระบบ OR (|) ก่อน
         if '|' in search_term:
             import operator
             from django.db.models import Q
             from functools import reduce
-
             parts = [p.strip() for p in search_term.split('|') if p.strip()]
-            # สร้าง Query แบบ (field1 OR field2) OR (field1 OR field2)
             q_objects = []
             for part in parts:
                 q_part = Q()
                 for field in self.search_fields:
                     q_part |= Q(**{f"{field}__icontains": part})
                 q_objects.append(q_part)
-            
             queryset = queryset.filter(reduce(operator.or_, q_objects))
-            return queryset, False
-        
-        # ถ้าไม่มี | ก็ให้ทำงานแบบปกติ (AND)
-        return super().get_search_results(request, queryset, search_term)
+            use_distinct = False
+        else:
+            # ถ้าไม่มี | ให้ค้นหาปกติ
+            queryset, use_distinct = super().get_search_results(request, queryset, search_term)
 
-    def get_search_results(self, request, queryset, search_term):
-        queryset, use_distinct = super().get_search_results(request, queryset, search_term)
-
-        # เช็คว่านี่คือการค้นหาจากระบบ Autocomplete หรือไม่
+        # 🎯 2. จัดการระบบ Autocomplete สำหรับ PO (ล็อคตาม Supplier)
         if 'autocomplete' in request.path:
             referer = request.META.get('HTTP_REFERER', '')
-            
-            # ถ้าค้นหามาจากหน้า Purchase Order (ใบสั่งซื้อ)
             if 'purchaseorder' in referer:
                 import re
-                # แกะรหัส ID ของใบสั่งซื้อจาก URL (เช่น .../purchaseorder/3/change/)
                 match = re.search(r'purchaseorder/(\d+)/change/', referer)
                 if match:
                     po_id = match.group(1)
-                    from .models import PurchaseOrder, Product
+                    from .models import PurchaseOrder
                     from django.db.models import Q
-                    
                     try:
                         po = PurchaseOrder.objects.get(pk=po_id)
                         if po.supplier:
-                            # 🎯 ล็อคทันที: เอาเฉพาะที่ Supplier นี้ขาย หรือรายการที่ไม่ใช่สินค้า
                             queryset = queryset.filter(
                                 Q(product_suppliers__supplier=po.supplier) | Q(is_product=False)
                             )
-                    except PurchaseOrder.DoesNotExist:
-                        pass
+                    except PurchaseOrder.DoesNotExist: pass
         
         return queryset, use_distinct
 
