@@ -2189,7 +2189,7 @@ class InternationalPurchaseTrackingAdmin(admin.ModelAdmin):
             weight = "bold" if obj.status == name else "normal"
             cells += f"<td style='border:1px solid #ddd; padding:4px; color:{color}; font-weight:{weight};'>{date_str}</td>"
 
-        return format_html(
+        return mark_safe(
             f"<table style='width:100%; text-align:center; border-collapse:collapse; font-size:10px;'>"
             f"<thead><tr>{headers}</tr></thead>"
             f"<tbody><tr>{cells}</tr></tbody></table>"
