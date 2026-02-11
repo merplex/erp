@@ -578,7 +578,7 @@ class SupplierAdmin(DocumentLockMixin,admin.ModelAdmin):
 
 @admin.register(Product)
 class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
-    list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit', 'has_bom', 'created_by')
+    list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit','get_total_stock_value', 'has_bom', 'created_by')
     list_filter = ('category','is_product', 'tags', 'has_bom', 'suppliers')
     search_fields = ('name', 'barcodes__code','tags__name')
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
@@ -679,6 +679,22 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
         # ดึงจาก property ที่เราเขียนไว้ใน models
         return obj.latest_barcode
     get_latest_barcode.short_description = "บาร์โค้ด (ล่าสุด)"
+
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request)
+        queryset = queryset.annotate(
+            _total_stock_value=ExpressionWrapper(
+                F('stock_quantity') * F('buy_price'),
+                output_field=DecimalField()
+            )
+        )
+        return queryset
+    # 3. สร้างฟังก์ชันแสดงผล (ใน ProductAdmin)
+    @admin.display(description='มูลค่า', ordering='_total_stock_value')
+    def get_total_stock_value(self, obj):
+        # ✅ ใช้ int() เพื่อปัดเศษทศนิยมทิ้ง และใช้ :, เพื่อใส่คอมมาคั่นหลักพัน
+        value = obj._total_stock_value or 0
+        return f"{int(value):,}"
 
     def save_model(self, request, obj, form, change):
         if not change:
