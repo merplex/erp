@@ -248,7 +248,7 @@ class PurchaseOrder(models.Model):
             ('Cancelled', 'ยกเลิก')
         ],
         default='Pending',
-        verbose_name="สถานะเอกสาร (PO Status)"
+        verbose_name="สถานะใบสั่งซื้อ"
     )
 
     # ✅ 2. เพิ่ม: สถานะการเงิน (แยกออกมาต่างหาก)
