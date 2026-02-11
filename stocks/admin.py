@@ -427,9 +427,22 @@ class BOMIngredientInline(admin.TabularInline):
 
 class PurchaseItemInline(admin.TabularInline):
     model = PurchaseItem
+    # 🎯 เก็บความสามารถเดิมไว้: ช่วยให้ค้นหาชื่อสินค้าได้ไวขึ้น
     autocomplete_fields = ['product'] 
-    extra = 1
-    readonly_fields = ('quantity_received',) 
+    extra = 0
+    
+    # 🎯 จัดเรียงคอลัมน์ใหม่ตามที่เปรมต้องการ
+    fields = [
+        'product', 
+        'quantity_ordered', 
+        'quantity_received', 
+        'get_pending',     # ✅ คอลัมน์ "ขาดรับ"
+        'price_unit', 
+        'total_price'      # ✅ คอลัมน์ "ราคารวม"
+    ]
+    
+    # 🎯 ป้องกันการแก้เลขที่ระบบควรคำนวณเอง
+    readonly_fields = ['quantity_received', 'get_pending', 'total_price']
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "product":
@@ -465,6 +478,19 @@ class PurchaseItemInline(admin.TabularInline):
             #     kwargs["queryset"] = Product.objects.none()
 
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
+    def get_pending(self, obj):
+        # ตรวจสอบค่าว่างก่อนคำนวณป้องกัน Error
+        qty_ordered = obj.quantity_ordered or 0
+        qty_received = obj.quantity_received or 0
+        
+        diff = qty_ordered - qty_received
+        
+        if diff > 0:
+            # ✅ แสดงยอดติดลบสีแดง (-X) สำหรับยอดที่ยังขาดรับ
+            return format_html('<b style="color:#dc3545;">-{}</b>', diff)
+        return 0
+    
+    get_pending.short_description = "ขาดรับ"
 
 class PurchaseReceiptLogInline(admin.TabularInline):
     model = PurchaseReceiptLog
@@ -1012,15 +1038,28 @@ class StockPlanningAdmin(admin.ModelAdmin):
     list_filter = ('category', 'suppliers', ProductOnlyFilter, BuyPriceRangeFilter)
     search_fields = ('name', 'barcodes__code', 'tags__name')
     # 🎯 1. แผนรับ (PO): สั่ง - รับจริง (รวม Draft)
+
     def get_pending_in(self, obj):
-        from .models import PurchaseItem # 👈 เรียกใช้ Model ตรงๆ
+        from .models import PurchaseItem
+        
+        # ✅ รวมทุกสถานะที่ "ของยังมาไม่ถึงมือ" (เพื่อให้หน้า C1 แม่นยำที่สุด)
         items = PurchaseItem.objects.filter(
             product=obj,
-            purchase_order__status__in=['Draft', 'Confirmed', 'Received']
+            purchase_order__status__in=[
+                'Draft', 'Confirmed', 'Ordered', 'Paid', 
+                'Loaded', 'Departed', 'Arrived', 'Received'
+            ]
         )
-        # คำนวณส่วนต่าง (Backorder)
-        total = sum((i.quantity_ordered - i.quantity_received) for i in items)
+        
+        # 🎯 สูตร: รวมส่วนต่าง (Ordered - Received) ของทุกใบที่ยังไม่ปิดงาน
+        total = sum(
+            (i.quantity_ordered - i.quantity_received) 
+            for i in items 
+            if (i.quantity_ordered or 0) > (i.quantity_received or 0)
+        )
+        
         return total if total > 0 else 0
+
     get_pending_in.short_description = "แผนรับ (PO)"
 
     # 🎯 2. แผนส่ง (SO): สั่ง - ส่งจริง (รวม Draft)
@@ -2110,3 +2149,77 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     def get_so_number(self, obj):
         return obj.sales_order.so_number
     get_so_number.short_description = "เลขที่ SO"
+
+class InternationalPurchaseTracking(PurchaseOrder):
+    class Meta:
+        proxy = True
+        verbose_name = "B4. ติดตามสินค้าต่างประเทศ (Import Tracking)"
+        verbose_name_plural = "B4. ติดตามสินค้าต่างประเทศ (Import Tracking)"
+
+@admin.register(InternationalPurchaseTracking)
+class InternationalPurchaseTrackingAdmin(admin.ModelAdmin):
+    # เพิ่ม related_po เข้ามาในตารางด้วยเพื่อให้เห็นว่าลิ้งก์กับใบไหน
+    list_display = ('po_number', 'related_po', 'supplier', 'display_tracking_table', 'status')
+    list_filter = ('status', 'supplier', 'order_date') # กรองตามวันที่ได้ด้วย
+    search_fields = ('po_number', 'related_po__po_number', 'supplier__name')
+
+    # ✅ 1. กรองเฉพาะ: ต่างประเทศ (International) และยังไม่ปิดใบสั่งซื้อ (Closed)
+    def get_queryset(self, request):
+        return super().get_queryset(request).filter(
+            supplier__type='International'  # 👈 ใช้ __ เพื่อวิ่งไปดู field ใน model Supplier
+        ).exclude(
+            status='Closed'
+        )
+
+    def display_tracking_table(self, obj):
+        milestones = [
+            ('Ordered', obj.order_date),
+            ('Paid', obj.paid_date), # อัปเดตตรงนี้
+            ('Loaded', obj.loaded_date),
+            ('Departed', obj.departed_date),
+            ('Arrived', obj.arrived_date),
+            ('Received', obj.received_date),
+        ]
+        
+        headers = "".join([f"<th style='border:1px solid #ddd; padding:4px; background:#f8f9fa;'>{m[0]}</th>" for m in milestones])
+        cells = ""
+        for name, date in milestones:
+            date_str = date.strftime('%d/%m/%y') if date else "-"
+            color = "#28a745" if obj.status == name else "#666"
+            weight = "bold" if obj.status == name else "normal"
+            cells += f"<td style='border:1px solid #ddd; padding:4px; color:{color}; font-weight:{weight};'>{date_str}</td>"
+
+        return format_html(
+            f"<table style='width:100%; text-align:center; border-collapse:collapse; font-size:10px;'>"
+            f"<thead><tr>{headers}</tr></thead>"
+            f"<tbody><tr>{cells}</tr></tbody></table>"
+        )
+    display_tracking_table.short_description = "📅 Timeline การส่งมอบ"
+
+    # ✅ 5. Actions: ขยับสถานะ Milestone แบบรวดเร็ว (ครบชุด)
+    actions = ['set_paid', 'set_loaded', 'set_departed', 'set_arrived', 'set_received', 'set_closed']
+
+    @admin.action(description='💰 2. เปลี่ยนสถานะ: จ่ายเงินแล้ว (Paid)')
+    def set_paid(self, request, queryset):
+        queryset.update(status='Paid', paid_date=timezone.now().date())
+
+    @admin.action(description='📦 3. เปลี่ยนสถานะ: ขึ้นตู้แล้ว (Loaded)')
+    def set_loaded(self, request, queryset):
+        queryset.update(status='Loaded', loaded_date=timezone.now().date())
+
+    @admin.action(description='🚢 4. เปลี่ยนสถานะ: ออกเดินทาง (Departed)')
+    def set_departed(self, request, queryset):
+        queryset.update(status='Departed', departed_date=timezone.now().date())
+
+    @admin.action(description='🏁 5. เปลี่ยนสถานะ: ถึงไทยแล้ว (Arrived)')
+    def set_arrived(self, request, queryset):
+        queryset.update(status='Arrived', arrived_date=timezone.now().date())
+
+    @admin.action(description='🏢 6. เปลี่ยนสถานะ: ถึงโกดังแล้ว (Received)')
+    def set_received(self, request, queryset):
+        queryset.update(status='Received', received_date=timezone.now().date())
+
+    @admin.action(description='🔒 7. ปิดใบสั่งซื้อ (Closed/ซ่อนรายการ)')
+    def set_closed(self, request, queryset):
+        queryset.update(status='Closed')
+        
