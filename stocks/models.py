@@ -337,8 +337,12 @@ class PurchaseItem(models.Model):
         if hasattr(self, 'purchasepaymentlog_set'):
             return sum(log.amount for log in self.purchasepaymentlog_set.all())
         return 0
+
     @property
     def total_price(self):
+        # ✅ เช็คก่อนว่ามีค่าครบทั้งคู่ไหม ถ้าไม่มีให้คืนค่า 0 ไปก่อน
+        if self.quantity_ordered is None or self.unit_price is None:
+            return 0
         return self.quantity_ordered * self.unit_price
 
     def save(self, *args, **kwargs):
