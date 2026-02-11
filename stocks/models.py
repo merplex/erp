@@ -216,7 +216,7 @@ class PurchaseOrder(models.Model):
         on_delete=models.SET_NULL, 
         null=True, 
         blank=True, 
-        verbose_name="อ้างอิง PO ที่เกี่ยวข้อง"
+        verbose_name="Related PO"
     )
     paid_date = models.DateField(null=True, blank=True, verbose_name="วันที่จ่ายเงิน")
     loaded_date = models.DateField(null=True, blank=True, verbose_name="วันที่ขึ้นตู้")

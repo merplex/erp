@@ -437,7 +437,7 @@ class PurchaseItemInline(admin.TabularInline):
         'quantity_ordered', 
         'quantity_received', 
         'get_pending',     # ✅ คอลัมน์ "ขาดรับ"
-        'price_unit', 
+        'unit_price', 
         'total_price'      # ✅ คอลัมน์ "ราคารวม"
     ]
     
