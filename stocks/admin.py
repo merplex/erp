@@ -690,7 +690,7 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
         )
         return queryset
     # 3. สร้างฟังก์ชันแสดงผล (ใน ProductAdmin)
-    @admin.display(description='มูลค่า', ordering='_total_stock_value')
+    @admin.display(description='มูลค่า', ordering='-_total_stock_value')
     def get_total_stock_value(self, obj):
         # ✅ ใช้ int() เพื่อปัดเศษทศนิยมทิ้ง และใช้ :, เพื่อใส่คอมมาคั่นหลักพัน
         value = obj._total_stock_value or 0
