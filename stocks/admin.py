@@ -684,7 +684,7 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
         queryset = super().get_queryset(request)
         queryset = queryset.annotate(
             _total_stock_value=ExpressionWrapper(
-                F('stock_quantity') * F('buy_price'),
+                F('stock_quantity') * F('sale_price'),
                 output_field=DecimalField()
             )
         )
