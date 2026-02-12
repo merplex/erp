@@ -1039,8 +1039,25 @@ class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
 
 
     def save_model(self, request, obj, form, change):
-        if not change:
-            obj.created_by = request.user
+        # 1. เช็กก่อนว่ามีการเปลี่ยน BOM หรือเปล่า (กรณีแก้ไขใบเดิม)
+        if change and 'bom' in form.changed_data:
+            # ลบวัตถุดิบชุดเก่าทิ้งก่อน (เพราะสูตรเปลี่ยนแล้ว)
+            obj.materials.all().delete() 
+            
+            # สั่งให้โหลดวัตถุดิบจาก BOM ใหม่เข้ามา
+            # (สมมติว่าในโมเดล ProductionOrder มีฟังก์ชัน load_materials_from_bom นะครับ)
+            if hasattr(obj, 'load_materials_from_bom'):
+                obj.load_materials_from_bom()
+        
+        # 2. กรณีสร้างใบใหม่ (New Object) และเลือก BOM มาเลย
+        elif not change and obj.bom:
+            # บันทึกตัวหลักก่อนเพื่อให้มี ID
+            super().save_model(request, obj, form, change)
+            # แล้วค่อยโหลดวัตถุดิบ
+            if hasattr(obj, 'load_materials_from_bom'):
+                obj.load_materials_from_bom()
+            return # ออกจากฟังก์ชันเลยเพราะ save ไปแล้ว
+
         super().save_model(request, obj, form, change)
 
     def get_diff(self, obj):
