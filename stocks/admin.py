@@ -4,13 +4,14 @@ from django.contrib import admin
 from .models import ProductTag
 from .models import (
     Product, ProductTag, ProductCategory, Supplier, 
-    ProductBarcode, ProductSupplier, # 👈 สองตัวนี้คือตัวที่หายไป
+    ProductBarcode, ProductSupplier,
     PurchaseOrder, PurchaseItem, PurchaseReceiptLog, PurchasePaymentLog,
     SalesOrder, SalesItem, SalesDeliveryLog, SalesPayment,
     ProductionOrder, ProductionMaterialUsage, ProductionLog,
     BOM, BOMIngredient, DocumentLock, StockPlanning, 
     StockAdjustment, Customer, CustomerProductContract, FinanceReport, 
-    IncomeReport, ShipmentAccounting
+    IncomeReport, ShipmentAccounting, InternationalPurchaseTracking,
+    SalesReport  # 👈 เพิ่มตัวที่ทำพังเมื่อกี้เข้าไปแล้วครับ!
 )
 from .models import DocumentLock
 # 1. เปลี่ยนชื่อที่ปรากฏบนหัวเอกสาร (Header สีน้ำเงิน)
@@ -2177,12 +2178,6 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     def get_so_number(self, obj):
         return obj.sales_order.so_number
     get_so_number.short_description = "เลขที่ SO"
-
-class InternationalPurchaseTracking(PurchaseOrder):
-    class Meta:
-        proxy = True
-        verbose_name = "B4. ติดตามสินค้าต่างประเทศ (Import Tracking)"
-        verbose_name_plural = "B4. ติดตามสินค้าต่างประเทศ (Import Tracking)"
 
 @admin.register(InternationalPurchaseTracking)
 class InternationalPurchaseTrackingAdmin(admin.ModelAdmin):
