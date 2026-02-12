@@ -854,22 +854,35 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
         ฟังก์ชันช่วยสร้างใบผลิตอัตโนมัติจากรายการขาย
         """
         from .models import ProductionOrder, BOM
+        import datetime
         
-        # 🛑 1. เช็กเงื่อนไข BOM ก่อนสร้าง (Logic ป้องกัน Error)
-        # ต้องมีการติ๊ก has_bom และต้องมีข้อมูลสูตรในระบบจริง
-        has_bom_data = BOM.objects.filter(product=sales_item.product).exists()
-        if not getattr(sales_item.product, 'has_bom', False) or not has_bom_data:
-            return None # คืนค่า None เพื่อให้ตัว Action รู้ว่าตัวนี้สร้างไม่ได้
+        # 🔍 1. เช็ก BOM และสถานะสินค้าก่อน
+        bom_obj = BOM.objects.filter(product=sales_item.product).first()
+        
+        # เช็กทั้ง Flag ในสินค้า และข้อมูล BOM จริงในระบบ
+        if not getattr(sales_item.product, 'has_bom', False) or not bom_obj:
+            return None 
 
-        # ✅ 2. สร้างใบผลิต (ปล่อยให้ model.save() รันเลข PD เอง)
-        return ProductionOrder.objects.create(
+        # 🎯 2. ดึงจำนวนที่สั่ง (แก้จาก .quantity เป็น .quantity_ordered)
+        qty = getattr(sales_item, 'quantity_ordered', 0)
+        if qty <= 0:
+            return None
+
+        # ✅ 3. สั่งสร้างใบผลิต
+        new_pd = ProductionOrder(
             product=sales_item.product,
-            quantity_planned=sales_item.quantity, # ใช้ชื่อฟิลด์ใหม่ที่เปรมแก้
+            bom=bom_obj,  # 👈 ใส่ BOM เข้าไปด้วยเพื่อให้ใบผลิตสมบูรณ์
+            quantity_planned=qty, 
             status='Draft',
             order_date=datetime.date.today(),
             created_by=user,
-            notes=f"สร้างอัตโนมัติจาก SO: {sales_item.sales_order.so_number}"
+            notes=f"สร้างอัตโนมัติจาก SO: {sales_item.sales_order.so_number or sales_item.sales_order.id}"
         )
+        
+        # ใช้ .save() เพื่อให้ Logic generate_number ทำงานได้แน่นอน
+        new_pd.save()
+        
+        return new_pd
     
     @admin.action(description='⚡ เปิดใบสั่งผลิต (Auto PD)')
     def make_production_order(self, request, queryset):
