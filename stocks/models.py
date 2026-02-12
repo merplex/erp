@@ -587,7 +587,13 @@ class SalesItem(models.Model):
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey(Product, on_delete=models.CASCADE,related_name='sales_items')
     quantity_shipped = models.PositiveIntegerField(default=0, verbose_name="ส่งสะสม")
-
+    bom = models.ForeignKey(
+        'BOM', 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        verbose_name="สูตรผลิต"
+    )
     barcode_obj = models.ForeignKey(ProductBarcode, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="บาร์โค้ด/หน่วยขาย")
     # ช่องคีย์หลัก (คีย์ได้ทั้ง 10 ชิ้น หรือ 10 แพ็ค)
     quantity_unit = models.PositiveIntegerField(default=1, verbose_name="จำนวนที่สั่ง")
