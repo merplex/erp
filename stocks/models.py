@@ -188,7 +188,9 @@ class BOM(models.Model):
     updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="bom_editor")
     @property
     def total_cost(self): return sum(item.subtotal for item in self.ingredients.all())
-    def __str__(self): return self.name
+    def __str__(self):
+        # โชว์แบบนี้: "เสื้อยืด XL - สูตรมาตรฐาน (v.1)" อ่านง่ายขึ้นเยอะ
+        return f"{self.product.name} - {self.name}"
     class Meta: verbose_name_plural = "A5. สูตรการผลิต (BOM)"
 
 class BOMIngredient(models.Model):
@@ -226,17 +228,22 @@ class PurchaseOrder(models.Model):
     received_date = models.DateField(null=True, blank=True, verbose_name="วันที่ถึงโกดัง")
 
     STATUS_CHOICES = [
-    # --- ช่วง Tracking (โชว์ใน B4 และยอดรอรับใน C1) ---
-    ('Ordered', '1. สั่งซื้อ (Ordered)'),
-    ('Paid', '2. จ่ายเงินแล้ว (Paid)'),
-    ('Loaded', '3. ขึ้นตู้ (Loaded)'),
-    ('Departed', '4. ออกเดินทาง (Departed)'),
-    ('Arrived', '5. ถึงไทย (Arrived)'),
-    ('Received', '6. รับของบางส่วน (Received)'), # มีของเข้าโกดังบ้างแล้ว
-    
-    # --- ช่วงจบงาน (หายจาก B4 และไม่นับเป็นยอดรอรับใน C1) ---
-    ('Completed', '7. ปิดงาน/ครบถ้วน (Completed)'), 
-    ('Cancelled', '8. ยกเลิก (Cancelled)'),
+        # --- ช่วงเริ่มต้น ---
+        ('Draft', 'ร่าง (Draft)'),
+        ('Pending', 'รอรับของ/สั่งซื้อแล้ว (Pending)'),
+        
+        # --- ช่วง Tracking (สำหรับ B4) ---
+        ('Paid', '💰 จ่ายเงินแล้ว (Paid)'),
+        ('Loaded', '📦 ขึ้นตู้แล้ว (Loaded)'),
+        ('Departed', '🚢 ออกเดินทาง (Departed)'),
+        ('Arrived', '🏁 ถึงไทย (Arrived)'),
+        
+        # --- ช่วงรับของ (Warehouse) ---
+        ('Partially Received', '📥 รับของบางส่วน (Partially Received)'), # สำคัญ! ต้องมีตัวนี้
+        ('Completed', '✅ ปิดงาน/ครบถ้วน (Completed)'),
+        
+        # --- ยกเลิก ---
+        ('Cancelled', '❌ ยกเลิก (Cancelled)'),
     ]
 
     # ✅ 1. สถานะเอกสาร (เหมือนเดิม ดูแลเรื่องการสั่งของ/รับของ)
