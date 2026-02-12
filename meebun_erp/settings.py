@@ -83,15 +83,20 @@ WSGI_APPLICATION = "meebun_erp.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
+# หาบรรทัด DATABASES ของเก่า แล้ววางทับด้วยอันนี้ครับ
 DATABASES = {
     'default': dj_database_url.config(
         default=os.environ.get('DATABASE_URL'),
         conn_max_age=600,
-        # เพิ่มบรรทัดข้างล่างนี้เข้าไปครับสำคัญมาก!
-        ssl_require={'ca_certs': None} 
+        conn_health_checks=True,
     )
 }
 
+# เพิ่ม 3 บรรทัดนี้ลงไปข้างล่าง DATABASES เพื่อบังคับใช้ SSL ครับ
+if not os.environ.get('RAILWAY_ENVIRONMENT_NAME') == '': # เช็กว่ารันบน Railway หรือเปล่า
+    DATABASES['default']['OPTIONS'] = {
+        'sslmode': 'require',
+    }
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
 
