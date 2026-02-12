@@ -2178,8 +2178,9 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     # 🎯 5. ยอด ที่ยืนยันทั้งหมด จะถูกบันทึกย้อนไปใน salesorder และ incomereport
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
+        from .models import SalesPayment
         if obj.is_revenue_confirmed:
-            from .models import SalesPayment
+            
             SalesPayment.objects.update_or_create(
                 order=obj.sales_order,
                 remark__icontains=f"ยอดส่งของ {obj.shipping_no}",
@@ -2193,7 +2194,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
         # 🎯 [SECTION 2] ยืนยันยอด Rebate (รายการหัก 1)
         if obj.is_rebate_confirmed and obj.rebate_amount > 0:
             rebate_ref = f"หัก Rebate จากใบส่งของ {obj.shipping_no}"
-            if not SalesPayment.objects.filter(order=obj.sales_order, notes__icontains=rebate_ref).exists():
+            if not SalesPayment.objects.filter(order=obj.sales_order, remark__icontains=rebate_ref).exists():
                 SalesPayment.objects.create(
                     order=obj.sales_order,
                     amount=-obj.rebate_amount, # ติดลบเพื่อหักยอด
@@ -2204,7 +2205,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
         # 🎯 [SECTION 3] ยืนยันยอด DC (รายการหัก 2)
         if obj.is_dc_confirmed and obj.dc_amount > 0:
             dc_ref = f"หักค่า DC จากใบส่งของ {obj.shipping_no}"
-            if not SalesPayment.objects.filter(order=obj.sales_order, notes__icontains=dc_ref).exists():
+            if not SalesPayment.objects.filter(order=obj.sales_order, remark__icontains=dc_ref).exists():
                 SalesPayment.objects.create(
                     order=obj.sales_order,
                     amount=-obj.dc_amount, # ติดลบเพื่อหักยอด
