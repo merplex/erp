@@ -585,7 +585,13 @@ class IncomeReport(SalesOrder):
 
 class SalesItem(models.Model):
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='items')
-    product = models.ForeignKey(Product, on_delete=models.CASCADE,related_name='sales_items')
+    product = models.ForeignKey(
+        Product, 
+        on_delete=models.CASCADE, 
+        related_name='sales_items', # ห้ามลบตัวนี้เด็ดขาด!
+        null=True,   
+        blank=True   
+    )
     quantity_shipped = models.PositiveIntegerField(default=0, verbose_name="ส่งสะสม")
     bom = models.ForeignKey(
         'BOM', 
