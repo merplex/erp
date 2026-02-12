@@ -642,14 +642,16 @@ class SalesItem(models.Model):
         return price * qty
 
     def save(self, *args, **kwargs):
-        # 🎯 ขั้นที่ 1: จัดการข้อมูลสินค้าและจำนวน
+        # 🎯 ขั้นที่ 1: จัดการข้อมูลสินค้าและจำนวน (Priority: Barcode > Product)
         if self.barcode_obj:
-            # กรณีระบุบาร์โค้ด: ดึงสินค้าและตัวคูณมาใช้
+            # ดึงสินค้าจากบาร์โค้ดมาใส่ในช่อง product ทันที
             self.product = self.barcode_obj.product
+            
+            # คำนวณจำนวนตามตัวคูณ
             factor = getattr(self.barcode_obj, 'conversion_factor', 1) or 1
             self.quantity_ordered = self.quantity_unit * factor
             
-            # เลือก BOM ตามบาร์โค้ด
+            # เลือก BOM ตามบาร์โค้ด (ถ้าว่าง)
             if not self.bom:
                 from .models import BOM
                 target_bom = BOM.objects.filter(name=self.barcode_obj.code).first()
@@ -657,17 +659,16 @@ class SalesItem(models.Model):
                     target_bom = BOM.objects.filter(product=self.product).order_by('-id').first()
                 self.bom = target_bom
         else:
-            # กรณี "ไม่ระบุบาร์โค้ด" (เลือกสินค้าเอง):
-            # ยอดรวมชิ้น = ยอดที่กรอกในช่องจำนวน (ตัวคูณเป็น 1 โดยปริยาย)
+            # กรณีไม่มีบาร์โค้ด (เลือกสินค้าเอง)
             self.quantity_ordered = self.quantity_unit
-            
-            # ถ้าไม่มีบาร์โค้ด ให้ดึง BOM ตัวล่าสุดของสินค้านั้นมาใช้
+            # ดึง BOM ล่าสุดของสินค้านั้น
             if self.product and not self.bom:
                 from .models import BOM
                 self.bom = BOM.objects.filter(product=self.product).order_by('-id').first()
 
-        # 🎯 ขั้นที่ 2: จัดการเรื่องราคา (จากสัญญา T2.1)
-        if (not self.sale_price or self.sale_price == 0) and self.product:
+        # 🎯 ขั้นที่ 2: จัดการเรื่องราคา (ดึงจากสัญญา T2.1)
+        # เช็คว่ามี product หรือยัง (ป้องกันพังถ้ากรอกไม่ครบ)
+        if self.product and (not self.sale_price or self.sale_price == 0):
             from .models import CustomerProductContract
             
             contract = CustomerProductContract.objects.filter(
@@ -676,12 +677,13 @@ class SalesItem(models.Model):
             ).first()
 
             # ราคาต่อชิ้น (Contract หรือ Standard)
-            base_unit_price = contract.contract_price if contract else self.product.sale_price
+            base_unit_price = contract.contract_price if contract else (self.product.sale_price or 0)
             
-            # ถ้าระบุบาร์โค้ดที่มีตัวคูณ ให้เอาราคาชิ้น x ตัวคูณ
+            # คำนวณราคาตามหน่วยที่ขาย
             factor = self.barcode_obj.conversion_factor if self.barcode_obj else 1
             self.sale_price = base_unit_price * factor
         
+        # 🎯 ขั้นสุดท้าย: บันทึกข้อมูล
         super().save(*args, **kwargs)
 
 class SalesDeliveryLog(models.Model):
