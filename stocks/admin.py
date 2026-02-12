@@ -913,15 +913,17 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
 
         if formset.model == SalesItem:
             # เราต้องหาว่าอันไหนกำลังจะโดนลบ เพื่อตัดยอดออกจาก Planning
-            deleted_objects = formset.deleted_objects
-            for deleted_item in deleted_objects:
-                # ไม่ต้องไปลบใบผลิตที่เกี่ยวข้อง 
-                # แค่ปล่อยให้ Django ลบ SalesItem นี้ทิ้ง 
-                # ยอดใน C1 จะหายไปเองเพราะ SalesItem นี้ไม่มีในระบบแล้ว
-                pass
-
-            # 2. จัดการรายการที่เหลือ (สร้าง/อัปเดต)
+            deleted_count = 0
+            for delete_form in formset.deleted_forms:
+                if delete_form.instance.pk:
+                    deleted_count += 1
+            
+            # บันทึกข้อมูลลงฐานข้อมูล (รวมถึงสั่งลบรายการที่ติ๊กไว้ด้วย)
             instances = formset.save(commit=False)
+            
+            # สั่งลบจริงในฐานข้อมูลสำหรับรายการที่ติ๊ก Delete
+            for obj in formset.deleted_objects:
+                obj.delete()
             
             # ตัวนับแยกประเภท
             count_success = 0
