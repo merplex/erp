@@ -2,6 +2,7 @@ from decimal import Decimal
 from django.db import models
 from django.db.models import Sum
 from django.db.models.signals import post_delete
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 from django.contrib.auth.models import User
 from django.contrib.contenttypes.models import ContentType
@@ -730,9 +731,16 @@ class ProductionOrder(models.Model):
     status = models.CharField(max_length=20, default='Draft', choices=STATUS_CHOICES)
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
-    
     bom = models.ForeignKey('BOM', on_delete=models.SET_NULL, null=True, blank=True, verbose_name="สูตรที่ใช้ผลิต")
-
+    
+    def clean(self):
+        # Validate 1: เช็กว่า BOM ที่เลือก เป็นของสินค้าตัวนี้จริงๆ
+        if self.product and self.bom:
+            if self.bom.product != self.product:
+                raise ValidationError({
+                    'bom': f"❌ BOM '{self.bom}' ไม่ใช่สูตรของสินค้า '{self.product}' กรุณาเลือกใหม่"
+                })
+            
     @property
     def quantity_pending_receipt(self):
         """สำหรับหน้า C1: ยอดที่ยังผลิตไม่ครบ (รอรับ)"""
