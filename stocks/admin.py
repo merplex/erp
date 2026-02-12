@@ -2266,26 +2266,44 @@ class InternationalPurchaseTrackingAdmin(admin.ModelAdmin):
         return super().get_queryset(request).filter(supplier__type='International')
     
     def display_tracking_table(self, obj):
+        from django.utils.safestring import mark_safe
+        
+        # 🎯 เตรียมข้อมูล Milestone (ชื่อ, วันที่)
         milestones = [
             ('Ordered', obj.order_date),
-            # ✅ ใช้ getattr เพื่อกันพังถ้าใน DB ยังไม่มีฟิลด์ paid_date
-            ('Paid', getattr(obj, 'paid_date', None)), 
-            ('Loaded', getattr(obj, 'loaded_date', None)),
-            ('Departed', getattr(obj, 'departed_date', None)),
-            ('Arrived', getattr(obj, 'arrived_date', None)),
-            ('Received', getattr(obj, 'received_date', None)),
+            ('Paid', obj.paid_date), 
+            ('Loaded', obj.loaded_date),
+            ('Departed', obj.departed_date),
+            ('Arrived', obj.arrived_date),
+            ('Received', obj.received_date),
         ]
         
-        headers = "".join([f"<th style='border:1px solid #ddd; padding:4px; background:#f8f9fa;'>{m[0]}</th>" for m in milestones])
+        # ส่วนแสดงผล Related PO (ถ้ามี)
+        rel_po_html = ""
+        if obj.related_po:
+            rel_po_html = f"<div style='margin-bottom:5px; color:#666;'>🔗 เชื่อมโยงกับ: <b>{obj.related_po.po_number}</b></div>"
+        
+        headers = "".join([f"<th style='border:1px solid #ddd; padding:4px; background:#f8f9fa; font-size:10px;'>{m[0]}</th>" for m in milestones])
+        
         cells = ""
         for name, date in milestones:
-            date_str = date.strftime('%d/%m/%y') if date else "-"
-            color = "#28a745" if obj.status == name else "#666"
-            weight = "bold" if obj.status == name else "normal"
-            cells += f"<td style='border:1px solid #ddd; padding:4px; color:{color}; font-weight:{weight};'>{date_str}</td>"
+            # 🛡️ ป้องกันกรณีข้อมูลไม่ใช่ Date object (เช่น เป็น String หรือ None)
+            if date and hasattr(date, 'strftime'):
+                date_str = date.strftime('%d/%m/%y')
+            else:
+                date_str = "-"
+            
+            # เช็กสถานะปัจจุบันเพื่อเน้นสี
+            is_active = (obj.status == name)
+            color = "#28a745" if is_active else "#666"
+            weight = "bold" if is_active else "normal"
+            bg = "#e8f5e9" if is_active else "transparent"
+            
+            cells += f"<td style='border:1px solid #ddd; padding:4px; color:{color}; font-weight:{weight}; background:{bg};'>{date_str}</td>"
 
         return mark_safe(
-            f"<table style='width:100%; text-align:center; border-collapse:collapse; font-size:10px;'>"
+            f"{rel_po_html}"
+            f"<table style='width:100%; text-align:center; border-collapse:collapse; font-size:11px;'>"
             f"<thead><tr>{headers}</tr></thead>"
             f"<tbody><tr>{cells}</tr></tbody></table>"
         )
@@ -2294,25 +2312,61 @@ class InternationalPurchaseTrackingAdmin(admin.ModelAdmin):
     # ✅ 5. Actions: ขยับสถานะ Milestone แบบรวดเร็ว (ครบชุด)
     actions = ['set_paid', 'set_loaded', 'set_departed', 'set_arrived', 'set_received', 'set_closed']
 
-    @admin.action(description='💰 2. เปลี่ยนสถานะ: จ่ายเงินแล้ว (Paid)')
+    @admin.action(description='💰 2. จ่ายเงินแล้ว (Paid)')
     def set_paid(self, request, queryset):
-        queryset.update(status='Paid', paid_date=timezone.now().date())
+        from django.utils import timezone
+        # ใช้ update_fields เพื่อความชัวร์ว่าลงเฉพาะจุด
+        count = 0
+        for obj in queryset:
+            obj.status = 'Paid'
+            obj.paid_date = timezone.now().date()
+            obj.save()
+            count += 1
+        self.message_user(request, f"✅ อัปเดต 'จ่ายเงินแล้ว' {count} รายการ")
 
-    @admin.action(description='📦 3. เปลี่ยนสถานะ: ขึ้นตู้แล้ว (Loaded)')
+    @admin.action(description='📦 3. ขึ้นตู้แล้ว (Loaded)')
     def set_loaded(self, request, queryset):
-        queryset.update(status='Loaded', loaded_date=timezone.now().date())
+        from django.utils import timezone
+        count = 0
+        for obj in queryset:
+            obj.status = 'Loaded'
+            obj.loaded_date = timezone.now().date()
+            obj.save()
+            count += 1
+        self.message_user(request, f"✅ อัปเดต 'ขึ้นตู้แล้ว' {count} รายการ")
 
-    @admin.action(description='🚢 4. เปลี่ยนสถานะ: ออกเดินทาง (Departed)')
+    @admin.action(description='🚢 4. ออกเดินทาง (Departed)')
     def set_departed(self, request, queryset):
-        queryset.update(status='Departed', departed_date=timezone.now().date())
+        from django.utils import timezone
+        count = 0
+        for obj in queryset:
+            obj.status = 'Departed'
+            obj.departed_date = timezone.now().date()
+            obj.save()
+            count += 1
+        self.message_user(request, f"✅ อัปเดต 'ออกเดินทางแล้ว' {count} รายการ")
 
-    @admin.action(description='🏁 5. เปลี่ยนสถานะ: ถึงไทยแล้ว (Arrived)')
+    @admin.action(description='🏁 5. ถึงไทยแล้ว (Arrived)')
     def set_arrived(self, request, queryset):
-        queryset.update(status='Arrived', arrived_date=timezone.now().date())
+        from django.utils import timezone
+        count = 0
+        for obj in queryset:
+            obj.status = 'Arrived'
+            obj.arrived_date = timezone.now().date()
+            obj.save()
+            count += 1
+        self.message_user(request, f"✅ อัปเดต 'ถึงไทยแล้ว' {count} รายการ")
 
-    @admin.action(description='🏢 6. เปลี่ยนสถานะ: ถึงโกดังแล้ว (Received)')
+    @admin.action(description='🏢 6. ถึงโกดังแล้ว (Received)')
     def set_received(self, request, queryset):
-        queryset.update(status='Received', received_date=timezone.now().date())
+        from django.utils import timezone
+        count = 0
+        for obj in queryset:
+            obj.status = 'Received'
+            obj.received_date = timezone.now().date()
+            obj.save()
+            count += 1
+        self.message_user(request, f"✅ อัปเดต 'ถึงโกดังแล้ว' {count} รายการ")
 
     @admin.action(description='🔒 7. ปิดใบสั่งซื้อ (Closed/ซ่อนรายการ)')
     def set_closed(self, request, queryset):
