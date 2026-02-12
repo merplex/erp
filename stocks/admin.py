@@ -630,7 +630,7 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
                 for field in self.search_fields:
                     q_part |= Q(**{f"{field}__icontains": part})
                 q_objects.append(q_part)
-            queryset = queryset.filter(reduce(operator.or_, q_objects))
+            queryset = queryset.filter(reduce(operator.or_, q_objects)).distinct()
             use_distinct = False
         else:
             # ถ้าไม่มี | ให้ค้นหาปกติ
@@ -1858,7 +1858,7 @@ class SalesReportAdmin(admin.ModelAdmin):
                     q_part |= Q(**{f"{field}__icontains": part})
                 q_objects.append(q_part)
             
-            queryset = queryset.filter(reduce(operator.or_, q_objects))
+            queryset = queryset.filter(reduce(operator.or_, q_objects)).distinct()
             return queryset, False
         
         # ถ้าไม่มี | ก็ให้ทำงานแบบปกติ (AND)
@@ -2071,7 +2071,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
                     q_part |= Q(**{f"{field}__icontains": part})
                 q_objects.append(q_part)
             
-            queryset = queryset.filter(reduce(operator.or_, q_objects))
+            queryset = queryset.filter(reduce(operator.or_, q_objects)).distinct()
             return queryset, False
         
         # ถ้าไม่มี | ก็ให้ทำงานแบบปกติ (AND)
