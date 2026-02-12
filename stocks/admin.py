@@ -525,19 +525,30 @@ class PurchaseReceiptLogInline(admin.TabularInline):
 
 class SalesItemInline(admin.TabularInline):
     model = SalesItem
-    autocomplete_fields = ['product'] 
+    # สำคัญ: ต้องใส่ทั้งสองฟิลด์เพื่อให้ค้นหาและ Tab ได้เลย
+    autocomplete_fields = ['barcode_obj', 'product'] 
     extra = 1
+    
+    # product ต้องเอาออกจาก readonly_fields เพื่อให้เปรมเลือกเองได้กรณีไม่มีบาร์โค้ด
+    readonly_fields = ('quantity_ordered', 'get_unit_name_display','get_total_display')
+
     # 1. เรียงลำดับคอลัมน์จากซ้ายไปขวา
     fields = [
-        'product',        
+        'barcode_obj', 
+        'product', 
+        'quantity_unit',
+        'get_unit_name_display',
         'quantity_ordered', 
         'sale_price',        # ✅ ใส่ตรงนี้เพื่อให้ "แก้ไขได้" (ห้ามใส่ใน readonly_fields)
         'get_total_display', # 🔒 ใส่ตรงนี้เพื่อโชว์ผลลัพธ์ (ต้องใส่ใน readonly_fields ด้วย)
+        'bom',               # เลือกสูตรผลิต (ระบบเลือกให้อัตโนมัติในเบื้องต้น)
         'auto_produce',      # 🔘 Checkbox อยู่ท้ายสุดตามที่เปรมต้องการ
     ]
-    
-    # 2. ระบุว่าตัวไหน "ห้ามแก้" (เฉพาะตัวที่คำนวณ)
-    readonly_fields = ['get_total_display'] 
+    def get_unit_name_display(self, obj):
+        if obj.barcode_obj and obj.barcode_obj.conversion_factor > 1:
+            return obj.barcode_obj.unit_name
+        return "ชิ้น (ปกติ)"
+    get_unit_name_display.short_description = "หน่วยขาย"
 
     # 3. สร้างฟังก์ชันคำนวณราคารวม (Quantity * Sale Price)
     def get_total_display(self, obj):
