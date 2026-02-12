@@ -85,12 +85,12 @@ WSGI_APPLICATION = "meebun_erp.wsgi.application"
 
 DATABASES = {
     'default': dj_database_url.config(
-        # ดึงค่าการเชื่อมต่อจาก Railway อัตโนมัติ
         default=os.environ.get('DATABASE_URL'),
-        conn_max_age=600
+        conn_max_age=600,
+        # เพิ่มบรรทัดข้างล่างนี้เข้าไปครับสำคัญมาก!
+        ssl_require={'ca_certs': None} 
     )
 }
-
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
