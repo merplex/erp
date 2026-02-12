@@ -1069,36 +1069,28 @@ class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
         from .models import ProductionLog, ProductionMaterialUsage
         from django.db.models import Sum
 
-        if formset.model == ProductionLog:
-            # ✅ 1. เคลียร์รายการที่ติ๊ก Delete (สำคัญ: ต้องสั่งลบตรงนี้ แถวถึงจะหาย)
-            # และ Logic การคืนสต็อกจะวิ่งไปทำงานที่ Signal post_delete ใน models.py (ที่เราคุยกันก่อนหน้านี้)
-            deleted_objects = formset.deleted_objects
-            for obj in deleted_objects:
-                obj.delete() 
+        # ✅ 1. เคลียร์รายการที่ติ๊ก Delete (แบบปลอดภัย)
+        # ใช้ deleted_forms แทน deleted_objects เพื่อป้องกัน AttributeError
+        for delete_form in formset.deleted_forms:
+            if delete_form.instance.pk:
+                delete_form.instance.delete()
 
-            # ✅ 2. บันทึก/แก้ไข รายการที่เหลือ
-            instances = formset.save(commit=False)
-            for instance in instances:
-                if hasattr(instance, 'user') and not instance.user_id:
+        # ✅ 2. บันทึก/แก้ไข รายการที่เหลือ
+        instances = formset.save(commit=False)
+        for instance in instances:
+            # ถ้าเป็น Log และยังไม่มีคนบันทึก ให้ใส่ชื่อ user คนปัจจุบัน
+            if isinstance(instance, ProductionLog):
+                if not instance.user_id:
                     instance.user = request.user
-                instance.save()
-            formset.save_m2m()
+            instance.save()
+        formset.save_m2m()
 
-            # ✅ 3. อัปเดตยอดสะสมในใบผลิตหลัก (เพื่อให้สถานะเปลี่ยน)
+        # ✅ 3. เฉพาะกรณีเป็นตาราง ProductionLog ให้คำนวณยอดสะสมใหม่
+        if formset.model == ProductionLog:
             obj = formset.instance
-            total_finished = obj.production_logs.aggregate(Sum('quantity_finished'))['quantity_finished__sum'] or 0
+            total_finished = obj.production_logs.aggregate(s=Sum('quantity_finished'))['s'] or 0
             obj.quantity_actual = total_finished
-            obj.save() 
-
-        elif formset.model == ProductionMaterialUsage:
-            # กรณีมีการลบรายการวัตถุดิบในหน้าใบผลิตเอง
-            for obj in formset.deleted_objects:
-                obj.delete()
-            formset.save()
-            
-        else:
-            # สำหรับ Formset อื่นๆ ให้ทำงานปกติ
-            formset.save()
+            obj.save()
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         # 🎯 1. สำหรับฟิลด์ Product: กรองเอาเฉพาะสินค้าที่มีการติ๊ก 'มี BOM'
