@@ -2179,6 +2179,8 @@ class InternationalPurchaseTrackingAdmin(admin.ModelAdmin):
     list_filter = ('status', 'supplier', 'order_date') # กรองตามวันที่ได้ด้วย
     search_fields = ('po_number', 'related_po__po_number', 'supplier__name')
 
+    list_select_related = ('related_po', 'supplier')
+
     # ✅ 1. กรองเฉพาะ: ต่างประเทศ (International) และยังไม่ปิดใบสั่งซื้อ (Closed)
     def get_queryset(self, request):
         return super().get_queryset(request).filter(
