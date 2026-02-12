@@ -968,3 +968,9 @@ class ProductionMaterialUsage(models.Model):
         if self.production_order.status in ['Completed', 'Cancelled']:
             return 0
         return max(0, self.actual_qty_to_use - self.used_so_far)
+    
+class InternationalPurchaseTracking(PurchaseOrder):
+    class Meta:
+        proxy = True
+        verbose_name = "B4. ติดตามสินค้าต่างประเทศ"
+        verbose_name_plural = "B4. ติดตามสินค้าต่างประเทศ"
