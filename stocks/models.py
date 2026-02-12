@@ -210,34 +210,6 @@ class PurchaseOrder(models.Model):
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     vat_percent = models.DecimalField(max_digits=5, decimal_places=2, default=7.00, verbose_name="VAT (%)")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
-
-    related_po = models.ForeignKey(
-        'self', 
-        on_delete=models.SET_NULL, 
-        null=True, 
-        blank=True, 
-        verbose_name="Related PO"
-    )
-    paid_date = models.DateField(null=True, blank=True, verbose_name="วันที่จ่ายเงิน")
-    loaded_date = models.DateField(null=True, blank=True, verbose_name="วันที่ขึ้นตู้")
-    departed_date = models.DateField(null=True, blank=True, verbose_name="วันที่ออกเดินทาง")
-    arrived_date = models.DateField(null=True, blank=True, verbose_name="วันที่ถึงไทย")
-    received_date = models.DateField(null=True, blank=True, verbose_name="วันที่ถึงโกดัง")
-
-    STATUS_CHOICES = [
-    # --- ช่วง Tracking (โชว์ใน B4 และยอดรอรับใน C1) ---
-    ('Ordered', '1. สั่งซื้อ (Ordered)'),
-    ('Paid', '2. จ่ายเงินแล้ว (Paid)'),
-    ('Loaded', '3. ขึ้นตู้ (Loaded)'),
-    ('Departed', '4. ออกเดินทาง (Departed)'),
-    ('Arrived', '5. ถึงไทย (Arrived)'),
-    ('Received', '6. รับของบางส่วน (Received)'), # มีของเข้าโกดังบ้างแล้ว
-    
-    # --- ช่วงจบงาน (หายจาก B4 และไม่นับเป็นยอดรอรับใน C1) ---
-    ('Completed', '7. ปิดงาน/ครบถ้วน (Completed)'), 
-    ('Cancelled', '8. ยกเลิก (Cancelled)'),
-    ]
-
     # ✅ 1. สถานะเอกสาร (เหมือนเดิม ดูแลเรื่องการสั่งของ/รับของ)
     status = models.CharField(
         max_length=20, 
@@ -248,7 +220,7 @@ class PurchaseOrder(models.Model):
             ('Cancelled', 'ยกเลิก')
         ],
         default='Pending',
-        verbose_name="สถานะใบสั่งซื้อ"
+        verbose_name="สถานะเอกสาร (PO Status)"
     )
 
     # ✅ 2. เพิ่ม: สถานะการเงิน (แยกออกมาต่างหาก)
@@ -295,23 +267,9 @@ class PurchaseOrder(models.Model):
         return self.grand_total - self.total_paid
     
     def save(self, *args, **kwargs):
-        # 🎯 1. รันเลขที่ใบสั่งซื้อ (Logic เดิม)
-        if not self.po_number: 
-            self.po_number = generate_number('PO', PurchaseOrder, 'po_number')
-
-        # 🎯 2. Logic สำหรับต่างประเทศ (ดึงข้อมูลจาก Supplier)
-        # เช็กว่ามี supplier หรือไม่ และ supplier คนนั้นเป็นประเภท International หรือเปล่า
-        if self.supplier and hasattr(self.supplier, 'type') and self.supplier.type == 'International':
-            self.vat = 0
-
-        # 🎯 3. จัดการวันที่สั่งซื้อ
-        if not self.order_date:
-            import datetime
-            self.order_date = datetime.date.today()
-        
+        if not self.po_number: self.po_number = generate_number('PO', PurchaseOrder, 'po_number')
         super().save(*args, **kwargs)
     class Meta: verbose_name_plural = "B1. ใบสั่งซื้อ (Purchase)"
-
     def delete(self, *args, **kwargs):
         if self.receipt_logs.exists():
             self.status = 'Cancelled'
@@ -337,12 +295,8 @@ class PurchaseItem(models.Model):
         if hasattr(self, 'purchasepaymentlog_set'):
             return sum(log.amount for log in self.purchasepaymentlog_set.all())
         return 0
-
     @property
     def total_price(self):
-        # ✅ เช็คก่อนว่ามีค่าครบทั้งคู่ไหม ถ้าไม่มีให้คืนค่า 0 ไปก่อน
-        if self.quantity_ordered is None or self.unit_price is None:
-            return 0
         return self.quantity_ordered * self.unit_price
 
     def save(self, *args, **kwargs):
@@ -968,9 +922,3 @@ class ProductionMaterialUsage(models.Model):
         if self.production_order.status in ['Completed', 'Cancelled']:
             return 0
         return max(0, self.actual_qty_to_use - self.used_so_far)
-    
-class InternationalPurchaseTracking(PurchaseOrder):
-    class Meta:
-        proxy = True
-        verbose_name = "B4. ติดตามสินค้าต่างประเทศ"
-        verbose_name_plural = "B4. ติดตามสินค้าต่างประเทศ"

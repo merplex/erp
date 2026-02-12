@@ -1,19 +1,7 @@
 import json
-import datetime # ✅ เพิ่มตัวนี้
 from django.contrib import admin
 from .models import ProductTag
 from .models import *
-from .models import (
-    Product, ProductTag, ProductCategory, Supplier, 
-    ProductBarcode, ProductSupplier,
-    PurchaseOrder, PurchaseItem, PurchaseReceiptLog, PurchasePaymentLog,
-    SalesOrder, SalesItem, SalesDeliveryLog, SalesPayment,
-    ProductionOrder, ProductionMaterialUsage, ProductionLog,
-    BOM, BOMIngredient, DocumentLock, StockPlanning, 
-    StockAdjustment, Customer, CustomerProductContract, FinanceReport, 
-    IncomeReport, ShipmentAccounting, InternationalPurchaseTracking,
-    SalesReport  # 👈 เพิ่มตัวที่ทำพังเมื่อกี้เข้าไปแล้วครับ!
-)
 from .models import DocumentLock
 # 1. เปลี่ยนชื่อที่ปรากฏบนหัวเอกสาร (Header สีน้ำเงิน)
 admin.site.site_header = "Meebun ERP"
@@ -439,22 +427,9 @@ class BOMIngredientInline(admin.TabularInline):
 
 class PurchaseItemInline(admin.TabularInline):
     model = PurchaseItem
-    # 🎯 เก็บความสามารถเดิมไว้: ช่วยให้ค้นหาชื่อสินค้าได้ไวขึ้น
     autocomplete_fields = ['product'] 
-    extra = 0
-    
-    # 🎯 จัดเรียงคอลัมน์ใหม่ตามที่เปรมต้องการ
-    fields = [
-        'product', 
-        'quantity_ordered', 
-        'quantity_received', 
-        'get_pending',     # ✅ คอลัมน์ "ขาดรับ"
-        'unit_price', 
-        'total_price'      # ✅ คอลัมน์ "ราคารวม"
-    ]
-    
-    # 🎯 ป้องกันการแก้เลขที่ระบบควรคำนวณเอง
-    readonly_fields = ['quantity_received', 'get_pending', 'total_price']
+    extra = 1
+    readonly_fields = ('quantity_received',) 
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "product":
@@ -490,19 +465,6 @@ class PurchaseItemInline(admin.TabularInline):
             #     kwargs["queryset"] = Product.objects.none()
 
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
-    def get_pending(self, obj):
-        # ตรวจสอบค่าว่างก่อนคำนวณป้องกัน Error
-        qty_ordered = obj.quantity_ordered or 0
-        qty_received = obj.quantity_received or 0
-        
-        diff = qty_ordered - qty_received
-        
-        if diff > 0:
-            # ✅ แสดงยอดติดลบสีแดง (-X) สำหรับยอดที่ยังขาดรับ
-            return format_html('<b style="color:#dc3545;">-{}</b>', diff)
-        return 0
-    
-    get_pending.short_description = "ขาดรับ"
 
 class PurchaseReceiptLogInline(admin.TabularInline):
     model = PurchaseReceiptLog
@@ -590,7 +552,7 @@ class SupplierAdmin(DocumentLockMixin,admin.ModelAdmin):
 
 @admin.register(Product)
 class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
-    list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit','get_total_stock_value', 'has_bom', 'created_by')
+    list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit', 'has_bom', 'created_by')
     list_filter = ('category','is_product', 'tags', 'has_bom', 'suppliers')
     search_fields = ('name', 'barcodes__code','tags__name')
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
@@ -691,22 +653,6 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
         # ดึงจาก property ที่เราเขียนไว้ใน models
         return obj.latest_barcode
     get_latest_barcode.short_description = "บาร์โค้ด (ล่าสุด)"
-
-    def get_queryset(self, request):
-        queryset = super().get_queryset(request)
-        queryset = queryset.annotate(
-            _total_stock_value=ExpressionWrapper(
-                F('stock_quantity') * F('sale_price'),
-                output_field=DecimalField()
-            )
-        )
-        return queryset
-    # 3. สร้างฟังก์ชันแสดงผล (ใน ProductAdmin)
-    @admin.display(description='มูลค่า', ordering='-_total_stock_value')
-    def get_total_stock_value(self, obj):
-        # ✅ ใช้ int() เพื่อปัดเศษทศนิยมทิ้ง และใช้ :, เพื่อใส่คอมมาคั่นหลักพัน
-        value = obj._total_stock_value or 0
-        return f"{int(value):,}"
 
     def save_model(self, request, obj, form, change):
         if not change:
@@ -1065,31 +1011,16 @@ class StockPlanningAdmin(admin.ModelAdmin):
     list_display = ('name', 'category', 'stock_quantity', 'get_pending_in', 'get_pending_out', 'get_pending_prod', 'get_available', 'buy_price')
     list_filter = ('category', 'suppliers', ProductOnlyFilter, BuyPriceRangeFilter)
     search_fields = ('name', 'barcodes__code', 'tags__name')
-
-    list_select_related = ('category',)
-
     # 🎯 1. แผนรับ (PO): สั่ง - รับจริง (รวม Draft)
     def get_pending_in(self, obj):
-        from .models import PurchaseItem
-        
-        # ✅ รวมทุกสถานะที่ "ของยังมาไม่ถึงมือ" (เพื่อให้หน้า C1 แม่นยำที่สุด)
+        from .models import PurchaseItem # 👈 เรียกใช้ Model ตรงๆ
         items = PurchaseItem.objects.filter(
             product=obj,
-            purchase_order__status__in=[
-                'Draft', 'Confirmed', 'Ordered', 'Paid', 
-                'Loaded', 'Departed', 'Arrived', 'Received'
-            ]
+            purchase_order__status__in=['Draft', 'Confirmed', 'Received']
         )
-        
-        # 🎯 สูตร: รวมส่วนต่าง (Ordered - Received) ของทุกใบที่ยังไม่ปิดงาน
-        total = sum(
-            (i.quantity_ordered - i.quantity_received) 
-            for i in items 
-            if (i.quantity_ordered or 0) > (i.quantity_received or 0)
-        )
-        
+        # คำนวณส่วนต่าง (Backorder)
+        total = sum((i.quantity_ordered - i.quantity_received) for i in items)
         return total if total > 0 else 0
-
     get_pending_in.short_description = "แผนรับ (PO)"
 
     # 🎯 2. แผนส่ง (SO): สั่ง - ส่งจริง (รวม Draft)
@@ -2179,70 +2110,3 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     def get_so_number(self, obj):
         return obj.sales_order.so_number
     get_so_number.short_description = "เลขที่ SO"
-
-@admin.register(InternationalPurchaseTracking)
-class InternationalPurchaseTrackingAdmin(admin.ModelAdmin):
-    # ✅ ย่อหน้า (Indent) ต้องตรงกันแบบนี้ครับ สีแดงถึงจะหาย
-    list_display = ('po_number', 'supplier', 'status', 'payment_status', 'arrived_date')
-    list_filter = ('status', 'supplier', 'order_date')
-    
-    # ⚠️ สำคัญมาก: ใน models.py ของเปรม Supplier ใช้ชื่อฟิลด์ 'company_name' ไม่ใช่ 'name'
-    search_fields = ('po_number', 'supplier__company_name') 
-
-    def get_queryset(self, request):
-        # ให้โชว์เฉพาะ Supplier ที่เป็น 'International' เท่านั้น
-        return super().get_queryset(request).filter(supplier__type='International')
-    
-    def display_tracking_table(self, obj):
-        milestones = [
-            ('Ordered', obj.order_date),
-            # ✅ ใช้ getattr เพื่อกันพังถ้าใน DB ยังไม่มีฟิลด์ paid_date
-            ('Paid', getattr(obj, 'paid_date', None)), 
-            ('Loaded', getattr(obj, 'loaded_date', None)),
-            ('Departed', getattr(obj, 'departed_date', None)),
-            ('Arrived', getattr(obj, 'arrived_date', None)),
-            ('Received', getattr(obj, 'received_date', None)),
-        ]
-        
-        headers = "".join([f"<th style='border:1px solid #ddd; padding:4px; background:#f8f9fa;'>{m[0]}</th>" for m in milestones])
-        cells = ""
-        for name, date in milestones:
-            date_str = date.strftime('%d/%m/%y') if date else "-"
-            color = "#28a745" if obj.status == name else "#666"
-            weight = "bold" if obj.status == name else "normal"
-            cells += f"<td style='border:1px solid #ddd; padding:4px; color:{color}; font-weight:{weight};'>{date_str}</td>"
-
-        return mark_safe(
-            f"<table style='width:100%; text-align:center; border-collapse:collapse; font-size:10px;'>"
-            f"<thead><tr>{headers}</tr></thead>"
-            f"<tbody><tr>{cells}</tr></tbody></table>"
-        )
-    display_tracking_table.short_description = "📅 Timeline การส่งมอบ"
-
-    # ✅ 5. Actions: ขยับสถานะ Milestone แบบรวดเร็ว (ครบชุด)
-    actions = ['set_paid', 'set_loaded', 'set_departed', 'set_arrived', 'set_received', 'set_closed']
-
-    @admin.action(description='💰 2. เปลี่ยนสถานะ: จ่ายเงินแล้ว (Paid)')
-    def set_paid(self, request, queryset):
-        queryset.update(status='Paid', paid_date=timezone.now().date())
-
-    @admin.action(description='📦 3. เปลี่ยนสถานะ: ขึ้นตู้แล้ว (Loaded)')
-    def set_loaded(self, request, queryset):
-        queryset.update(status='Loaded', loaded_date=timezone.now().date())
-
-    @admin.action(description='🚢 4. เปลี่ยนสถานะ: ออกเดินทาง (Departed)')
-    def set_departed(self, request, queryset):
-        queryset.update(status='Departed', departed_date=timezone.now().date())
-
-    @admin.action(description='🏁 5. เปลี่ยนสถานะ: ถึงไทยแล้ว (Arrived)')
-    def set_arrived(self, request, queryset):
-        queryset.update(status='Arrived', arrived_date=timezone.now().date())
-
-    @admin.action(description='🏢 6. เปลี่ยนสถานะ: ถึงโกดังแล้ว (Received)')
-    def set_received(self, request, queryset):
-        queryset.update(status='Received', received_date=timezone.now().date())
-
-    @admin.action(description='🔒 7. ปิดใบสั่งซื้อ (Closed/ซ่อนรายการ)')
-    def set_closed(self, request, queryset):
-        queryset.update(status='Closed')
-        
