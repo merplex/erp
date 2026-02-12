@@ -1,7 +1,17 @@
 import json
+import datetime # ✅ เพิ่มตัวนี้
 from django.contrib import admin
 from .models import ProductTag
-from .models import *
+from .models import (
+    Product, ProductTag, ProductCategory, Supplier, 
+    ProductBarcode, ProductSupplier, # 👈 สองตัวนี้คือตัวที่หายไป
+    PurchaseOrder, PurchaseItem, PurchaseReceiptLog, PurchasePaymentLog,
+    SalesOrder, SalesItem, SalesDeliveryLog, SalesPayment,
+    ProductionOrder, ProductionMaterialUsage, ProductionLog,
+    BOM, BOMIngredient, DocumentLock, StockPlanning, 
+    StockAdjustment, Customer, CustomerProductContract, FinanceReport, 
+    IncomeReport, ShipmentAccounting, InternationalPurchaseTracking
+)
 from .models import DocumentLock
 # 1. เปลี่ยนชื่อที่ปรากฏบนหัวเอกสาร (Header สีน้ำเงิน)
 admin.site.site_header = "Meebun ERP"
@@ -578,7 +588,7 @@ class SupplierAdmin(DocumentLockMixin,admin.ModelAdmin):
 
 @admin.register(Product)
 class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
-    list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit', 'has_bom', 'created_by')
+    list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit','get_total_stock_value', 'has_bom', 'created_by')
     list_filter = ('category','is_product', 'tags', 'has_bom', 'suppliers')
     search_fields = ('name', 'barcodes__code','tags__name')
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
@@ -679,6 +689,22 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
         # ดึงจาก property ที่เราเขียนไว้ใน models
         return obj.latest_barcode
     get_latest_barcode.short_description = "บาร์โค้ด (ล่าสุด)"
+
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request)
+        queryset = queryset.annotate(
+            _total_stock_value=ExpressionWrapper(
+                F('stock_quantity') * F('sale_price'),
+                output_field=DecimalField()
+            )
+        )
+        return queryset
+    # 3. สร้างฟังก์ชันแสดงผล (ใน ProductAdmin)
+    @admin.display(description='มูลค่า', ordering='-_total_stock_value')
+    def get_total_stock_value(self, obj):
+        # ✅ ใช้ int() เพื่อปัดเศษทศนิยมทิ้ง และใช้ :, เพื่อใส่คอมมาคั่นหลักพัน
+        value = obj._total_stock_value or 0
+        return f"{int(value):,}"
 
     def save_model(self, request, obj, form, change):
         if not change:
@@ -1037,8 +1063,10 @@ class StockPlanningAdmin(admin.ModelAdmin):
     list_display = ('name', 'category', 'stock_quantity', 'get_pending_in', 'get_pending_out', 'get_pending_prod', 'get_available', 'buy_price')
     list_filter = ('category', 'suppliers', ProductOnlyFilter, BuyPriceRangeFilter)
     search_fields = ('name', 'barcodes__code', 'tags__name')
-    # 🎯 1. แผนรับ (PO): สั่ง - รับจริง (รวม Draft)
 
+    list_select_related = ('category',)
+
+    # 🎯 1. แผนรับ (PO): สั่ง - รับจริง (รวม Draft)
     def get_pending_in(self, obj):
         from .models import PurchaseItem
         
@@ -2156,12 +2184,14 @@ class InternationalPurchaseTracking(PurchaseOrder):
         verbose_name = "B4. ติดตามสินค้าต่างประเทศ (Import Tracking)"
         verbose_name_plural = "B4. ติดตามสินค้าต่างประเทศ (Import Tracking)"
 
-@admin.register(InternationalPurchaseTracking)
+admin.register(InternationalPurchaseTracking)
 class InternationalPurchaseTrackingAdmin(admin.ModelAdmin):
     # เพิ่ม related_po เข้ามาในตารางด้วยเพื่อให้เห็นว่าลิ้งก์กับใบไหน
     list_display = ('po_number', 'related_po', 'supplier', 'display_tracking_table', 'status')
     list_filter = ('status', 'supplier', 'order_date') # กรองตามวันที่ได้ด้วย
     search_fields = ('po_number', 'related_po__po_number', 'supplier__name')
+
+    list_select_related = ('related_po', 'supplier')
 
     # ✅ 1. กรองเฉพาะ: ต่างประเทศ (International) และยังไม่ปิดใบสั่งซื้อ (Closed)
     def get_queryset(self, request):
@@ -2174,11 +2204,12 @@ class InternationalPurchaseTrackingAdmin(admin.ModelAdmin):
     def display_tracking_table(self, obj):
         milestones = [
             ('Ordered', obj.order_date),
-            ('Paid', obj.paid_date), # อัปเดตตรงนี้
-            ('Loaded', obj.loaded_date),
-            ('Departed', obj.departed_date),
-            ('Arrived', obj.arrived_date),
-            ('Received', obj.received_date),
+            # ✅ ใช้ getattr เพื่อกันพังถ้าใน DB ยังไม่มีฟิลด์ paid_date
+            ('Paid', getattr(obj, 'paid_date', None)), 
+            ('Loaded', getattr(obj, 'loaded_date', None)),
+            ('Departed', getattr(obj, 'departed_date', None)),
+            ('Arrived', getattr(obj, 'arrived_date', None)),
+            ('Received', getattr(obj, 'received_date', None)),
         ]
         
         headers = "".join([f"<th style='border:1px solid #ddd; padding:4px; background:#f8f9fa;'>{m[0]}</th>" for m in milestones])
