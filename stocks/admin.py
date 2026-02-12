@@ -2,6 +2,7 @@ import json
 import datetime # ✅ เพิ่มตัวนี้
 from django.contrib import admin
 from .models import ProductTag
+from .models import *
 from .models import (
     Product, ProductTag, ProductCategory, Supplier, 
     ProductBarcode, ProductSupplier,
