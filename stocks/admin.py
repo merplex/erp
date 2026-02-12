@@ -888,7 +888,7 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
         try:
             new_pd = ProductionOrder(
                 product=sales_item.product,
-                bom=bom_obj,
+                bom=self.bom,
                 quantity_planned=qty,
                 status='Draft',
                 order_date=datetime.date.today(),
