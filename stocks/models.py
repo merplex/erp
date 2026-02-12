@@ -161,7 +161,7 @@ class ProductBarcode(models.Model):
     product = models.ForeignKey(Product, related_name='barcodes', on_delete=models.CASCADE)
     code = models.CharField(max_length=100, unique=True, verbose_name="บาร์โค้ด")
     created_at = models.DateTimeField(auto_now_add=True)
-    conversion_factor = models.PositiveIntegerField(default=1, verbose_name="ตัวคูณ")
+    conversion_factor = models.PositiveIntegerField(default=1, verbose_name="จำนวนต่อหน่วย")
     unit_name = models.CharField(max_length=20, blank=True, null=True, verbose_name="ชื่อหน่วย")
 
     @property
