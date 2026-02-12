@@ -874,6 +874,12 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
         if not getattr(sales_item.product, 'has_bom', False):
             return "NOT_MANUFACTURED" # คืนค่าบอกว่าตัวนี้ไม่ใช่สินค้าผลิต
 
+        bom_to_use = sales_item.bom 
+    
+        if not bom_to_use:
+        # ถ้าในบรรทัดนั้นไม่มี BOM จริงๆ ค่อยลองหาตัวล่าสุด (Backup plan)
+            bom_to_use = BOM.objects.filter(product=sales_item.product).order_by('-id').first()
+
         # 2. เช็กว่ามีสูตร BOM ในระบบจริงไหม
         bom_obj = BOM.objects.filter(product=sales_item.product).first()
         if not bom_obj:
@@ -888,7 +894,7 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
         try:
             new_pd = ProductionOrder(
                 product=sales_item.product,
-                bom=self.bom,
+                bom=bom_to_use,
                 quantity_planned=qty,
                 status='Draft',
                 order_date=datetime.date.today(),
