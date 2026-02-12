@@ -161,7 +161,16 @@ class ProductBarcode(models.Model):
     product = models.ForeignKey(Product, related_name='barcodes', on_delete=models.CASCADE)
     code = models.CharField(max_length=100, unique=True, verbose_name="บาร์โค้ด")
     created_at = models.DateTimeField(auto_now_add=True)
+    conversion_factor = models.PositiveIntegerField(default=1, verbose_name="ตัวคูณ")
+    unit_name = models.CharField(max_length=20, blank=True, null=True, verbose_name="ชื่อหน่วย")
 
+    @property
+    def unit_display(self):
+        # ถ้าตัวคูณเป็น 1 หรือไม่ได้ใส่ชื่อหน่วย ให้ถือว่าเป็นหน่วยปกติ
+        if self.conversion_factor <= 1 or not self.unit_name:
+            return "หน่วยปกติ (ชิ้น)"
+        return f"{self.unit_name} ({self.conversion_factor} ชิ้น)"
+    
     def __str__(self):
         return self.code
 
@@ -576,9 +585,27 @@ class IncomeReport(SalesOrder):
 
 class SalesItem(models.Model):
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='items')
-    product = models.ForeignKey(Product, on_delete=models.CASCADE,related_name='sales_items')
-    quantity_ordered = models.PositiveIntegerField(verbose_name="จำนวนที่สั่งขาย")
+    product = models.ForeignKey(
+        Product, 
+        on_delete=models.CASCADE, 
+        related_name='sales_items', # ห้ามลบตัวนี้เด็ดขาด!
+        null=True,   
+        blank=True   
+    )
     quantity_shipped = models.PositiveIntegerField(default=0, verbose_name="ส่งสะสม")
+    bom = models.ForeignKey(
+        'BOM', 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        verbose_name="สูตรผลิต"
+    )
+    barcode_obj = models.ForeignKey(ProductBarcode, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="บาร์โค้ด/หน่วยขาย")
+    # ช่องคีย์หลัก (คีย์ได้ทั้ง 10 ชิ้น หรือ 10 แพ็ค)
+    quantity_unit = models.PositiveIntegerField(default=1, verbose_name="จำนวนที่สั่ง")
+    # ช่องผลลัพธ์ (Readonly ใน Admin) สำหรับ Pending Out
+    quantity_ordered = models.PositiveIntegerField(default=0, verbose_name="จำนวนรวม (ชิ้น)")
+
     # ✅ เพิ่ม 2 ฟิลด์นี้เพื่อทำ auto production ค่ะ
     auto_produce = models.BooleanField(default=False, verbose_name="ผลิตทันที (Auto PD)")
     is_produced = models.BooleanField(default=False, editable=False) # เก็บไว้หลังบ้านกันสร้างซ้ำ
@@ -621,28 +648,49 @@ class SalesItem(models.Model):
         return price * qty
 
     def save(self, *args, **kwargs):
-        """
-        จังหวะกด Save: ระบบจะไปควานหาราคาที่ถูกต้องที่สุดมาบันทึกลงฟิลด์ sale_price
-        เพื่อไม่ให้เป็น 0 ในฐานข้อมูล (ป้องกันราคาพังในรายงานอื่นๆ)
-        """
-        if not self.sale_price or self.sale_price == 0:
+        # 🎯 ขั้นที่ 1: จัดการข้อมูลสินค้าและจำนวน (Priority: Barcode > Product)
+        if self.barcode_obj:
+            # ดึงสินค้าจากบาร์โค้ดมาใส่ในช่อง product ทันที
+            self.product = self.barcode_obj.product
+            
+            # คำนวณจำนวนตามตัวคูณ
+            factor = getattr(self.barcode_obj, 'conversion_factor', 1) or 1
+            self.quantity_ordered = self.quantity_unit * factor
+            
+            # เลือก BOM ตามบาร์โค้ด (ถ้าว่าง)
+            if not self.bom:
+                from .models import BOM
+                target_bom = BOM.objects.filter(name=self.barcode_obj.code).first()
+                if not target_bom:
+                    target_bom = BOM.objects.filter(product=self.product).order_by('-id').first()
+                self.bom = target_bom
+        else:
+            # กรณีไม่มีบาร์โค้ด (เลือกสินค้าเอง)
+            self.quantity_ordered = self.quantity_unit
+            # ดึง BOM ล่าสุดของสินค้านั้น
+            if self.product and not self.bom:
+                from .models import BOM
+                self.bom = BOM.objects.filter(product=self.product).order_by('-id').first()
+
+        # 🎯 ขั้นที่ 2: จัดการเรื่องราคา (ดึงจากสัญญา T2.1)
+        # เช็คว่ามี product หรือยัง (ป้องกันพังถ้ากรอกไม่ครบ)
+        if self.product and (not self.sale_price or self.sale_price == 0):
             from .models import CustomerProductContract
             
-            # 🎯 ขั้นที่ 1: หาในสัญญารายลูกค้า (T2.1)
             contract = CustomerProductContract.objects.filter(
                 customer=self.sales_order.customer,
                 product=self.product
             ).first()
 
-            if contract:
-                # เจอสัญญาปุ๊บ ใช้ราคาสัญญาทันที
-                self.sale_price = contract.contract_price
-            else:
-                # ไม่เจอสัญญา ใช้ราคาขายมาตรฐานจากหน้าสินค้า
-                self.sale_price = self.product.sale_price if self.product else 0
+            # ราคาต่อชิ้น (Contract หรือ Standard)
+            base_unit_price = contract.contract_price if contract else (self.product.sale_price or 0)
+            
+            # คำนวณราคาตามหน่วยที่ขาย
+            factor = self.barcode_obj.conversion_factor if self.barcode_obj else 1
+            self.sale_price = base_unit_price * factor
         
+        # 🎯 ขั้นสุดท้าย: บันทึกข้อมูล
         super().save(*args, **kwargs)
-
 
 class SalesDeliveryLog(models.Model):
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='delivery_logs')

@@ -525,19 +525,30 @@ class PurchaseReceiptLogInline(admin.TabularInline):
 
 class SalesItemInline(admin.TabularInline):
     model = SalesItem
-    autocomplete_fields = ['product'] 
+    # สำคัญ: ต้องใส่ทั้งสองฟิลด์เพื่อให้ค้นหาและ Tab ได้เลย
+    autocomplete_fields = ['barcode_obj', 'product'] 
     extra = 1
+    
+    # product ต้องเอาออกจาก readonly_fields เพื่อให้เปรมเลือกเองได้กรณีไม่มีบาร์โค้ด
+    readonly_fields = ('quantity_ordered', 'get_unit_name_display','get_total_display')
+
     # 1. เรียงลำดับคอลัมน์จากซ้ายไปขวา
     fields = [
-        'product',        
+        'barcode_obj', 
+        'product', 
+        'quantity_unit',
+        'get_unit_name_display',
         'quantity_ordered', 
         'sale_price',        # ✅ ใส่ตรงนี้เพื่อให้ "แก้ไขได้" (ห้ามใส่ใน readonly_fields)
         'get_total_display', # 🔒 ใส่ตรงนี้เพื่อโชว์ผลลัพธ์ (ต้องใส่ใน readonly_fields ด้วย)
+        'bom',               # เลือกสูตรผลิต (ระบบเลือกให้อัตโนมัติในเบื้องต้น)
         'auto_produce',      # 🔘 Checkbox อยู่ท้ายสุดตามที่เปรมต้องการ
     ]
-    
-    # 2. ระบุว่าตัวไหน "ห้ามแก้" (เฉพาะตัวที่คำนวณ)
-    readonly_fields = ['get_total_display'] 
+    def get_unit_name_display(self, obj):
+        if obj.barcode_obj and obj.barcode_obj.conversion_factor > 1:
+            return obj.barcode_obj.unit_name
+        return "ชิ้น (ปกติ)"
+    get_unit_name_display.short_description = "หน่วยขาย"
 
     # 3. สร้างฟังก์ชันคำนวณราคารวม (Quantity * Sale Price)
     def get_total_display(self, obj):
@@ -588,6 +599,12 @@ class SupplierAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('company_name', 'contact_person', 'type')
     inlines = [SupplierProductInline]
 
+class ProductBarcodeAdmin(admin.ModelAdmin):
+    # 🎯 ตัวนี้แหละคือ "หัวใจ" ที่จะแก้ Error E039
+    search_fields = ['code', 'product__name']
+    list_display = ('code', 'product', 'conversion_factor', 'unit_name')
+admin.site.register(ProductBarcode, ProductBarcodeAdmin) # จดทะเบียนตามปกติ
+    
 @admin.register(Product)
 class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit','get_total_stock_value', 'has_bom', 'created_by')
@@ -857,6 +874,12 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
         if not getattr(sales_item.product, 'has_bom', False):
             return "NOT_MANUFACTURED" # คืนค่าบอกว่าตัวนี้ไม่ใช่สินค้าผลิต
 
+        bom_to_use = sales_item.bom 
+    
+        if not bom_to_use:
+        # ถ้าในบรรทัดนั้นไม่มี BOM จริงๆ ค่อยลองหาตัวล่าสุด (Backup plan)
+            bom_to_use = BOM.objects.filter(product=sales_item.product).order_by('-id').first()
+
         # 2. เช็กว่ามีสูตร BOM ในระบบจริงไหม
         bom_obj = BOM.objects.filter(product=sales_item.product).first()
         if not bom_obj:
@@ -871,7 +894,7 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
         try:
             new_pd = ProductionOrder(
                 product=sales_item.product,
-                bom=bom_obj,
+                bom=bom_to_use,
                 quantity_planned=qty,
                 status='Draft',
                 order_date=datetime.date.today(),
