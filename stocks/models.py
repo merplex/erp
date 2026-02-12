@@ -204,12 +204,45 @@ class BOMIngredient(models.Model):
 
 # 6. ระบบเอกสารสั่งซื้อ
 class PurchaseOrder(models.Model):
-    STATUS_CHOICES = [('Draft','ร่าง'),('Confirmed','ยืนยัน'),('Received','รับบางส่วน'),('Completed','ปิดงาน/ครบถ้วน'),('Cancelled','ยกเลิก')]
+    # ✅ 1. ชุดสถานะหลัก (รวมร่าง: เอกสาร + Tracking + รับของ)
+    STATUS_CHOICES = [
+        # --- เริ่มต้น ---
+        ('Draft', '⚪ ร่าง (Draft)'),
+        ('Confirmed', '🔵 ยืนยัน/รอของ (Confirmed)'),
+        
+        # --- Tracking (ต่างประเทศ/B4) ---
+        ('Paid', '💰 จ่ายเงินแล้ว (Paid)'),
+        ('Loaded', '📦 ขึ้นตู้แล้ว (Loaded)'),
+        ('Departed', '🚢 ออกเดินทาง (Departed)'),
+        ('Arrived', '🏁 ถึงไทย (Arrived)'),
+        
+        # --- รับของ (Warehouse) ---
+        ('Partially Received', '📥 รับของบางส่วน (Partial)'),
+        ('Completed', '✅ ปิดงาน/ครบถ้วน (Completed)'),
+        
+        # --- ยกเลิก ---
+        ('Cancelled', '❌ ยกเลิก (Cancelled)'),
+    ]
+
+    # ✅ 2. ชุดสถานะการจ่ายเงิน (แยกออกมาเพื่อความชัดเจน)
+    PAYMENT_STATUS_CHOICES = [
+        ('Unpaid', '🔴 ยังไม่จ่าย'),
+        ('Partial', '🟠 จ่ายบางส่วน'),
+        ('Paid', '🟢 จ่ายครบแล้ว'),
+    ]
+
+    # --- Fields ---
     po_number = models.CharField(max_length=50, unique=True, editable=False)
-    supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE)
+    supplier = models.ForeignKey('Supplier', on_delete=models.CASCADE) # ใส่ string กัน error ถ้า Supplier อยู่ไฟล์อื่น
     invoice_no_supplier = models.CharField(max_length=100, blank=True, verbose_name="เลข Invoice ผู้ขาย")
-    order_date = models.DateField(default=datetime.date.today,db_index=True)
-    status = models.CharField(max_length=20, default='Draft', choices=STATUS_CHOICES)
+    order_date = models.DateField(default=datetime.date.today, db_index=True)
+    
+    # ใช้ Status ชุดรวมร่างด้านบน
+    status = models.CharField(max_length=30, default='Draft', choices=STATUS_CHOICES, verbose_name="สถานะเอกสาร")
+    
+    # สถานะการเงิน แยกต่างหาก
+    payment_status = models.CharField(max_length=20, default='Unpaid', choices=PAYMENT_STATUS_CHOICES, verbose_name="สถานะการเงิน")
+
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     vat_percent = models.DecimalField(max_digits=5, decimal_places=2, default=7.00, verbose_name="VAT (%)")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
@@ -221,115 +254,139 @@ class PurchaseOrder(models.Model):
         blank=True, 
         verbose_name="Related PO"
     )
+
+    # --- Dates for Tracking ---
     paid_date = models.DateField(null=True, blank=True, verbose_name="วันที่จ่ายเงิน")
     loaded_date = models.DateField(null=True, blank=True, verbose_name="วันที่ขึ้นตู้")
     departed_date = models.DateField(null=True, blank=True, verbose_name="วันที่ออกเดินทาง")
     arrived_date = models.DateField(null=True, blank=True, verbose_name="วันที่ถึงไทย")
-    received_date = models.DateField(null=True, blank=True, verbose_name="วันที่ถึงโกดัง")
+    received_date = models.DateField(null=True, blank=True, verbose_name="วันที่ถึงโกดัง (ล่าสุด)")
 
-    STATUS_CHOICES = [
-        # --- ช่วงเริ่มต้น ---
-        ('Draft', 'ร่าง (Draft)'),
-        ('Pending', 'รอรับของ/สั่งซื้อแล้ว (Pending)'),
-        
-        # --- ช่วง Tracking (สำหรับ B4) ---
-        ('Paid', '💰 จ่ายเงินแล้ว (Paid)'),
-        ('Loaded', '📦 ขึ้นตู้แล้ว (Loaded)'),
-        ('Departed', '🚢 ออกเดินทาง (Departed)'),
-        ('Arrived', '🏁 ถึงไทย (Arrived)'),
-        
-        # --- ช่วงรับของ (Warehouse) ---
-        ('Partially Received', '📥 รับของบางส่วน (Partially Received)'), # สำคัญ! ต้องมีตัวนี้
-        ('Completed', '✅ ปิดงาน/ครบถ้วน (Completed)'),
-        
-        # --- ยกเลิก ---
-        ('Cancelled', '❌ ยกเลิก (Cancelled)'),
-    ]
+    class Meta:
+        verbose_name_plural = "B1. ใบสั่งซื้อ (Purchase)"
 
-    # ✅ 1. สถานะเอกสาร (เหมือนเดิม ดูแลเรื่องการสั่งของ/รับของ)
-    status = models.CharField(
-        max_length=20, 
-        choices=[
-            ('Pending', 'รอรับของ'),
-            ('Received', 'รับของบางส่วน'),
-            ('Completed', 'ปิดงาน/ครบถ้วน'),
-            ('Cancelled', 'ยกเลิก')
-        ],
-        default='Pending',
-        verbose_name="สถานะใบสั่งซื้อ"
-    )
+    def __str__(self):
+        return f"{self.po_number} ({self.get_status_display()})"
 
-    # ✅ 2. เพิ่ม: สถานะการเงิน (แยกออกมาต่างหาก)
-    payment_status = models.CharField(
-        max_length=20,
-        choices=[
-            ('Unpaid', '🔴 ยังไม่จ่าย'),
-            ('Partial', '🟠 จ่ายบางส่วน'),
-            ('Paid', '🟢 จ่ายครบแล้ว')
-        ],
-        default='Unpaid',
-        verbose_name="สถานะการจ่ายเงิน"
-    )
-    # ✅ 3. แก้ไขฟังก์ชันคำนวณ ให้ไปอัปเดตที่ payment_status แทน
-    def update_payment_status(self):
-        total_paid = self.payments.aggregate(Sum('amount'))['amount__sum'] or Decimal(0)
-        
-        if total_paid >= self.grand_total:
-            self.payment_status = 'Paid'    # จ่ายครบ
-        elif total_paid > 0:
-            self.payment_status = 'Partial' # จ่ายบางส่วน
-        else:
-            self.payment_status = 'Unpaid'  # ยังไม่จ่าย
-            
-        self.save(update_fields=['payment_status'])
-
-    # --- สูตรคำนวณเงิน (ใช้แสดงผลใน Admin) ---
+    # ==========================================
+    # 🧠 PROPERTIES: สูตรคำนวณตัวเลข
+    # ==========================================
     @property
     def total_items_price(self):
-        # ยอดรวมสินค้า (Quantity * Unit Price)
-        return sum(item.total_price for item in self.items.all())
+        # รวมราคาของ (Quantity * Cost) จาก items ทั้งหมด
+        # *ต้องมั่นใจว่า PurchaseItem มี property total_price หรือคำนวณสด
+        total = sum(item.quantity * item.unit_price for item in self.items.all())
+        return Decimal(total)
+
     @property
     def vat_amount(self):
-        return self.total_items_price * (self.vat_percent / 100)
+        return self.total_items_price * (self.vat_percent / Decimal(100))
+
     @property
     def grand_total(self):
         return self.total_items_price + self.vat_amount
+
     @property
-    def total_paid(self):
-        # ยอดที่จ่ายไปแล้ว (ดึงจากตาราง PaymentLog)
-        return sum(log.amount for log in self.payment_logs.all())
+    def total_paid_amount(self):
+        # ดึงยอดจาก PaymentLog (ต้องมี related_name='payment_logs' ที่โมเดล Log)
+        if hasattr(self, 'payments'): # กันเหนียวเผื่อชื่อ related_name ไม่ตรง
+            return self.payments.aggregate(t=Sum('amount'))['t'] or Decimal(0)
+        return Decimal(0)
+
     @property
     def balance_due(self):
-        return self.grand_total - self.total_paid
-    
-    def save(self, *args, **kwargs):
-        # 🎯 1. รันเลขที่ใบสั่งซื้อ (Logic เดิม)
-        if not self.po_number: 
-            self.po_number = generate_number('PO', PurchaseOrder, 'po_number')
+        return self.grand_total - self.total_paid_amount
 
-        # 🎯 2. Logic สำหรับต่างประเทศ (ดึงข้อมูลจาก Supplier)
-        # เช็กว่ามี supplier หรือไม่ และ supplier คนนั้นเป็นประเภท International หรือเปล่า
-        if self.supplier and hasattr(self.supplier, 'type') and self.supplier.type == 'International':
-            self.vat = 0
+    # ==========================================
+    # 🚀 LOGIC: อัปเดตสถานะ (หัวใจสำคัญ)
+    # ==========================================
+    def update_status(self):
+        """
+        เรียกเมื่อมีการ Save/Delete 'PurchaseReceiptLog'
+        """
+        # 1. คำนวณยอด
+        total_ordered = self.items.aggregate(t=Sum('quantity'))['t'] or 0
+        total_received = self.receipt_logs.aggregate(t=Sum('quantity'))['t'] or 0
 
-        # 🎯 3. จัดการวันที่สั่งซื้อ
-        if not self.order_date:
-            import datetime
-            self.order_date = datetime.date.today()
+        # 2. Logic การเปลี่ยนสถานะ
+        if total_ordered > 0:
+            if total_received >= total_ordered:
+                # รับครบ -> จบ
+                self.status = 'Completed'
+                if not self.received_date:
+                    self.received_date = datetime.date.today()
+            
+            elif total_received > 0:
+                # รับบ้างแล้ว -> รับบางส่วน
+                self.status = 'Partially Received'
+                if not self.received_date:
+                    self.received_date = datetime.date.today()
+            
+            else:
+                # ⚠️ กรณี total_received == 0 (อาจจะเพิ่งลบ Log การรับของออกหมด)
+                # ต้องถอยสถานะกลับ (Fallback) โดยดูจากวันที่ Tracking ล่าสุดที่มี
+                if self.arrived_date:
+                    self.status = 'Arrived'
+                elif self.departed_date:
+                    self.status = 'Departed'
+                elif self.loaded_date:
+                    self.status = 'Loaded'
+                elif self.paid_date:
+                    self.status = 'Paid'
+                else:
+                    self.status = 'Confirmed' # ถอยกลับมาจุดเริ่มต้น
+                
+                # ล้างวันที่รับของออกด้วย เพราะไม่มีของแล้ว
+                self.received_date = None
+
+        self.save(update_fields=['status', 'received_date'])
+
+    def update_payment_status(self):
+        """
+        เรียกเมื่อมีการ Save/Delete 'PurchasePaymentLog'
+        """
+        paid = self.total_paid_amount
+        total = self.grand_total
+
+        if total > 0:
+            if paid >= total:
+                self.payment_status = 'Paid'
+            elif paid > 0:
+                self.payment_status = 'Partial'
+            else:
+                self.payment_status = 'Unpaid'
         
+        self.save(update_fields=['payment_status'])
+
+    # ==========================================
+    # 💾 SAVE & DELETE
+    # ==========================================
+    def save(self, *args, **kwargs):
+        # 1. สร้างเลข PO ถ้ายังไม่มี
+        if not self.po_number:
+            try:
+                # ต้องมั่นใจว่ามีฟังก์ชันนี้จริง หรือใช้ uuid แทนชั่วคราว
+                self.po_number = generate_number('PO', PurchaseOrder, 'po_number')
+            except NameError:
+                pass # กัน error ถ้าไม่ได้ import มา
+
+        # 2. Logic ต่างประเทศ -> VAT 0
+        # เช็กแบบปลอดภัย (กัน supplier เป็น None)
+        if self.supplier_id: 
+            # สมมติ Supplier มี field 'type' หรือ 'is_international'
+            if hasattr(self.supplier, 'type') and self.supplier.type == 'International':
+                self.vat_percent = Decimal(0)
+
         super().save(*args, **kwargs)
-    class Meta: verbose_name_plural = "B1. ใบสั่งซื้อ (Purchase)"
 
     def delete(self, *args, **kwargs):
+        # ห้ามลบถ้ารับของไปแล้ว (ป้องกันข้อมูลสต็อกพัง)
         if self.receipt_logs.exists():
+            # เปลี่ยนสถานะเป็น Cancelled แทนการลบจริง
             self.status = 'Cancelled'
             self.save()
         else:
             super().delete(*args, **kwargs)
-
-    def get_balance_due_display(self):
-        # ทำให้ออกมาเป็นตัวอักษรพร้อมคอมม่าและทศนิยม 2 ตำแหน่ง
-        return f"{self.balance_due:,.2f} บาท"
 
 class PurchaseItem(models.Model):
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='items')
