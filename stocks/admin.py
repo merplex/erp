@@ -2172,7 +2172,7 @@ class InternationalPurchaseTracking(PurchaseOrder):
         verbose_name = "B4. ติดตามสินค้าต่างประเทศ (Import Tracking)"
         verbose_name_plural = "B4. ติดตามสินค้าต่างประเทศ (Import Tracking)"
 
-@admin.register(InternationalPurchaseTracking)
+#admin.register(InternationalPurchaseTracking)
 class InternationalPurchaseTrackingAdmin(admin.ModelAdmin):
     # เพิ่ม related_po เข้ามาในตารางด้วยเพื่อให้เห็นว่าลิ้งก์กับใบไหน
     list_display = ('po_number', 'related_po', 'supplier', 'display_tracking_table', 'status')
