@@ -2255,7 +2255,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
 @admin.register(InternationalPurchaseTracking)
 class InternationalPurchaseTrackingAdmin(admin.ModelAdmin):
     # ✅ ย่อหน้า (Indent) ต้องตรงกันแบบนี้ครับ สีแดงถึงจะหาย
-    list_display = ('po_number', 'supplier', 'status', 'payment_status', 'arrived_date')
+    list_display = ('po_number', 'supplier', 'status', 'payment_status', 'display_tracking_table','arrived_date')
     list_filter = ('status', 'supplier', 'order_date')
     
     # ⚠️ สำคัญมาก: ใน models.py ของเปรม Supplier ใช้ชื่อฟิลด์ 'company_name' ไม่ใช่ 'name'
