@@ -1,7 +1,16 @@
 import json
+import datetime # ✅ เพิ่มตัวนี้
 from django.contrib import admin
 from .models import ProductTag
-from .models import *
+from .models import (
+    Product, ProductTag, ProductCategory, Supplier, 
+    PurchaseOrder, PurchaseItem, PurchaseReceiptLog, PurchasePaymentLog,
+    SalesOrder, SalesItem, SalesDeliveryLog, SalesPayment,
+    ProductionOrder, ProductionMaterialUsage, ProductionLog,
+    BOM, BOMIngredient, DocumentLock, StockPlanning, 
+    StockAdjustment, Customer, CustomerProductContract, FinanceReport, 
+    IncomeReport, ShipmentAccounting
+)
 from .models import DocumentLock
 # 1. เปลี่ยนชื่อที่ปรากฏบนหัวเอกสาร (Header สีน้ำเงิน)
 admin.site.site_header = "Meebun ERP"
