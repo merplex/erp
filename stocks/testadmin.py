@@ -2,15 +2,17 @@ import json
 import datetime # ✅ เพิ่มตัวนี้
 from django.contrib import admin
 from .models import ProductTag
+from .models import *
 from .models import (
     Product, ProductTag, ProductCategory, Supplier, 
-    ProductBarcode, ProductSupplier, # 👈 สองตัวนี้คือตัวที่หายไป
+    ProductBarcode, ProductSupplier,
     PurchaseOrder, PurchaseItem, PurchaseReceiptLog, PurchasePaymentLog,
     SalesOrder, SalesItem, SalesDeliveryLog, SalesPayment,
     ProductionOrder, ProductionMaterialUsage, ProductionLog,
     BOM, BOMIngredient, DocumentLock, StockPlanning, 
     StockAdjustment, Customer, CustomerProductContract, FinanceReport, 
-    IncomeReport, ShipmentAccounting, InternationalPurchaseTracking
+    IncomeReport, ShipmentAccounting, InternationalPurchaseTracking,
+    SalesReport  # 👈 เพิ่มตัวที่ทำพังเมื่อกี้เข้าไปแล้วครับ!
 )
 from .models import DocumentLock
 # 1. เปลี่ยนชื่อที่ปรากฏบนหัวเอกสาร (Header สีน้ำเงิน)
@@ -716,6 +718,7 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
 class BOMAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('name', 'product', 'total_cost_display', 'sale_price', 'unit', 'production_time', 'created_by')
     list_filter = ('product__category',)
+    search_fields = ['name', 'product__name', 'product__code', 'product__barcodes__code']
     inlines = [BOMIngredientInline]
     readonly_fields = ('created_by', 'updated_by')
 
@@ -847,26 +850,38 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
 
     # ❗ ต้องเพิ่มฟังก์ชันนี้เข้าไปด้วย ระบบถึงจะหาตัวสร้างใบ PD เจอครับ
     def create_auto_production_order(self, sales_item, user):
-        """
-        ฟังก์ชันช่วยสร้างใบผลิตอัตโนมัติจากรายการขาย
-        """
         from .models import ProductionOrder, BOM
+        import datetime
         
-        # 🛑 1. เช็กเงื่อนไข BOM ก่อนสร้าง (Logic ป้องกัน Error)
-        # ต้องมีการติ๊ก has_bom และต้องมีข้อมูลสูตรในระบบจริง
-        has_bom_data = BOM.objects.filter(product=sales_item.product).exists()
-        if not getattr(sales_item.product, 'has_bom', False) or not has_bom_data:
-            return None # คืนค่า None เพื่อให้ตัว Action รู้ว่าตัวนี้สร้างไม่ได้
+        # 1. เช็กสถานะ "สินค้าผลิตเอง" (has_bom)
+        if not getattr(sales_item.product, 'has_bom', False):
+            return "NOT_MANUFACTURED" # คืนค่าบอกว่าตัวนี้ไม่ใช่สินค้าผลิต
 
-        # ✅ 2. สร้างใบผลิต (ปล่อยให้ model.save() รันเลข PD เอง)
-        return ProductionOrder.objects.create(
-            product=sales_item.product,
-            quantity_planned=sales_item.quantity, # ใช้ชื่อฟิลด์ใหม่ที่เปรมแก้
-            status='Draft',
-            order_date=datetime.date.today(),
-            created_by=user,
-            notes=f"สร้างอัตโนมัติจาก SO: {sales_item.sales_order.so_number}"
-        )
+        # 2. เช็กว่ามีสูตร BOM ในระบบจริงไหม
+        bom_obj = BOM.objects.filter(product=sales_item.product).first()
+        if not bom_obj:
+            return "NO_BOM_FORMULA" # คืนค่าบอกว่ายังไม่ได้ทำสูตร
+
+        # 3. ตรวจสอบจำนวนสั่งซื้อ
+        qty = getattr(sales_item, 'quantity_ordered', 0)
+        if qty <= 0:
+            return "ZERO_QTY"
+
+        # 4. ถ้าผ่านเงื่อนไขทั้งหมด -> สร้างใบผลิต
+        try:
+            new_pd = ProductionOrder(
+                product=sales_item.product,
+                bom=bom_obj,
+                quantity_planned=qty,
+                status='Draft',
+                order_date=datetime.date.today(),
+                created_by=user,
+                notes=f"Auto PD จาก SO: {sales_item.sales_order.so_number}"
+            )
+            new_pd.save()
+            return new_pd # คืนค่า object PD เมื่อสำเร็จ
+        except Exception:
+            return "SAVE_ERROR"
     
     @admin.action(description='⚡ เปิดใบสั่งผลิต (Auto PD)')
     def make_production_order(self, request, queryset):
@@ -893,31 +908,65 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
             
     # ✅ ฟังก์ชันสร้างใบผลิตอัตโนมัติ
     def save_formset(self, request, form, formset, change):
-        created_count = 0
+        from django.contrib import messages
+        from .models import SalesItem
 
         if formset.model == SalesItem:
-            instances = formset.save(commit=False)
-            created_count = 0
-            for instance in instances:
-                if isinstance(instance, SalesItem):
-                    instance.sales_order = formset.instance 
-                    if hasattr(instance, 'user'): instance.user = request.user
-                    instance.save()
-                    
-                    if instance.auto_produce and instance.product.has_bom and not instance.is_produced:
-                        self.create_auto_production_order(instance, request.user)
-                        instance.is_produced = True 
-                        instance.save()
-                        created_count += 1
-            formset.save_m2m()
+            # เราต้องหาว่าอันไหนกำลังจะโดนลบ เพื่อตัดยอดออกจาก Planning
+            deleted_count = 0
+            for delete_form in formset.deleted_forms:
+                if delete_form.instance.pk:
+                    deleted_count += 1
             
-            messages.success(request, f"ระบบสร้างใบผลิตอัตโนมัติสำเร็จ {created_count} รายการ")
-        else:
-            # ✅ บรรทัดนี้สำคัญมาก! ถ้าไม่ใช่ SalesItem (เช่นเป็น DeliveryLog) ให้เซฟปกติ
-            formset.save()
+            # บันทึกข้อมูลลงฐานข้อมูล (รวมถึงสั่งลบรายการที่ติ๊กไว้ด้วย)
+            instances = formset.save(commit=False)
+            
+            # สั่งลบจริงในฐานข้อมูลสำหรับรายการที่ติ๊ก Delete
+            for obj in formset.deleted_objects:
+                obj.delete()
+            
+            # ตัวนับแยกประเภท
+            count_success = 0
+            count_not_manufactured = 0
+            count_no_formula = 0
+            
+            for instance in instances:
+                instance.save() # เซฟข้อมูลเบื้องต้นก่อน
+                
+                # ตรวจสอบ: ถ้าติ๊ก auto_produce และยังไม่ได้ถูกผลิต
+                if getattr(instance, 'auto_produce', False) and not getattr(instance, 'is_produced', False):
+                    
+                    result = self.create_auto_production_order(instance, request.user)
+                    
+                    if isinstance(result, object) and not isinstance(result, str):
+                        # ✅ กรณีสำเร็จ
+                        instance.is_produced = True
+                        instance.save()
+                        count_success += 1
+                    else:
+                        # ❌ กรณีไม่สำเร็จ: ล้างติ๊กถูกออกทันที
+                        instance.auto_produce = False
+                        instance.save()
+                        
+                        # แยกประเภท Error เพื่อเก็บยอดสรุป
+                        if result == "NOT_MANUFACTURED":
+                            count_not_manufactured += 1
+                        elif result == "NO_BOM_FORMULA":
+                            count_no_formula += 1
 
-        if created_count > 0:
-            messages.success(request, f"ระบบได้สร้างใบผลิต (PD) ให้โดยอัตโนมัติจำนวน {created_count} รายการแล้วค่ะ")
+            formset.save_m2m()
+
+            # 📢 สรุปข้อความแจ้งเตือนแยกตามประเภท
+            if count_success > 0:
+                messages.success(request, f"✅ สร้างใบผลิตสำเร็จ {count_success} รายการ")
+            
+            if count_not_manufactured > 0:
+                messages.warning(request, f"ℹ️ ไม่ใช่สินค้าผลิตเอง {count_not_manufactured} รายการ (ระบบล้างติ๊กออกให้แล้ว)")
+            
+            if count_no_formula > 0:
+                messages.error(request, f"⚠️ ยังไม่ได้สร้างสูตร BOM {count_no_formula} รายการ (กรุณาไปสร้างสูตรก่อน)")
+        else:
+            formset.save()
 
     def get_confirmed_status(self, obj):
         # ไปแอบดูใน Log ว่ามีการติ๊กรับชำระเงินหรือยัง
@@ -951,10 +1000,11 @@ class ProductionMaterialUsageInline(admin.TabularInline):
 
 @admin.register(ProductionOrder)
 class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
-    fields = ['product', 'bom', 'quantity_planned', 'status', 'notes']
+    fields = ['product', 'bom', 'quantity_planned', 'quantity_actual', 'created_by','status', 'notes']
     list_display = ('pd_number', 'product', 'quantity_planned', 'quantity_actual', 'get_diff', 'status')
     list_filter = ('status', 'order_date', 'product')
     search_fields = ('pd_number', 'product__name')
+    autocomplete_fields = ['bom']
     inlines = [ProductionMaterialUsageInline,ProductionLogInline]
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
     readonly_fields = ('pd_number','quantity_actual',  'created_by', 'status') 
@@ -989,8 +1039,24 @@ class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
 
 
     def save_model(self, request, obj, form, change):
-        if not change:
-            obj.created_by = request.user
+        # ✅ 1. กรณีเปลี่ยน BOM (ให้ล้างของเก่า ดึงของใหม่)
+        if change and 'bom' in form.changed_data:
+            # ใช้ชื่อที่เปรมตั้งไว้ใน related_name
+            obj.material_usages.all().delete() 
+            
+            super().save_model(request, obj, form, change)
+            
+            if hasattr(obj, 'load_materials_from_bom'):
+                obj.load_materials_from_bom()
+            return
+
+        # ✅ 2. กรณีสร้างใบใหม่
+        elif not change and obj.bom:
+            super().save_model(request, obj, form, change)
+            if hasattr(obj, 'load_materials_from_bom'):
+                obj.load_materials_from_bom()
+            return
+
         super().save_model(request, obj, form, change)
 
     def get_diff(self, obj):
@@ -1000,31 +1066,31 @@ class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
     get_diff.short_description = "สถานะผลิต"
 
     def save_formset(self, request, form, formset, change):
-        if formset.model == ProductionLog:
-            # ✅ 1. จัดการเรื่องลบ (เพื่อให้ลบประวัติผลิตแล้วยอดสต็อก/สถานะเด้งคืน)
-            if hasattr(formset, 'deleted_objects'):
-                for obj in formset.deleted_objects:
-                    obj.delete()
+        from .models import ProductionLog, ProductionMaterialUsage
+        from django.db.models import Sum
 
-            # ✅ 2. จัดการบันทึกยอดผลิตใหม่/แก้ไข
-            instances = formset.save(commit=False)
-            for instance in instances:
-                if hasattr(instance, 'user') and not instance.user_id:
+        # ✅ 1. เคลียร์รายการที่ติ๊ก Delete (แบบปลอดภัย)
+        # ใช้ deleted_forms แทน deleted_objects เพื่อป้องกัน AttributeError
+        for delete_form in formset.deleted_forms:
+            if delete_form.instance.pk:
+                delete_form.instance.delete()
+
+        # ✅ 2. บันทึก/แก้ไข รายการที่เหลือ
+        instances = formset.save(commit=False)
+        for instance in instances:
+            # ถ้าเป็น Log และยังไม่มีคนบันทึก ให้ใส่ชื่อ user คนปัจจุบัน
+            if isinstance(instance, ProductionLog):
+                if not instance.user_id:
                     instance.user = request.user
-                instance.save()
-            formset.save_m2m()
+            instance.save()
+        formset.save_m2m()
 
-            # ✅ 3. ไม้ตายแก้บัคสถานะ: คำนวณยอดผลิตจริงใหม่จาก Log ทั้งหมด
-            # วิธีนี้จะทำให้ quantity_actual อัปเดตล่าสุดเสมอ สถานะถึงจะเปลี่ยนค่ะ
-            from django.db.models import Sum
+        # ✅ 3. เฉพาะกรณีเป็นตาราง ProductionLog ให้คำนวณยอดสะสมใหม่
+        if formset.model == ProductionLog:
             obj = formset.instance
-            total_finished = obj.production_logs.aggregate(Sum('quantity_finished'))['quantity_finished__sum'] or 0
-            
-            # อัปเดตยอดจริงเข้าที่ตัวใบผลิตหลัก
+            total_finished = obj.production_logs.aggregate(s=Sum('quantity_finished'))['s'] or 0
             obj.quantity_actual = total_finished
-            obj.save() # สั่ง Save ตรงนี้ สถานะใน models.py จะถูกคำนวณใหม่ทันที
-        else:
-            formset.save()
+            obj.save()
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         # 🎯 1. สำหรับฟิลด์ Product: กรองเอาเฉพาะสินค้าที่มีการติ๊ก 'มี BOM'
@@ -1070,23 +1136,30 @@ class StockPlanningAdmin(admin.ModelAdmin):
     def get_pending_in(self, obj):
         from .models import PurchaseItem
         
-        # ✅ รวมทุกสถานะที่ "ของยังมาไม่ถึงมือ" (เพื่อให้หน้า C1 แม่นยำที่สุด)
+        # รายชื่อสถานะที่ถือว่า "ของยังมาไม่ครบ"
+        active_statuses = [
+            'Draft', 'Pending', 'Confirmed', 'Ordered', 
+            'Paid', 'Loaded', 'Departed', 'Arrived', 
+            'Received', 'Partially Received'
+        ]
+
         items = PurchaseItem.objects.filter(
             product=obj,
-            purchase_order__status__in=[
-                'Draft', 'Confirmed', 'Ordered', 'Paid', 
-                'Loaded', 'Departed', 'Arrived', 'Received'
-            ]
+            purchase_order__status__in=active_statuses
         )
         
-        # 🎯 สูตร: รวมส่วนต่าง (Ordered - Received) ของทุกใบที่ยังไม่ปิดงาน
-        total = sum(
-            (i.quantity_ordered - i.quantity_received) 
-            for i in items 
-            if (i.quantity_ordered or 0) > (i.quantity_received or 0)
-        )
+        total_pending = 0
+        for i in items:
+            # ✅ เรียกใช้ชื่อฟิลด์ตรงๆ ตามที่เปรมส่งมา (ไม่ต้องใช้ getattr แล้ว)
+            ordered = i.quantity_ordered or 0  # กันเหนียวเผื่อเป็น None
+            received = i.quantity_received or 0
+            
+            # คำนวณยอดค้างรับ
+            if ordered > received:
+                total_pending += (ordered - received)
         
-        return total if total > 0 else 0
+        # ถ้ามีเศษทศนิยม ให้ปัดเป็นจำนวนเต็ม (หรือจะเอาทศนิยมก็ลบ int ออกได้)
+        return int(total_pending) if total_pending > 0 else 0
 
     get_pending_in.short_description = "แผนรับ (PO)"
 
@@ -2105,8 +2178,9 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     # 🎯 5. ยอด ที่ยืนยันทั้งหมด จะถูกบันทึกย้อนไปใน salesorder และ incomereport
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
+        from .models import SalesPayment
         if obj.is_revenue_confirmed:
-            from .models import SalesPayment
+            
             SalesPayment.objects.update_or_create(
                 order=obj.sales_order,
                 remark__icontains=f"ยอดส่งของ {obj.shipping_no}",
@@ -2120,23 +2194,23 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
         # 🎯 [SECTION 2] ยืนยันยอด Rebate (รายการหัก 1)
         if obj.is_rebate_confirmed and obj.rebate_amount > 0:
             rebate_ref = f"หัก Rebate จากใบส่งของ {obj.shipping_no}"
-            if not SalesPayment.objects.filter(order=obj.sales_order, notes__icontains=rebate_ref).exists():
+            if not SalesPayment.objects.filter(order=obj.sales_order, remark__icontains=rebate_ref).exists():
                 SalesPayment.objects.create(
                     order=obj.sales_order,
                     amount=-obj.rebate_amount, # ติดลบเพื่อหักยอด
                     payment_date=obj.confirmed_date,
-                    notes=f"⚠ {rebate_ref}"
+                    remark=f"⚠ {rebate_ref}"
                 )
 
         # 🎯 [SECTION 3] ยืนยันยอด DC (รายการหัก 2)
         if obj.is_dc_confirmed and obj.dc_amount > 0:
             dc_ref = f"หักค่า DC จากใบส่งของ {obj.shipping_no}"
-            if not SalesPayment.objects.filter(order=obj.sales_order, notes__icontains=dc_ref).exists():
+            if not SalesPayment.objects.filter(order=obj.sales_order, remark__icontains=dc_ref).exists():
                 SalesPayment.objects.create(
                     order=obj.sales_order,
                     amount=-obj.dc_amount, # ติดลบเพื่อหักยอด
                     payment_date=obj.confirmed_date,
-                    notes=f"📦 {dc_ref}"
+                    remark=f"📦 {dc_ref}"
                 )
 
     # --- ✅ Actions ---
@@ -2178,50 +2252,58 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
         return obj.sales_order.so_number
     get_so_number.short_description = "เลขที่ SO"
 
-class InternationalPurchaseTracking(PurchaseOrder):
-    class Meta:
-        proxy = True
-        verbose_name = "B4. ติดตามสินค้าต่างประเทศ (Import Tracking)"
-        verbose_name_plural = "B4. ติดตามสินค้าต่างประเทศ (Import Tracking)"
-
-admin.register(InternationalPurchaseTracking)
+@admin.register(InternationalPurchaseTracking)
 class InternationalPurchaseTrackingAdmin(admin.ModelAdmin):
-    # เพิ่ม related_po เข้ามาในตารางด้วยเพื่อให้เห็นว่าลิ้งก์กับใบไหน
-    list_display = ('po_number', 'related_po', 'supplier', 'display_tracking_table', 'status')
-    list_filter = ('status', 'supplier', 'order_date') # กรองตามวันที่ได้ด้วย
-    search_fields = ('po_number', 'related_po__po_number', 'supplier__name')
+    # ✅ ย่อหน้า (Indent) ต้องตรงกันแบบนี้ครับ สีแดงถึงจะหาย
+    list_display = ('po_number', 'supplier', 'status', 'payment_status', 'display_tracking_table','arrived_date')
+    list_filter = ('status', 'supplier', 'order_date')
+    
+    # ⚠️ สำคัญมาก: ใน models.py ของเปรม Supplier ใช้ชื่อฟิลด์ 'company_name' ไม่ใช่ 'name'
+    search_fields = ('po_number', 'supplier__company_name') 
 
-    list_select_related = ('related_po', 'supplier')
-
-    # ✅ 1. กรองเฉพาะ: ต่างประเทศ (International) และยังไม่ปิดใบสั่งซื้อ (Closed)
     def get_queryset(self, request):
-        return super().get_queryset(request).filter(
-            supplier__type='International'  # 👈 ใช้ __ เพื่อวิ่งไปดู field ใน model Supplier
-        ).exclude(
-            status='Closed'
-        )
-
+        # ให้โชว์เฉพาะ Supplier ที่เป็น 'International' เท่านั้น
+        return super().get_queryset(request).filter(supplier__type='International')
+    
     def display_tracking_table(self, obj):
+        from django.utils.safestring import mark_safe
+        
+        # 🎯 เตรียมข้อมูล Milestone (ชื่อ, วันที่)
         milestones = [
             ('Ordered', obj.order_date),
-            # ✅ ใช้ getattr เพื่อกันพังถ้าใน DB ยังไม่มีฟิลด์ paid_date
-            ('Paid', getattr(obj, 'paid_date', None)), 
-            ('Loaded', getattr(obj, 'loaded_date', None)),
-            ('Departed', getattr(obj, 'departed_date', None)),
-            ('Arrived', getattr(obj, 'arrived_date', None)),
-            ('Received', getattr(obj, 'received_date', None)),
+            ('Paid', obj.paid_date), 
+            ('Loaded', obj.loaded_date),
+            ('Departed', obj.departed_date),
+            ('Arrived', obj.arrived_date),
+            ('Received', obj.received_date),
         ]
         
-        headers = "".join([f"<th style='border:1px solid #ddd; padding:4px; background:#f8f9fa;'>{m[0]}</th>" for m in milestones])
+        # ส่วนแสดงผล Related PO (ถ้ามี)
+        rel_po_html = ""
+        if obj.related_po:
+            rel_po_html = f"<div style='margin-bottom:5px; color:#666;'>🔗 เชื่อมโยงกับ: <b>{obj.related_po.po_number}</b></div>"
+        
+        headers = "".join([f"<th style='border:1px solid #ddd; padding:4px; background:#f8f9fa; font-size:10px;'>{m[0]}</th>" for m in milestones])
+        
         cells = ""
         for name, date in milestones:
-            date_str = date.strftime('%d/%m/%y') if date else "-"
-            color = "#28a745" if obj.status == name else "#666"
-            weight = "bold" if obj.status == name else "normal"
-            cells += f"<td style='border:1px solid #ddd; padding:4px; color:{color}; font-weight:{weight};'>{date_str}</td>"
+            # 🛡️ ป้องกันกรณีข้อมูลไม่ใช่ Date object (เช่น เป็น String หรือ None)
+            if date and hasattr(date, 'strftime'):
+                date_str = date.strftime('%d/%m/%y')
+            else:
+                date_str = "-"
+            
+            # เช็กสถานะปัจจุบันเพื่อเน้นสี
+            is_active = (obj.status == name)
+            color = "#28a745" if is_active else "#666"
+            weight = "bold" if is_active else "normal"
+            bg = "#e8f5e9" if is_active else "transparent"
+            
+            cells += f"<td style='border:1px solid #ddd; padding:4px; color:{color}; font-weight:{weight}; background:{bg};'>{date_str}</td>"
 
         return mark_safe(
-            f"<table style='width:100%; text-align:center; border-collapse:collapse; font-size:10px;'>"
+            f"{rel_po_html}"
+            f"<table style='width:100%; text-align:center; border-collapse:collapse; font-size:11px;'>"
             f"<thead><tr>{headers}</tr></thead>"
             f"<tbody><tr>{cells}</tr></tbody></table>"
         )
@@ -2230,25 +2312,61 @@ class InternationalPurchaseTrackingAdmin(admin.ModelAdmin):
     # ✅ 5. Actions: ขยับสถานะ Milestone แบบรวดเร็ว (ครบชุด)
     actions = ['set_paid', 'set_loaded', 'set_departed', 'set_arrived', 'set_received', 'set_closed']
 
-    @admin.action(description='💰 2. เปลี่ยนสถานะ: จ่ายเงินแล้ว (Paid)')
+    @admin.action(description='💰 2. จ่ายเงินแล้ว (Paid)')
     def set_paid(self, request, queryset):
-        queryset.update(status='Paid', paid_date=timezone.now().date())
+        from django.utils import timezone
+        # ใช้ update_fields เพื่อความชัวร์ว่าลงเฉพาะจุด
+        count = 0
+        for obj in queryset:
+            obj.status = 'Paid'
+            obj.paid_date = timezone.now().date()
+            obj.save()
+            count += 1
+        self.message_user(request, f"✅ อัปเดต 'จ่ายเงินแล้ว' {count} รายการ")
 
-    @admin.action(description='📦 3. เปลี่ยนสถานะ: ขึ้นตู้แล้ว (Loaded)')
+    @admin.action(description='📦 3. ขึ้นตู้แล้ว (Loaded)')
     def set_loaded(self, request, queryset):
-        queryset.update(status='Loaded', loaded_date=timezone.now().date())
+        from django.utils import timezone
+        count = 0
+        for obj in queryset:
+            obj.status = 'Loaded'
+            obj.loaded_date = timezone.now().date()
+            obj.save()
+            count += 1
+        self.message_user(request, f"✅ อัปเดต 'ขึ้นตู้แล้ว' {count} รายการ")
 
-    @admin.action(description='🚢 4. เปลี่ยนสถานะ: ออกเดินทาง (Departed)')
+    @admin.action(description='🚢 4. ออกเดินทาง (Departed)')
     def set_departed(self, request, queryset):
-        queryset.update(status='Departed', departed_date=timezone.now().date())
+        from django.utils import timezone
+        count = 0
+        for obj in queryset:
+            obj.status = 'Departed'
+            obj.departed_date = timezone.now().date()
+            obj.save()
+            count += 1
+        self.message_user(request, f"✅ อัปเดต 'ออกเดินทางแล้ว' {count} รายการ")
 
-    @admin.action(description='🏁 5. เปลี่ยนสถานะ: ถึงไทยแล้ว (Arrived)')
+    @admin.action(description='🏁 5. ถึงไทยแล้ว (Arrived)')
     def set_arrived(self, request, queryset):
-        queryset.update(status='Arrived', arrived_date=timezone.now().date())
+        from django.utils import timezone
+        count = 0
+        for obj in queryset:
+            obj.status = 'Arrived'
+            obj.arrived_date = timezone.now().date()
+            obj.save()
+            count += 1
+        self.message_user(request, f"✅ อัปเดต 'ถึงไทยแล้ว' {count} รายการ")
 
-    @admin.action(description='🏢 6. เปลี่ยนสถานะ: ถึงโกดังแล้ว (Received)')
+    @admin.action(description='🏢 6. ถึงโกดังแล้ว (Received)')
     def set_received(self, request, queryset):
-        queryset.update(status='Received', received_date=timezone.now().date())
+        from django.utils import timezone
+        count = 0
+        for obj in queryset:
+            obj.status = 'Received'
+            obj.received_date = timezone.now().date()
+            obj.save()
+            count += 1
+        self.message_user(request, f"✅ อัปเดต 'ถึงโกดังแล้ว' {count} รายการ")
 
     @admin.action(description='🔒 7. ปิดใบสั่งซื้อ (Closed/ซ่อนรายการ)')
     def set_closed(self, request, queryset):
