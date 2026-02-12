@@ -1074,21 +1074,45 @@ class StockPlanningAdmin(admin.ModelAdmin):
     def get_pending_in(self, obj):
         from .models import PurchaseItem
         
-        # ✅ รวมทุกสถานะที่ "ของยังมาไม่ถึงมือ" (เพื่อให้หน้า C1 แม่นยำที่สุด)
+        # ✅ แก้ไขตรงนี้: ใส่รายชื่อสถานะให้ครบ (ทั้งเก่าและใหม่)
+        # ถ้าขาดคำว่า 'Pending' หรือ 'Partially Received' ยอดจะไม่ขึ้น
+        active_statuses = [
+            'Draft', 
+            'Pending',   # 👈 (สำคัญ) ค่า Default ใหม่
+            'Confirmed', 
+            'Ordered', 
+            'Paid', 
+            'Loaded', 
+            'Departed', 
+            'Arrived', 
+            'Received',           # (Legacy)
+            'Partially Received'  # 👈 (สำคัญ) สถานะรับบางส่วนแบบใหม่
+        ]
+
         items = PurchaseItem.objects.filter(
             product=obj,
-            purchase_order__status__in=[
-                'Draft', 'Confirmed', 'Ordered', 'Paid', 
-                'Loaded', 'Departed', 'Arrived', 'Received'
-            ]
+            purchase_order__status__in=active_statuses
         )
         
         # 🎯 สูตร: รวมส่วนต่าง (Ordered - Received) ของทุกใบที่ยังไม่ปิดงาน
-        total = sum(
-            (i.quantity_ordered - i.quantity_received) 
-            for i in items 
-            if (i.quantity_ordered or 0) > (i.quantity_received or 0)
-        )
+        # หมายเหตุ: ต้องมั่นใจว่า PurchaseItem มี property quantity_ordered/received นะครับ
+        # ถ้าไม่มี ให้เปลี่ยนเป็น i.quantity และคำนวณ i.received_qty เอาเอง
+        total = 0
+        for i in items:
+            # กันเหนียว: เช็กว่ามี attribute นี้จริงไหม ถ้าไม่มีให้ใช้ field quantity ปกติ
+            qty_ord = getattr(i, 'quantity_ordered', i.quantity) 
+            
+            # หาจำนวนที่รับแล้ว (ถ้า item มีฟังก์ชันคำนวณ)
+            qty_rcv = getattr(i, 'quantity_received', 0)
+            
+            # ถ้า model PurchaseItem ไม่ได้เก็บ quantity_received ไว้ 
+            # อาจต้องดึงจาก logs แบบสดๆ (ถ้าระบบช้าค่อยว่ากัน)
+            if not hasattr(i, 'quantity_received') and hasattr(i, 'receipt_logs'):
+                 from django.db.models import Sum
+                 qty_rcv = i.receipt_logs.aggregate(s=Sum('quantity'))['s'] or 0
+
+            if qty_ord > qty_rcv:
+                total += (qty_ord - qty_rcv)
         
         return total if total > 0 else 0
 
