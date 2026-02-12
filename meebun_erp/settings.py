@@ -93,10 +93,10 @@ DATABASES = {
 }
 
 # เพิ่ม 3 บรรทัดนี้ลงไปข้างล่าง DATABASES เพื่อบังคับใช้ SSL ครับ
-if not os.environ.get('RAILWAY_ENVIRONMENT_NAME') == '': # เช็กว่ารันบน Railway หรือเปล่า
-    DATABASES['default']['OPTIONS'] = {
-        'sslmode': 'require',
-    }
+# if not os.environ.get('RAILWAY_ENVIRONMENT_NAME') == '': # เช็กว่ารันบน Railway หรือเปล่า
+#     DATABASES['default']['OPTIONS'] = {
+#         'sslmode': 'require',
+#     }
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
 
