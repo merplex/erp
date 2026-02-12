@@ -850,39 +850,38 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
 
     # ❗ ต้องเพิ่มฟังก์ชันนี้เข้าไปด้วย ระบบถึงจะหาตัวสร้างใบ PD เจอครับ
     def create_auto_production_order(self, sales_item, user):
-        """
-        ฟังก์ชันช่วยสร้างใบผลิตอัตโนมัติจากรายการขาย
-        """
         from .models import ProductionOrder, BOM
         import datetime
         
-        # 🔍 1. เช็ก BOM และสถานะสินค้าก่อน
-        bom_obj = BOM.objects.filter(product=sales_item.product).first()
-        
-        # เช็กทั้ง Flag ในสินค้า และข้อมูล BOM จริงในระบบ
-        if not getattr(sales_item.product, 'has_bom', False) or not bom_obj:
-            return None 
+        # 1. เช็กสถานะ "สินค้าผลิตเอง" (has_bom)
+        if not getattr(sales_item.product, 'has_bom', False):
+            return "NOT_MANUFACTURED" # คืนค่าบอกว่าตัวนี้ไม่ใช่สินค้าผลิต
 
-        # 🎯 2. ดึงจำนวนที่สั่ง (แก้จาก .quantity เป็น .quantity_ordered)
+        # 2. เช็กว่ามีสูตร BOM ในระบบจริงไหม
+        bom_obj = BOM.objects.filter(product=sales_item.product).first()
+        if not bom_obj:
+            return "NO_BOM_FORMULA" # คืนค่าบอกว่ายังไม่ได้ทำสูตร
+
+        # 3. ตรวจสอบจำนวนสั่งซื้อ
         qty = getattr(sales_item, 'quantity_ordered', 0)
         if qty <= 0:
-            return None
+            return "ZERO_QTY"
 
-        # ✅ 3. สั่งสร้างใบผลิต
-        new_pd = ProductionOrder(
-            product=sales_item.product,
-            bom=bom_obj,  # 👈 ใส่ BOM เข้าไปด้วยเพื่อให้ใบผลิตสมบูรณ์
-            quantity_planned=qty, 
-            status='Draft',
-            order_date=datetime.date.today(),
-            created_by=user,
-            notes=f"สร้างอัตโนมัติจาก SO: {sales_item.sales_order.so_number or sales_item.sales_order.id}"
-        )
-        
-        # ใช้ .save() เพื่อให้ Logic generate_number ทำงานได้แน่นอน
-        new_pd.save()
-        
-        return new_pd
+        # 4. ถ้าผ่านเงื่อนไขทั้งหมด -> สร้างใบผลิต
+        try:
+            new_pd = ProductionOrder(
+                product=sales_item.product,
+                bom=bom_obj,
+                quantity_planned=qty,
+                status='Draft',
+                order_date=datetime.date.today(),
+                created_by=user,
+                notes=f"Auto PD จาก SO: {sales_item.sales_order.so_number}"
+            )
+            new_pd.save()
+            return new_pd # คืนค่า object PD เมื่อสำเร็จ
+        except Exception:
+            return "SAVE_ERROR"
     
     @admin.action(description='⚡ เปิดใบสั่งผลิต (Auto PD)')
     def make_production_order(self, request, queryset):
@@ -909,31 +908,54 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
             
     # ✅ ฟังก์ชันสร้างใบผลิตอัตโนมัติ
     def save_formset(self, request, form, formset, change):
-        created_count = 0
+        from django.contrib import messages
+        from .models import SalesItem
 
         if formset.model == SalesItem:
             instances = formset.save(commit=False)
-            created_count = 0
-            for instance in instances:
-                if isinstance(instance, SalesItem):
-                    instance.sales_order = formset.instance 
-                    if hasattr(instance, 'user'): instance.user = request.user
-                    instance.save()
-                    
-                    if instance.auto_produce and instance.product.has_bom and not instance.is_produced:
-                        self.create_auto_production_order(instance, request.user)
-                        instance.is_produced = True 
-                        instance.save()
-                        created_count += 1
-            formset.save_m2m()
             
-            messages.success(request, f"ระบบสร้างใบผลิตอัตโนมัติสำเร็จ {created_count} รายการ")
-        else:
-            # ✅ บรรทัดนี้สำคัญมาก! ถ้าไม่ใช่ SalesItem (เช่นเป็น DeliveryLog) ให้เซฟปกติ
-            formset.save()
+            # ตัวนับแยกประเภท
+            count_success = 0
+            count_not_manufactured = 0
+            count_no_formula = 0
+            
+            for instance in instances:
+                instance.save() # เซฟข้อมูลเบื้องต้นก่อน
+                
+                # ตรวจสอบ: ถ้าติ๊ก auto_produce และยังไม่ได้ถูกผลิต
+                if getattr(instance, 'auto_produce', False) and not getattr(instance, 'is_produced', False):
+                    
+                    result = self.create_auto_production_order(instance, request.user)
+                    
+                    if isinstance(result, object) and not isinstance(result, str):
+                        # ✅ กรณีสำเร็จ
+                        instance.is_produced = True
+                        instance.save()
+                        count_success += 1
+                    else:
+                        # ❌ กรณีไม่สำเร็จ: ล้างติ๊กถูกออกทันที
+                        instance.auto_produce = False
+                        instance.save()
+                        
+                        # แยกประเภท Error เพื่อเก็บยอดสรุป
+                        if result == "NOT_MANUFACTURED":
+                            count_not_manufactured += 1
+                        elif result == "NO_BOM_FORMULA":
+                            count_no_formula += 1
 
-        if created_count > 0:
-            messages.success(request, f"ระบบได้สร้างใบผลิต (PD) ให้โดยอัตโนมัติจำนวน {created_count} รายการแล้วค่ะ")
+            formset.save_m2m()
+
+            # 📢 สรุปข้อความแจ้งเตือนแยกตามประเภท
+            if count_success > 0:
+                messages.success(request, f"✅ สร้างใบผลิตสำเร็จ {count_success} รายการ")
+            
+            if count_not_manufactured > 0:
+                messages.warning(request, f"ℹ️ ไม่ใช่สินค้าผลิตเอง {count_not_manufactured} รายการ (ระบบล้างติ๊กออกให้แล้ว)")
+            
+            if count_no_formula > 0:
+                messages.error(request, f"⚠️ ยังไม่ได้สร้างสูตร BOM {count_no_formula} รายการ (กรุณาไปสร้างสูตรก่อน)")
+        else:
+            formset.save()
 
     def get_confirmed_status(self, obj):
         # ไปแอบดูใน Log ว่ามีการติ๊กรับชำระเงินหรือยัง
