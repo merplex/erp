@@ -276,7 +276,7 @@ class PurchaseOrder(models.Model):
     # ==========================================
     @property
     def total_items_price(self):
-        total = sum(item.quantity * item.unit_price for item in self.items.all())
+        total = sum(item.quantity_ordered * item.unit_price for item in self.items.all())
         return Decimal(total)
 
     @property
