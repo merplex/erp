@@ -599,6 +599,12 @@ class SupplierAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('company_name', 'contact_person', 'type')
     inlines = [SupplierProductInline]
 
+class ProductBarcodeAdmin(admin.ModelAdmin):
+    # 🎯 ตัวนี้แหละคือ "หัวใจ" ที่จะแก้ Error E039
+    search_fields = ['code', 'product__name']
+    list_display = ('code', 'product', 'conversion_factor', 'unit_name')
+admin.site.register(ProductBarcode, ProductBarcodeAdmin) # จดทะเบียนตามปกติ
+    
 @admin.register(Product)
 class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit','get_total_stock_value', 'has_bom', 'created_by')
