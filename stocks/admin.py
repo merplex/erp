@@ -603,6 +603,7 @@ class ProductBarcodeAdmin(admin.ModelAdmin):
     # 🎯 ตัวนี้แหละคือ "หัวใจ" ที่จะแก้ Error E039
     search_fields = ['code', 'product__name']
     list_display = ('code', 'product', 'conversion_factor', 'unit_name')
+    class Meta: verbose_name_plural = "T4. หน่วยขายตามบาร์โค้ด"
 admin.site.register(ProductBarcode, ProductBarcodeAdmin) # จดทะเบียนตามปกติ
     
 @admin.register(Product)
