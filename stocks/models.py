@@ -1015,6 +1015,24 @@ class ProductionMaterialUsage(models.Model):
         if self.production_order.status in ['Completed', 'Cancelled']:
             return 0
         return max(0, self.actual_qty_to_use - self.used_so_far)
+    def load_materials_from_bom(self):
+        if not self.bom:
+            return
+
+        from .models import ProductionMaterialUsage
+        
+        # 1. ดึงรายการจาก BOM มาสร้างรายการจองวัตถุดิบ
+        for item in self.bom.items.all():
+            # สูตร: (จำนวนต่อหน่วย) * (จำนวนที่แผนจะผลิต)
+            total_needed = item.quantity * self.quantity_planned
+            
+            ProductionMaterialUsage.objects.create(
+                production_order=self,
+                raw_material=item.raw_material,
+                planned_qty=total_needed,      # จำนวนตามสูตร
+                actual_qty_to_use=total_needed, # ยอดที่ต้องใช้จริง (เริ่มต้นให้เท่ากัน)
+                used_so_far=0                  # เริ่มต้นยังไม่ตัดสต็อก
+            )
     
 class InternationalPurchaseTracking(PurchaseOrder):
     class Meta:
