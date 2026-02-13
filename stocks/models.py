@@ -164,6 +164,22 @@ class ProductBarcode(models.Model):
     conversion_factor = models.PositiveIntegerField(default=1, verbose_name="จำนวนต่อหน่วย")
     unit_name = models.CharField(max_length=20, blank=True, null=True, verbose_name="ชื่อหน่วย")
 
+    def get_forecast_stock(self):
+        # 1. ดึงสต็อกรวม (หน่วยชิ้น)
+        total_stock = self.product.total_stock if self.product else 0
+        
+        # 2. ดึงตัวคูณ (เช่น แพ็ค 10 ก็คือ 10)
+        factor = self.conversion_factor or 1
+        
+        # 3. ใช้ // เพื่อหารเอาส่วน (ปัดเศษทิ้ง) 
+        # เช่น 18 // 10 จะได้ 1 แพ็ค
+        forecast_qty = total_stock // factor
+        
+        # 4. แสดงผลเป็นจำนวนเต็ม พร้อมคอมม่าคั่น
+        return f"{int(forecast_qty):,}"
+
+    get_forecast_stock.short_description = "สต็อกคาดการณ์ (ตามหน่วย)"
+
     @property
     def unit_display(self):
         # ถ้าตัวคูณเป็น 1 หรือไม่ได้ใส่ชื่อหน่วย ให้ถือว่าเป็นหน่วยปกติ
