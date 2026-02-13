@@ -173,8 +173,8 @@ class ProductBarcode(models.Model):
     
     def __str__(self):
         return self.code
-
-
+    
+    class Meta: verbose_name_plural = "T4. หน่วยขายตามบาร์โค้ด"
 
 class ProductSupplier(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='product_suppliers')
