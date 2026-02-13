@@ -165,17 +165,20 @@ class ProductBarcode(models.Model):
     unit_name = models.CharField(max_length=20, blank=True, null=True, verbose_name="ชื่อหน่วย")
 
     def get_forecast_stock(self):
-        # 1. ดึงสต็อกรวม (หน่วยชิ้น)
-        total_stock = self.product.total_stock if self.product else 0
+        # 1. ดึงค่า "คาดการณ์ (Plan)" จากฟังก์ชัน get_available ใน Product
+        # ถ้า Product ไม่มีฟังก์ชันนี้ หรือค่าเป็น None ให้เริ่มที่ 0
+        if self.product and hasattr(self.product, 'get_available'):
+            available_total = self.product.get_available() or 0
+        else:
+            # สำรองไว้เผื่อเรียกผ่าน field stock_quantity โดยตรง
+            available_total = getattr(self.product, 'stock_quantity', 0) or 0
         
-        # 2. ดึงตัวคูณ (เช่น แพ็ค 10 ก็คือ 10)
         factor = self.conversion_factor or 1
         
-        # 3. ใช้ // เพื่อหารเอาส่วน (ปัดเศษทิ้ง) 
-        # เช่น 18 // 10 จะได้ 1 แพ็ค
-        forecast_qty = total_stock // factor
+        # 2. คำนวณแบบปัดเศษทิ้ง (ขายได้กี่หน่วยเต็ม)
+        # ใช้ max(0, ...) เพื่อไม่ให้โชว์สต็อกติดลบให้ลูกค้าตกใจ
+        forecast_qty = max(0, available_total // factor)
         
-        # 4. แสดงผลเป็นจำนวนเต็ม พร้อมคอมม่าคั่น
         return f"{int(forecast_qty):,}"
 
     get_forecast_stock.short_description = "สต็อกคาดการณ์ (ตามหน่วย)"
