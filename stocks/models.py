@@ -224,7 +224,7 @@ class BOM(models.Model):
 class BOMIngredient(models.Model):
     bom = models.ForeignKey(BOM, on_delete=models.CASCADE, related_name='ingredients')
     material = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="วัตถุดิบ")
-    quantity = models.DecimalField(max_digits=10, decimal_places=2, default=1.0)
+    quantity = models.DecimalField(max_digits=10, decimal_places=4, default=1.0)
     @property
     def subtotal(self): return self.material.buy_price * self.quantity
     @property
