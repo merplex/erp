@@ -821,6 +821,9 @@ class PurchaseOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
         received = sum(l.quantity_received for l in obj.receipt_logs.all())
         return color_diff(received - ordered)
     
+    class Media:
+        js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
+    
 @admin.register(SalesOrder)
 class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('so_number', 'customer', 'order_date', 'status', 'vat_percent','get_diff')
@@ -1016,6 +1019,8 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
             if obj.status == 'Completed':
                 return False # ล็อคเฉพาะตอนกด "เสร็จงาน/ปิดงาน" เท่านั้น
         return super().has_change_permission(request, obj)
+    class Media:
+        js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
     
 class ProductionMaterialUsageInline(admin.TabularInline):
     model = ProductionMaterialUsage
@@ -1130,6 +1135,9 @@ class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
             kwargs["queryset"] = BOM.objects.filter(product=obj.product)
 
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
+    
+    class Media:
+        js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
 
 class BuyPriceRangeFilter(admin.SimpleListFilter):
     title = 'ช่วงราคาทุน'
@@ -1252,6 +1260,9 @@ class StockPlanningAdmin(admin.ModelAdmin):
         color = "red" if total < 0 else "blue"
         return format_html('<b style="color: {};">{}</b>', color, total)
     get_available.short_description = "คาดการณ์ (Plan)"
+
+    class Media:
+        js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
 
 @admin.register(ProductCategory)
 class ProductCategoryAdmin(admin.ModelAdmin):
@@ -1571,6 +1582,9 @@ class FinanceReportAdmin(DocumentLockMixin,admin.ModelAdmin):
             return format_html('<span style="color:green; font-weight:bold;">{}</span>', "0.00")
         # ถ้ายังค้างชำระ ให้โชว์ยอดค้างเป็นสีแดง (ติดลบตามสไตล์เปรม)
         return format_html('<span style="color:red; font-weight:bold;">-{}</span>', f"{bal:,.2f}")
+    
+    class Media:
+        js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
 
 # 2. หน้า Admin ของ Income Report
 @admin.register(IncomeReport)
@@ -1721,6 +1735,9 @@ class IncomeReportAdmin(DocumentLockMixin, admin.ModelAdmin):
         total = obj.payments.filter(amount__lt=0).aggregate(Sum('amount'))['amount__sum'] or 0
         return format_html('<span style="color:#6c757d;">{:,.2f}</span>', total)
     get_total_deductions_display.short_description = "➖ ยอดหักสะสม"
+
+    class Media:
+        js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
 
 #@admin.register(ShipmentPaymentReport)
 class ShipmentPaymentReportAdmin(admin.ModelAdmin):
@@ -2028,6 +2045,8 @@ class SalesReportAdmin(admin.ModelAdmin):
         profit_display = "{:,.2f}".format(profit)
         return format_html('<b style="color: {};">{}</b>', color, profit_display)
 
+    class Media:
+        js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
 
 # 2. ตั้งค่า Admin ตัวเดียวจบ
 @admin.register(ShipmentAccounting)
@@ -2153,7 +2172,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     # --- 💰 ฟังก์ชันคำนวณเงินต่างๆ ---
     def get_revenue_inc_vat(self, obj):
         return f"{obj.calculate_revenue_total():,.2f}" # ✅ เรียกจาก Model สั้นๆ
-    get_revenue_inc_vat.short_description = "ยอดรวม VAT"
+    get_revenue_inc_vat.short_description = "incl.VAT"
 
     def get_revenue_no_vat(self, obj):
         item = obj.sales_order.items.filter(product=obj.product).first()
@@ -2162,7 +2181,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
             no_vat = item.sale_price * obj.quantity_shipped
             return f"{no_vat:,.2f}"
         return "0.00"
-    get_revenue_no_vat.short_description = "ยอด Non-VAT"
+    get_revenue_no_vat.short_description = "excl.VAT"
 
     def get_dc_value(self, obj):
         from .models import CustomerProductContract
@@ -2180,7 +2199,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
             formatted_amt = f"{dc_amt:,.2f}"
             return format_html('{}% (<b>฿{}</b>)', contract.dc_percent, formatted_amt)
         return "-"
-    get_dc_value.short_description = "ยอด DC"
+    get_dc_value.short_description = "ยอดDC"
 
     # 🎯 4. ยอด Rebate (แก้ไขจุดที่ทำให้เกิด ValueError)
     def get_rebate_value(self, obj):
@@ -2199,7 +2218,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
             formatted_amt = f"{reb_amt:,.2f}"
             return format_html('{}% (<b>฿{}</b>)', contract.rebate_percent, formatted_amt)
         return "-"
-    get_rebate_value.short_description = "ยอด Rebate"
+    get_rebate_value.short_description = "ยอดRebate"
 
     # 🎯 5. ยอด ที่ยืนยันทั้งหมด จะถูกบันทึกย้อนไปใน salesorder และ incomereport
     def save_model(self, request, obj, form, change):
@@ -2277,6 +2296,9 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     def get_so_number(self, obj):
         return obj.sales_order.so_number
     get_so_number.short_description = "เลขที่ SO"
+
+    class Media:
+        js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
 
 @admin.register(InternationalPurchaseTracking)
 class InternationalPurchaseTrackingAdmin(admin.ModelAdmin):
