@@ -1454,7 +1454,7 @@ class FinanceReportAdmin(DocumentLockMixin,admin.ModelAdmin):
     # ✅ 1. เปลี่ยน list_display ให้โชว์ Payment Status แทน
     list_display = ('po_number', 'supplier', 'get_grand_total_list', 'get_balance_due_list', 'payment_status')
     # ✅ 2. ตัวกรอง ก็ต้องกรองตามการจ่ายเงิน
-    list_filter = (('created_at', DjangoDateRangeFilter), 'payment_status', 'supplier') 
+    list_filter = (('order_date', DjangoDateRangeFilter), 'payment_status', 'supplier') 
     # ✅ 3. ในหน้า Detail ก็เปลี่ยน fields
     fieldsets = (
         ('📊 สรุปยอดเงิน', {
