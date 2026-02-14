@@ -10,6 +10,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.dispatch import receiver
 import random # ✅ เพิ่มไว้บนสุดของไฟล์
 import datetime
+import re
 
 class DocumentLock(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
