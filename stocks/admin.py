@@ -1561,7 +1561,7 @@ class FinanceReportAdmin(DocumentLockMixin,admin.ModelAdmin):
         color = "red" if balance > 0 else "green"
         text = f"{balance:,.2f}"
         return format_html('<b style="color:{};">{}</b>', color, text)
-    get_balance_due_display.short_description = "❗️ ยอดค้างจ่าย"
+    get_balance_due_display.short_description = "ค้างจ่าย"
 
     # --- List Display Functions (หน้ารวม) ---
     def get_grand_total_list(self, obj): 
@@ -1582,6 +1582,8 @@ class FinanceReportAdmin(DocumentLockMixin,admin.ModelAdmin):
             return format_html('<span style="color:green; font-weight:bold;">{}</span>', "0.00")
         # ถ้ายังค้างชำระ ให้โชว์ยอดค้างเป็นสีแดง (ติดลบตามสไตล์เปรม)
         return format_html('<span style="color:red; font-weight:bold;">-{}</span>', f"{bal:,.2f}")
+    
+    get_balance_due_list.short_description = "ค้างจ่าย"
     
     class Media:
         js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
