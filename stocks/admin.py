@@ -1566,7 +1566,7 @@ class FinanceReportAdmin(DocumentLockMixin,admin.ModelAdmin):
     # --- List Display Functions (หน้ารวม) ---
     def get_grand_total_list(self, obj): 
         return f"{obj.grand_total:,.2f}"
-    get_grand_total_list.short_description = "ยอดสุทธิ"
+    get_grand_total_list.short_description = "💰 ยอดสุทธิ"
 
     def get_balance_due_list(self, obj):
         # 1. คำนวณหา Grand Total ที่แท้จริง (รวม VAT แล้ว)
@@ -1584,6 +1584,11 @@ class FinanceReportAdmin(DocumentLockMixin,admin.ModelAdmin):
         return format_html('<span style="color:red; font-weight:bold;">-{}</span>', f"{bal:,.2f}")
     
     get_balance_due_list.short_description = "ค้างจ่าย"
+
+    class Meta:
+        # 🎯 ชื่อที่เปรมอยากให้โชว์บนหัวรายงาน (Page Title)
+        verbose_name = "C2. สรุปรายจ่าย (PO Report)"
+        verbose_name_plural = "C2. สรุปรายจ่าย (PO Report)"
     
     class Media:
         js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
