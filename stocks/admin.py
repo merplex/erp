@@ -2086,7 +2086,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     )
     
     list_filter = (
-        ('shipped_date'), 
+        ('shipped_date', DateRangeFilter), 
         'is_revenue_confirmed', 'is_dc_confirmed', 'is_rebate_confirmed',
         'sales_order__customer'
     )
