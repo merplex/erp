@@ -44,6 +44,7 @@ from django.contrib.contenttypes.models import ContentType
 from datetime import timedelta
 from django.utils import timezone
 from decimal import Decimal
+from rangefilter.filters import DateRangeFilter
 
 # 📅 คลาสพิเศษสำหรับสร้างช่องเลือกวันที่ "เริ่มต้น - สิ้นสุด" เอง
 class DateRangeFilter(admin.FieldListFilter):
@@ -2085,7 +2086,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     )
     
     list_filter = (
-        ('shipped_date', admin.DateFieldListFilter), 
+        ('shipped_date', DateRangeFilter), 
         'is_revenue_confirmed', 'is_dc_confirmed', 'is_rebate_confirmed',
         'sales_order__customer'
     )
