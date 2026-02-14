@@ -2242,7 +2242,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
                     order=obj.sales_order,
                     amount=-obj.rebate_amount, # ติดลบเพื่อหักยอด
                     payment_date=obj.confirmed_date or timezone.now(),
-                    remark=f"⚠ {rebate_ref}"
+                    remark=f"หักค่า Rebate สินค้า {obj.product.name} [REF-ID:{obj.id}]"
                 )
 
         # 🎯 [SECTION 3] ยืนยันยอด DC (รายการหัก 2)
@@ -2253,7 +2253,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
                     order=obj.sales_order,
                     amount=-obj.dc_amount, # ติดลบเพื่อหักยอด
                     payment_date=obj.confirmed_date or timezone.now(),
-                    remark=f"📦 {dc_ref}"
+                    remark=f"หักค่า DC สินค้า {obj.product.name} [REF-ID:{obj.id}]"
                 )
 
     # --- ✅ Actions ---
