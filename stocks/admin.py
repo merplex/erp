@@ -686,7 +686,7 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
             return f"Err: {str(e)[:20]}"
         return "-"
 
-    get_production_cost.short_description = "ต้นทุนผลิตเฉลี่ย (BOM)"
+    get_production_cost.short_description = "ต้นทุนBOMเฉลี่ย"
 
     def get_latest_barcode(self, obj):
         # ดึงจาก property ที่เราเขียนไว้ใน models
