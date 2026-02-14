@@ -577,46 +577,42 @@ class SalesPayment(models.Model):
 #ดักจับ ถ้ามีการ ลบประวัติการรับเงินออก ให้ไปอัปเดตสถานะที่ใบสั่งขาย และสถานะใน C6 ด้วยเช่นกัน
 @receiver(post_delete, sender=SalesPayment)
 def unlock_shipment_accounting(sender, instance, **kwargs):
-    """
-    เมื่อมีการลบประวัติการรับเงิน/หักออก (SalesPayment)
-    ระบบจะพยายามปลดล็อกสถานะใน C6 (ShipmentAccounting) ให้อัตโนมัติ
-    """
     remark = instance.remark or ""
-    # 🔍 ค้นหา ID อ้างอิงจาก Remark
+    order = instance.order # 🎯 ดึงออเดอร์มาเพื่อใช้ในกรณีหา REF-ID ไม่เจอ
+    
+    # 🔍 1. ปลดล็อกด้วย REF-ID (แม่นยำที่สุด สำหรับรายการใหม่)
     match = re.search(r"\[REF-ID:(\d+)\]", remark)
     if match:
         shipment_id = match.group(1)
         from .models import SalesDeliveryLog
         try:
             ship = SalesDeliveryLog.objects.get(id=shipment_id)
-            if "ยอดส่งสินค้า" in remark: ship.is_revenue_confirmed = False
-            elif "DC" in remark: ship.is_dc_confirmed = False
-            elif "Rebate" in remark: ship.is_rebate_confirmed = False
+            if "ใบส่งสินค้า" in remark and "หัก" not in remark: # กรณีรายรับ
+                ship.is_revenue_confirmed = False
+            elif "DC" in remark: 
+                ship.is_dc_confirmed = False
+            elif "Rebate" in remark: 
+                ship.is_rebate_confirmed = False
             ship.save()
-            return # จบงานถ้าเจอ ID
-        except: pass
+            return 
+        except:
+            pass
 
-    # 🔍 2. สำหรับรายการเก่า (ที่ไม่มี ID) ใช้การวนลูปเช็คจากชื่อสินค้าและประเภท
-    if any(word in remark for word in ["สินค้า", "DC", "Rebate", "หัก"]):
+    # 🔍 2. ปลดล็อกสำหรับรายการเก่า (กรณีไม่มี REF-ID)
+    if any(word in remark for word in ["ใบส่งสินค้า", "DC", "Rebate"]):
         from .models import SalesDeliveryLog
-        # ดึงรายการส่งของทั้งหมดใน Order นี้มาไล่เช็ค
         shipments = SalesDeliveryLog.objects.filter(sales_order=order)
-        
         for ship in shipments:
-            # เช็คว่าชื่อสินค้าในรายการส่ง ตรงกับที่อยู่ใน Remark ไหม
+            # เช็คว่าชื่อสินค้าใน Log ตรงกับใน Remark ไหม
             if ship.product.name in remark:
-                if "DC" in remark and ship.is_dc_confirmed:
+                if "DC" in remark:
                     ship.is_dc_confirmed = False
-                    ship.save()
-                    break
-                elif "Rebate" in remark and ship.is_rebate_confirmed:
+                elif "Rebate" in remark:
                     ship.is_rebate_confirmed = False
-                    ship.save()
-                    break
-                elif "ยอดส่งสินค้า" in remark and ship.is_revenue_confirmed:
+                elif "ใบส่งสินค้า" in remark:
                     ship.is_revenue_confirmed = False
-                    ship.save()
-                    break
+                ship.save()
+                break
 
 # --- 4. Proxy Model สำหรับหน้า C3 (Income Report) ---
 class IncomeReport(SalesOrder):
