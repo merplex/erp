@@ -586,35 +586,35 @@ def unlock_shipment_accounting(sender, instance, **kwargs):
     match = re.search(r"\[REF-ID:(\d+)\]", remark)
     if match:
         shipment_id = match.group(1)
-        try:
-            # ดึงรายการ Shipment ต้นทางขึ้นมา
-            ship = ShipmentAccounting.objects.get(id=shipment_id)
-            
-            # เช็คว่ารายการที่ลบคืออะไร แล้วปลดล็อกตัวนั้น
-            if "ยอดส่งสินค้า" in remark:
-                ship.is_revenue_confirmed = False
-            elif "DC" in remark:
-                ship.is_dc_confirmed = False
-            elif "Rebate" in remark:
-                ship.is_rebate_confirmed = False
-                
-            ship.save() # บันทึกเพื่อให้หน้า C6 กลับเป็นสีแดง
-        except Exception:
-            pass
-    order = instance.order
-    if "สินค้า" in remark or "หัก" in remark:
         from .models import SalesDeliveryLog
+        try:
+            ship = SalesDeliveryLog.objects.get(id=shipment_id)
+            if "ยอดส่งสินค้า" in remark: ship.is_revenue_confirmed = False
+            elif "DC" in remark: ship.is_dc_confirmed = False
+            elif "Rebate" in remark: ship.is_rebate_confirmed = False
+            ship.save()
+            return # จบงานถ้าเจอ ID
+        except: pass
+
+    # 🔍 2. สำหรับรายการเก่า (ที่ไม่มี ID) ใช้การวนลูปเช็คจากชื่อสินค้าและประเภท
+    if any(word in remark for word in ["สินค้า", "DC", "Rebate", "หัก"]):
+        from .models import SalesDeliveryLog
+        # ดึงรายการส่งของทั้งหมดใน Order นี้มาไล่เช็ค
         shipments = SalesDeliveryLog.objects.filter(sales_order=order)
         
         for ship in shipments:
-            if "DC" in remark and ship.is_dc_confirmed:
-                if abs(ship.dc_amount) == abs(instance.amount):
+            # เช็คว่าชื่อสินค้าในรายการส่ง ตรงกับที่อยู่ใน Remark ไหม
+            if ship.product.name in remark:
+                if "DC" in remark and ship.is_dc_confirmed:
                     ship.is_dc_confirmed = False
                     ship.save()
                     break
-            elif "Rebate" in remark and ship.is_rebate_confirmed:
-                if abs(ship.rebate_amount) == abs(instance.amount):
+                elif "Rebate" in remark and ship.is_rebate_confirmed:
                     ship.is_rebate_confirmed = False
+                    ship.save()
+                    break
+                elif "ยอดส่งสินค้า" in remark and ship.is_revenue_confirmed:
+                    ship.is_revenue_confirmed = False
                     ship.save()
                     break
 
