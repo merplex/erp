@@ -2223,36 +2223,37 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
         from .models import SalesPayment
         if obj.is_revenue_confirmed:
-            ref_tag = f"[REF-ID:{obj.id}]"
-            # เช็คซ้ำด้วย REF-ID จะแม่นกว่าเช็คด้วยตัวหนังสือครับ
-            if not SalesPayment.objects.filter(order=obj.sales_order, remark__icontains=ref_tag).exists():
-                SalesPayment.objects.create(
-                    order=obj.sales_order,
-                    amount=obj.calculate_revenue_total(),
-                    payment_date=obj.confirmed_date or timezone.now(),
-                    remark=f"ใบส่งสินค้า {obj.product.name} {ref_tag}"
-                )
+            
+            SalesPayment.objects.update_or_create(
+                order=obj.sales_order,
+                remark__icontains=f"ยอดส่งของ {obj.shipping_no}",
+                defaults={
+                    'amount': obj.calculate_revenue_total(), # ✅ ใช้ตัวเลขดิบๆ ไปบันทึก
+                    'payment_date': obj.confirmed_date or obj.shipped_date,
+                    'remark': f"✔ ยอดส่งของเลขที่ {obj.shipping_no}"
+                }
+            )
 
         # 🎯 [SECTION 2] ยืนยันยอด Rebate (รายการหัก 1)
         if obj.is_rebate_confirmed and obj.rebate_amount > 0:
-            ref_tag = f"[REF-ID:{obj.id}]"
-            if not SalesPayment.objects.filter(order=obj.sales_order, remark__icontains=ref_tag).exists():
+            rebate_ref = f"หัก Rebate จากใบส่งของ {obj.shipping_no}"
+            if not SalesPayment.objects.filter(order=obj.sales_order, remark__icontains=rebate_ref).exists():
                 SalesPayment.objects.create(
                     order=obj.sales_order,
-                    amount=-obj.rebate_amount,
+                    amount=-obj.rebate_amount, # ติดลบเพื่อหักยอด
                     payment_date=obj.confirmed_date or timezone.now(),
-                    remark=f"หักค่า Rebate ใบส่งสินค้า {obj.product.name} {ref_tag}"
+                    remark=f"หักค่า Rebate สินค้า {obj.product.name} [REF-ID:{obj.id}]"
                 )
 
         # 🎯 [SECTION 3] ยืนยันยอด DC (รายการหัก 2)
         if obj.is_dc_confirmed and obj.dc_amount > 0:
-            ref_tag = f"[REF-ID:{obj.id}]"
-            if not SalesPayment.objects.filter(order=obj.sales_order, remark__icontains=ref_tag).exists():
+            dc_ref = f"หักค่า DC จากใบส่งของ {obj.shipping_no}"
+            if not SalesPayment.objects.filter(order=obj.sales_order, remark__icontains=dc_ref).exists():
                 SalesPayment.objects.create(
                     order=obj.sales_order,
-                    amount=-obj.dc_amount,
+                    amount=-obj.dc_amount, # ติดลบเพื่อหักยอด
                     payment_date=obj.confirmed_date or timezone.now(),
-                    remark=f"หักค่า DC ใบส่งสินค้า {obj.product.name} {ref_tag}"
+                    remark=f"หักค่า DC สินค้า {obj.product.name} [REF-ID:{obj.id}]"
                 )
 
     # --- ✅ Actions ---

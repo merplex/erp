@@ -10,7 +10,6 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.dispatch import receiver
 import random # ✅ เพิ่มไว้บนสุดของไฟล์
 import datetime
-import re
 
 class DocumentLock(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -577,42 +576,46 @@ class SalesPayment(models.Model):
 #ดักจับ ถ้ามีการ ลบประวัติการรับเงินออก ให้ไปอัปเดตสถานะที่ใบสั่งขาย และสถานะใน C6 ด้วยเช่นกัน
 @receiver(post_delete, sender=SalesPayment)
 def unlock_shipment_accounting(sender, instance, **kwargs):
+    """
+    เมื่อมีการลบประวัติการรับเงิน/หักออก (SalesPayment)
+    ระบบจะพยายามปลดล็อกสถานะใน C6 (ShipmentAccounting) ให้อัตโนมัติ
+    """
     remark = instance.remark or ""
-    order = instance.order # 🎯 ดึงออเดอร์มาเพื่อใช้ในกรณีหา REF-ID ไม่เจอ
-    
-    # 🔍 1. ปลดล็อกด้วย REF-ID (แม่นยำที่สุด สำหรับรายการใหม่)
+    # 🔍 ค้นหา ID อ้างอิงจาก Remark
     match = re.search(r"\[REF-ID:(\d+)\]", remark)
     if match:
         shipment_id = match.group(1)
-        from .models import SalesDeliveryLog
         try:
-            ship = SalesDeliveryLog.objects.get(id=shipment_id)
-            if "ใบส่งสินค้า" in remark and "หัก" not in remark: # กรณีรายรับ
+            # ดึงรายการ Shipment ต้นทางขึ้นมา
+            ship = ShipmentAccounting.objects.get(id=shipment_id)
+            
+            # เช็คว่ารายการที่ลบคืออะไร แล้วปลดล็อกตัวนั้น
+            if "ยอดส่งสินค้า" in remark:
                 ship.is_revenue_confirmed = False
-            elif "DC" in remark: 
+            elif "DC" in remark:
                 ship.is_dc_confirmed = False
-            elif "Rebate" in remark: 
+            elif "Rebate" in remark:
                 ship.is_rebate_confirmed = False
-            ship.save()
-            return 
-        except:
+                
+            ship.save() # บันทึกเพื่อให้หน้า C6 กลับเป็นสีแดง
+        except Exception:
             pass
-
-    # 🔍 2. ปลดล็อกสำหรับรายการเก่า (กรณีไม่มี REF-ID)
-    if any(word in remark for word in ["ใบส่งสินค้า", "DC", "Rebate"]):
+    order = instance.order
+    if "สินค้า" in remark or "หัก" in remark:
         from .models import SalesDeliveryLog
         shipments = SalesDeliveryLog.objects.filter(sales_order=order)
+        
         for ship in shipments:
-            # เช็คว่าชื่อสินค้าใน Log ตรงกับใน Remark ไหม
-            if ship.product.name in remark:
-                if "DC" in remark:
+            if "DC" in remark and ship.is_dc_confirmed:
+                if abs(ship.dc_amount) == abs(instance.amount):
                     ship.is_dc_confirmed = False
-                elif "Rebate" in remark:
+                    ship.save()
+                    break
+            elif "Rebate" in remark and ship.is_rebate_confirmed:
+                if abs(ship.rebate_amount) == abs(instance.amount):
                     ship.is_rebate_confirmed = False
-                elif "ใบส่งสินค้า" in remark:
-                    ship.is_revenue_confirmed = False
-                ship.save()
-                break
+                    ship.save()
+                    break
 
 # --- 4. Proxy Model สำหรับหน้า C3 (Income Report) ---
 class IncomeReport(SalesOrder):
