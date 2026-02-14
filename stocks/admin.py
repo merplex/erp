@@ -1584,11 +1584,6 @@ class FinanceReportAdmin(DocumentLockMixin,admin.ModelAdmin):
         return format_html('<span style="color:red; font-weight:bold;">-{}</span>', f"{bal:,.2f}")
     
     get_balance_due_list.short_description = "ค้างจ่าย"
-
-    class Meta:
-        # 🎯 ชื่อที่เปรมอยากให้โชว์บนหัวรายงาน (Page Title)
-        verbose_name = "C2. สรุปรายจ่าย (PO Report)"
-        verbose_name_plural = "C2. สรุปรายจ่าย (PO Report)"
     
     class Media:
         js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
