@@ -572,6 +572,47 @@ class SalesPayment(models.Model):
         super().save(*args, **kwargs)
         # บันทึกเสร็จ ให้ไปอัปเดตสถานะที่ใบสั่งขายทันที
         self.order.update_payment_status()
+        
+#ดักจับ ถ้ามีการ ลบประวัติการรับเงินออก ให้ไปอัปเดตสถานะที่ใบสั่งขาย และสถานะใน C6 ด้วยเช่นกัน
+@receiver(post_delete, sender=SalesPayment)
+def unlock_shipment_accounting(sender, instance, **kwargs):
+    """
+    เมื่อมีการลบประวัติการรับเงิน/หักออก (SalesPayment)
+    ระบบจะพยายามปลดล็อกสถานะใน C6 (ShipmentAccounting) ให้อัตโนมัติ
+    """
+    remark = instance.remark or ""
+    order = instance.order
+    
+    # 🔍 1. หาว่าเป็นรายการที่มาจาก C6 หรือเปล่า (เช็คจาก Remark ที่เราตั้งไว้)
+    # หมายเหตุ: เปรมต้องเช็คว่า Remark ที่ตั้งไว้ใน admin.py ตรงกับคำพวกนี้ไหม
+    if "สินค้า" in remark:
+        # พยายามแกะชื่อสินค้าจาก Remark หรือหาจากรายการส่งของของ SO นี้
+        # วิธีที่แม่นยำที่สุดคือหา Shipment ของ Order นี้ที่ยอดเงินตรงกัน
+        from .models import SalesDeliveryLog # ชื่อจริงของ C6
+        
+        # ค้นหารายการส่งของที่เชื่อมกับ SO นี้
+        shipments = SalesDeliveryLog.objects.filter(sales_order=order)
+        
+        for ship in shipments:
+            # ตรวจสอบประเภทการหักลบจาก Remark
+            if "หักค่า DC" in remark and ship.is_dc_confirmed:
+                if abs(ship.dc_amount) == abs(instance.amount):
+                    ship.is_dc_confirmed = False
+                    ship.save()
+                    break # เจอแล้วปลดล็อกแล้วหยุดเลย
+            
+            elif "หักค่า Rebate" in remark and ship.is_rebate_confirmed:
+                if abs(ship.rebate_amount) == abs(instance.amount):
+                    ship.is_rebate_confirmed = False
+                    ship.save()
+                    break
+
+            elif "ยอดส่งสินค้า" in remark and ship.is_revenue_confirmed:
+                # สำหรับยอดรับเงิน (Revenue)
+                # เราอาจจะเช็คจากฟังก์ชันคำนวณยอดรวมที่เคยทำไว้
+                ship.is_revenue_confirmed = False
+                ship.save()
+                break
 
 # --- 4. Proxy Model สำหรับหน้า C3 (Income Report) ---
 class IncomeReport(SalesOrder):
