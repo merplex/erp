@@ -13,8 +13,8 @@ document.addEventListener('DOMContentLoaded', function() {
     if (actionContainer) actionContainer.appendChild(summaryBox);
 
     // 🎯 รายชื่อหัวตารางที่เปรมต้องการให้ระบบ "เฝ้าดู" (ใส่เพิ่มได้ไม่อั้น!)
-    const targetLabels = [
-        'รวมเงิน', 'รวมจ่าย', 'รวมยอด', 'กำไร', 'ยอดสุทธิ', 'GET BALANCE DUE LIST', 'ยอดสุทธิ (GRAND TOTAL)', 'GET BALANCE DUE DISPLAY', 'จำนวนขาย', 'ยอดขายรวม', 'ต้นทุนรวม (Buy)', 
+    const targetLabels = [ 'สต็อกปัจจุบัน','แผนรับ (PO)','แผนส่ง (SO)','แผนผลิต (PD)','คาดการณ์ (PLAN)',   
+        'รวมเงิน', 'รวมจ่าย', 'รวมยอด', 'กำไร', 'ยอดสุทธิ', 'GET BALANCE DUE LIST', 'ยอดสุทธิ (GRAND TOTAL)', 'GET BALANCE DUE DISPLAY', 'จำนวนขาย', 'ยอดขายรวม', 'ต้นทุนรวม (BUY)', 
         'กำไร (vs Buy)','จำนวน', 'INCL.VAT',  'EXCL.VAT', 'ยอดDC','ยอดREBATE', 'get_total_display'
     ];
 
@@ -37,7 +37,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const selectedRows = table.querySelectorAll('tbody tr.selected');
         
         if (selectedRows.length === 0 || activeColumns.length === 0) {
-            summaryBox.innerHTML = '<span style="color: #666;">select เลือกรายการเพื่อรวมยอด...</span>';
+            summaryBox.innerHTML = '<span style="color: #666;">เลือกรายการเพื่อรวมยอด...</span>';
             return;
         }
 

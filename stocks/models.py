@@ -577,8 +577,8 @@ class SalesPayment(models.Model):
 class IncomeReport(SalesOrder):
     class Meta:
         proxy = True
-        verbose_name = "C3. สรุปรายรับ (Income Report)"
-        verbose_name_plural = "C3. สรุปรายรับ (Income Report)"
+        verbose_name = "C3. สรุปรายรับ (SO Report)"
+        verbose_name_plural = "C3. สรุปรายรับ (SO Report)"
 
     @property
     def grand_total(self):
@@ -974,7 +974,7 @@ class StockPlanning(Product):
 class FinanceReport(PurchaseOrder):
     class Meta:
         proxy = True
-        verbose_name_plural = "C2. สรุปรายจ่าย (Purchase Report)"
+        verbose_name_plural = "C2. สรุปรายจ่าย (PO Report)"
 
 class ShipmentPaymentReport(SalesDeliveryLog):
     class Meta:
