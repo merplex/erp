@@ -1548,7 +1548,7 @@ class FinanceReportAdmin(DocumentLockMixin,admin.ModelAdmin):
     def get_grand_total_display(self, obj):
         # ✅ แก้ไข: จัดรูปแบบตัวเลขก่อนส่งเข้า HTML
         return format_html('<b style="color:#007bff;">{}</b>', f"{obj.grand_total:,.2f}")
-    get_grand_total_display.short_description = "💰 ยอดสุทธิ (Grand Total)"
+    get_grand_total_display.short_description = "💰 ยอดสุทธิ"
 
     def get_total_paid_display(self, obj):
         # ✅ แก้ไข
@@ -1716,7 +1716,7 @@ class IncomeReportAdmin(DocumentLockMixin, admin.ModelAdmin):
         total = subtotal + ((subtotal * vat_p) / 100)
         formatted_total = f"{total:,.2f}"
         return format_html('<b style="color:#007bff;">{}</b>', formatted_total)
-    get_grand_total_display.short_description = "💰 ยอดสุทธิ (Grand Total)"
+    get_grand_total_display.short_description = "💰 ยอดสุทธิ"
 
     # 🎯 1. ฟังก์ชันช่วยคำนวณยอดรับ (เฉพาะยอดบวก) เพื่อไม่ให้ค่าใช้จ่ายมาดึงยอด Paid ลง
     def get_revenue_only_paid(self, obj):
