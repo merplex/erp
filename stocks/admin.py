@@ -2260,6 +2260,8 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     @admin.action(description="💰 ยืนยันเฉพาะยอดรับเงิน (Revenue)")
     def confirm_revenue_only(self, request, queryset):
         for obj in queryset:
+            if obj.is_revenue_confirmed:
+                continue
             obj.is_revenue_confirmed = True
             # 🔥 บังคับเรียก save_model เพื่อให้สร้าง SalesPaymentLog
             self.save_model(request, obj, None, True) 
@@ -2268,6 +2270,8 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     @admin.action(description="🚚 ยืนยันเฉพาะค่า DC")
     def confirm_dc_only(self, request, queryset):
         for obj in queryset:
+            if obj.is_dc_confirmed:
+                continue
             obj.is_dc_confirmed = True
             # 🔥 บังคับเรียก save_model เพื่อให้สร้างรายการหักเงิน
             self.save_model(request, obj, None, True)
@@ -2276,6 +2280,8 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     @admin.action(description="🎁 ยืนยันเฉพาะยอด Rebate")
     def confirm_rebate_only(self, request, queryset):
         for obj in queryset:
+            if obj.is_rebate_confirmed:
+                continue
             obj.is_rebate_confirmed = True
             # 🔥 บังคับเรียก save_model เพื่อให้สร้างรายการหักเงิน
             self.save_model(request, obj, None, True)
