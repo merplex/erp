@@ -1454,7 +1454,7 @@ class FinanceReportAdmin(DocumentLockMixin,admin.ModelAdmin):
     # ✅ 1. เปลี่ยน list_display ให้โชว์ Payment Status แทน
     list_display = ('po_number', 'supplier', 'get_grand_total_list', 'get_balance_due_list', 'payment_status')
     # ✅ 2. ตัวกรอง ก็ต้องกรองตามการจ่ายเงิน
-    list_filter = (('date', DjangoDateRangeFilter), 'payment_status', 'supplier') 
+    list_filter = (('created_at', DjangoDateRangeFilter), 'payment_status', 'supplier') 
     # ✅ 3. ในหน้า Detail ก็เปลี่ยน fields
     fieldsets = (
         ('📊 สรุปยอดเงิน', {
@@ -1574,7 +1574,7 @@ class FinanceReportAdmin(DocumentLockMixin,admin.ModelAdmin):
 class IncomeReportAdmin(DocumentLockMixin, admin.ModelAdmin):
     # ✅ ปรับ list_display ให้เอาตัวที่มีสีมาโชว์เลย จะได้ดูง่ายๆ
     list_display = ('so_number', 'customer', 'get_grand_total_display', 'get_balance_due_display', 'payment_status')
-    list_filter = ('payment_status', 'status', 'customer', 'order_date')
+    list_filter = ('payment_status', 'status', 'customer', ('order_date', DjangoDateRangeFilter))
     search_fields = ('so_number', 'customer__company_name')
     actions = [settle_and_close_orders, settle_income_special, 'calculate_income_totals']
 
