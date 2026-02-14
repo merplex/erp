@@ -14,8 +14,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // 🎯 รายชื่อหัวตารางที่เปรมต้องการให้ระบบ "เฝ้าดู" (ใส่เพิ่มได้ไม่อั้น!)
     const targetLabels = [
-        'รวมเงิน', 'รวมจ่าย', 'รวมยอด', 'กำไร', 'ยอดสุทธิ', 
-        'จำนวน', 'ยอดขาย', 'ต้นทุน',  'balance', 'ยอดDC','ยอดRebate', 'get_total_display'
+        'รวมเงิน', 'รวมจ่าย', 'รวมยอด', 'กำไร', 'ยอดสุทธิ', 'GET BALANCE DUE LIST', 'ยอดสุทธิ (GRAND TOTAL)', 'GET BALANCE DUE DISPLAY', 'จำนวนขาย', 'ยอดขายรวม', 'ต้นทุนรวม (Buy)', 
+        'กำไร (vs Buy)','จำนวน', 'INCL.VAT',  'EXCL.VAT', 'ยอดDC','ยอดREBATE', 'get_total_display'
     ];
 
     function calculateSum() {
@@ -57,7 +57,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
         // 📝 สร้างข้อความแสดงผล (แยกบรรทัดตามชื่อหัวข้อ)
-        let displayText = `<div style="color: #333; margin-bottom: 3px;">선택됨: <b>${selectedRows.length}</b> รายการ</div>`;
+        let displayText = `<div style="color: #333; margin-bottom: 3px;">บรรทัดที่เลือก: <b>${selectedRows.length}</b> รายการ</div>`;
         displayText += '<div style="display: grid; grid-template-columns: auto auto; gap: 5px 15px;">';
         
         for (const [label, sum] of Object.entries(totals)) {
