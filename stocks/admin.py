@@ -1561,7 +1561,7 @@ class FinanceReportAdmin(DocumentLockMixin,admin.ModelAdmin):
         color = "red" if balance > 0 else "green"
         text = f"{balance:,.2f}"
         return format_html('<b style="color:{};">{}</b>', color, text)
-    get_balance_due_display.short_description = "ค้างจ่าย"
+    
 
     # --- List Display Functions (หน้ารวม) ---
     def get_grand_total_list(self, obj): 
@@ -1596,6 +1596,14 @@ class IncomeReportAdmin(DocumentLockMixin, admin.ModelAdmin):
     list_filter = ('payment_status', 'status', 'customer', 'order_date')
     search_fields = ('so_number', 'customer__company_name')
     actions = [settle_and_close_orders, settle_income_special, 'calculate_income_totals']
+
+    @admin.display(description="ค้างรับ") 
+    def get_balance_due_display(self, obj):
+        # ดึงค่ามาจาก property ใน model
+        balance = obj.balance_due 
+        color = "red" if balance > 0 else "green"
+        return format_html('<b style="color:{};">{:,.2f}</b>', color, balance)
+    get_balance_due_display.short_description = "ค้างรับ"
 
     @admin.action(description="📝 สรุปยอดเงินรายรับที่เลือก")
     def calculate_income_totals(self, request, queryset):
