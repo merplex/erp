@@ -1599,10 +1599,19 @@ class IncomeReportAdmin(DocumentLockMixin, admin.ModelAdmin):
 
     @admin.display(description="ค้างรับ") 
     def get_balance_due_display(self, obj):
-        # ดึงค่ามาจาก property ใน model
-        balance = obj.balance_due 
+        # 🎯 ดึงค่าตัวเลขจริงๆ มา (ไม่เอาตัวที่มีคำว่า "บาท")
+        # ใช้ getattr เพื่อความปลอดภัย ถ้าหา balance_due ไม่เจอให้เป็น 0
+        balance = getattr(obj, 'balance_due', 0)
+        
+        # เช็คเผื่อกรณีค่าที่ได้มาไม่ใช่ตัวเลข (เช่น เป็น None)
+        if balance is None:
+            balance = 0
+            
         color = "red" if balance > 0 else "green"
-        return format_html('<b style="color:{};">{:,.2f}</b>', color, balance)
+        
+        # 🎯 ส่งค่า color และ balance (ที่เป็นตัวเลข Decimal/Float) เข้าไป
+        # ห้ามส่ง SafeString เข้าไปใน format ตัวเลข
+        return format_html('<b style="color:{};">{:,.2f}</b>', color, float(balance))
     get_balance_due_display.short_description = "ค้างรับ"
 
     @admin.action(description="📝 สรุปยอดเงินรายรับที่เลือก")
