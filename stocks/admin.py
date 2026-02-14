@@ -44,28 +44,8 @@ from django.contrib.contenttypes.models import ContentType
 from datetime import timedelta
 from django.utils import timezone
 from decimal import Decimal
-from rangefilter.filters import DateRangeFilter
+from rangefilter.filters import DateRangeFilter as DjangoDateRangeFilter
 
-# 📅 คลาสพิเศษสำหรับสร้างช่องเลือกวันที่ "เริ่มต้น - สิ้นสุด" เอง
-class DateRangeFilter(admin.FieldListFilter):
-    template = 'admin/date_range_filter.html' # ถ้าเปรมไม่มีไฟล์นี้ มันจะใช้ตัวสำรองให้ครับ
-
-    def __init__(self, field, request, params, model, model_admin, field_path):
-        super().__init__(field, request, params, model, model_admin, field_path)
-        self.lookup_kwarg_gte = f'{field_path}__date__gte'
-        self.lookup_kwarg_lte = f'{field_path}__date__lte'
-        self.lookup_val_gte = params.get(self.lookup_kwarg_gte)
-        self.lookup_val_lte = params.get(self.lookup_kwarg_lte)
-
-    def expected_parameters(self):
-        return [self.lookup_kwarg_gte, self.lookup_kwarg_lte]
-
-    def choices(self, changelist):
-        yield {
-            'selected': self.lookup_val_gte is None and self.lookup_val_lte is None,
-            'query_string': changelist.get_query_string(remove=[self.lookup_kwarg_gte, self.lookup_kwarg_lte]),
-            'display': 'ทั้งหมด',
-        }
 
 class DocumentLockMixin:
     def change_view(self, request, object_id, form_url='', extra_context=None):
@@ -2086,7 +2066,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     )
     
     list_filter = (
-        ('shipped_date', DateRangeFilter), 
+        ('shipped_date', DjangoDateRangeFilter), 
         'is_revenue_confirmed', 'is_dc_confirmed', 'is_rebate_confirmed',
         'sales_order__customer'
     )
