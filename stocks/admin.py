@@ -2241,7 +2241,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
                 SalesPayment.objects.create(
                     order=obj.sales_order,
                     amount=-obj.rebate_amount, # ติดลบเพื่อหักยอด
-                    payment_date=obj.confirmed_date,
+                    payment_date=obj.confirmed_date or timezone.now(),
                     remark=f"⚠ {rebate_ref}"
                 )
 
@@ -2252,7 +2252,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
                 SalesPayment.objects.create(
                     order=obj.sales_order,
                     amount=-obj.dc_amount, # ติดลบเพื่อหักยอด
-                    payment_date=obj.confirmed_date,
+                    payment_date=obj.confirmed_date or timezone.now(),
                     remark=f"📦 {dc_ref}"
                 )
 
