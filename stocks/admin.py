@@ -1574,7 +1574,7 @@ class FinanceReportAdmin(DocumentLockMixin,admin.ModelAdmin):
 class IncomeReportAdmin(DocumentLockMixin, admin.ModelAdmin):
     # ✅ ปรับ list_display ให้เอาตัวที่มีสีมาโชว์เลย จะได้ดูง่ายๆ
     list_display = ('so_number', 'customer', 'get_grand_total_display', 'get_balance_due_display', 'payment_status')
-    list_filter = ('payment_status', 'status', 'customer', ('order_date', DjangoDateRangeFilter))
+    list_filter = (('order_date', DjangoDateRangeFilter),'payment_status', 'status', 'customer' )
     search_fields = ('so_number', 'customer__company_name')
     actions = [settle_and_close_orders, settle_income_special, 'calculate_income_totals']
 
@@ -1855,7 +1855,7 @@ class SalesReportAdmin(admin.ModelAdmin):
         'name', 'get_total_qty', 'get_total_revenue', 
         'get_total_cost_buy', 'get_total_cost_bom', 'get_profit_margin'
     )
-    list_filter = ( ('date', DjangoDateRangeFilter),'category', 'tags',('sales_items__sales_order__customer', admin.RelatedOnlyFieldListFilter), # Path: salesitem -> sales_order -> customer
+    list_filter = ( ('shipped_date', DjangoDateRangeFilter),'category', 'tags',('sales_items__sales_order__customer', admin.RelatedOnlyFieldListFilter), # Path: salesitem -> sales_order -> customer
     )
     search_fields = ('name', 'barcodes__code', 'sales_items__sales_order__customer__company_name') # Path: customer__company_name
 
