@@ -409,8 +409,21 @@ class SupplierProductInline(admin.TabularInline):
     autocomplete_fields = ['product']
     fields = ('product', 'supplier_sku', 'latest_buy_price')
 
+from django import forms # อย่าลืม import forms ไว้ด้านบนนะครับ
+
+class BOMIngredientForm(forms.ModelForm):
+    class Meta:
+        model = BOMIngredient
+        fields = '__all__'
+        widgets = {
+            # 🎯 บังคับให้ช่อง Quantity รับทศนิยม 4 ตำแหน่ง และขยับทีละ 0.0001
+            'quantity': forms.NumberInput(attrs={'step': '0.0001', 'style': 'width: 150px;'}),
+        }
+
+
 class BOMIngredientInline(admin.TabularInline):
     model = BOMIngredient
+    form = BOMIngredientForm # ✅ เอา Form ที่เราสร้างมาใส่ตรงนี้ครับ
     fields = ('material', 'quantity', 'get_unit_display')
     readonly_fields = ('get_unit_display',)
     autocomplete_fields = ['material']

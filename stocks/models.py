@@ -224,7 +224,7 @@ class BOM(models.Model):
 class BOMIngredient(models.Model):
     bom = models.ForeignKey(BOM, on_delete=models.CASCADE, related_name='ingredients')
     material = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="วัตถุดิบ")
-    quantity = models.DecimalField(max_digits=10, decimal_places=4, default=1.0)
+    quantity = models.DecimalField(max_digits=10, decimal_places=4, default=1.0000)
     @property
     def subtotal(self): return self.material.buy_price * self.quantity
     @property
@@ -1111,14 +1111,13 @@ class ShipmentAccounting(SalesDeliveryLog):
     def calculate_gross_revenue(self):
         return self.calculate_revenue_total()
 
-
 class ProductionMaterialUsage(models.Model):
     """รายการวัตถุดิบที่ "จอง" ไว้สำหรับใบสั่งผลิตนี้"""
     production_order = models.ForeignKey(ProductionOrder, on_delete=models.CASCADE, related_name='material_usages')
     raw_material = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="วัตถุดิบ/Package")
-    planned_qty = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="จำนวนตามสูตร (Total)")
-    actual_qty_to_use = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="จำนวนที่ต้องใช้จริง (ปรับแต่งได้)")
-    used_so_far = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="ตัดสต็อกไปแล้ว")
+    planned_qty = models.DecimalField(max_digits=12, decimal_places=4, verbose_name="จำนวนตามสูตร (Total)")
+    actual_qty_to_use = models.DecimalField(max_digits=12, decimal_places=4, verbose_name="จำนวนที่ต้องใช้จริง (ปรับแต่งได้)")
+    used_so_far = models.DecimalField(max_digits=12, decimal_places=4, default=0, verbose_name="ตัดสต็อกไปแล้ว")
 
     @property
     def pending_use(self):
