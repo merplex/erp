@@ -732,6 +732,7 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
 class BOMAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('name', 'product', 'total_cost_display', 'sale_price', 'unit', 'production_time', 'created_by')
     list_filter = ('product__category',)
+    autocomplete_fields = ['product']
     search_fields = ['name', 'product__name', 'product__code', 'product__barcodes__code']
     inlines = [BOMIngredientInline]
     readonly_fields = ('created_by', 'updated_by')
@@ -1029,7 +1030,7 @@ class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('pd_number', 'product', 'quantity_planned', 'quantity_actual', 'get_diff', 'status')
     list_filter = ('status', 'order_date', 'product')
     search_fields = ('pd_number', 'product__name')
-    autocomplete_fields = ['bom']
+    autocomplete_fields = ['product','bom']
     inlines = [ProductionMaterialUsageInline,ProductionLogInline]
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
     readonly_fields = ('pd_number','quantity_actual',  'created_by', 'status') 
