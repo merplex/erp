@@ -732,7 +732,7 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
 class BOMAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('name', 'product', 'total_cost_display', 'sale_price', 'unit', 'production_time', 'created_by')
     list_filter = ('product__category',)
-    autocomplete_fields = ['product']
+    autocomplete_fields = ['name','product_name']
     search_fields = ['name', 'product__name', 'product__code', 'product__barcodes__code']
     inlines = [BOMIngredientInline]
     readonly_fields = ('created_by', 'updated_by')
