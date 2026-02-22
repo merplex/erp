@@ -1910,9 +1910,11 @@ class CustomerProductContractAdmin(DocumentLockMixin, admin.ModelAdmin):
     # ✅ แสดงคอลัมน์และทำให้แก้ไขราคา/Rebate ได้จากหน้าตารางเลย
     list_display = ['customer', 'product', 'contract_price', 'dc_percent', 'rebate_percent']
     list_editable = ['contract_price', 'dc_percent', 'rebate_percent'] 
+    list_filter = ['customer', 'product_tag_link']
     
     # ✅ ระบบค้นหา: หาจากชื่อลูกค้า, ชื่อสินค้า หรือ "ยิงบาร์โค้ด"
-    search_fields = ['customer__company_name', 'product__name', 'product__barcodes__code']
+    search_fields = ['customer__company_name', 'product__name', 'product__barcodes__code',
+        'product_tag_link__name']
     
     # ✅ ระบบช่วยพิมพ์: ค้นหาลูกค้าและสินค้าได้รวดเร็ว
     autocomplete_fields = ['customer', 'product', 'product_tag_link']
