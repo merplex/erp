@@ -1208,15 +1208,44 @@ class ContractCondition(models.Model):
     
     # เจาะจงสินค้า (ใช้สำหรับแบบที่ 2)
     product = models.ForeignKey('Product', on_delete=models.SET_NULL, null=True, blank=True, verbose_name="สินค้าเฉพาะเจาะจง")
-    product_tag = models.CharField(max_length=100, blank=True, verbose_name="กลุ่มสินค้า (Tag)")
+    product_tag = models.ForeignKey(ProductTag, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="กลุ่มสินค้า (Tag)")
     
     # วิธีคำนวณและค่าที่ได้
     method = models.CharField(max_length=20, choices=CALC_METHOD, verbose_name="วิธีคำนวณ")
     value = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="ค่าที่ระบุ (% หรือ บาท)")
 
+    def save(self, *args, **kwargs):
+        # 🤖 หุ่นยนต์คำนวณวันจ่ายเงิน (Auto Payout Date Logic)
+        if not self.next_payout_date:
+            today = timezone.now().date()
+            
+            # 1. กรณี: จ่ายเมื่อจบสัญญา
+            if self.payout_trigger == 'END_OF_CONTRACT':
+                target_date = self.end_date
+            
+            # 2. กรณี: จ่ายตามรอบ (เดือน/ไตรมาส)
+            else:
+                # หาฐานวันจาก วันเริ่มต้นสัญญา หรือ วันนี้ (เลือกอันที่มาทีหลัง)
+                base_date = max(self.start_date, today)
+                # ตั้งเป้าเป็นวันที่ระบุในเดือนนั้นๆ
+                target_date = base_date.replace(day=min(self.payout_day, 28))
+
+            # 3. จัดการเรื่อง "จังหวะการโอนเงิน" (Delay)
+            if self.payout_delay == 'NEXT_PERIOD':
+                # เขยิบไปเดือนหน้า
+                next_month = target_date.month % 12 + 1
+                year = target_date.year + (target_date.month // 12)
+                target_date = target_date.replace(year=year, month=next_month)
+            
+            self.next_payout_date = target_date
+
+        super().save(*args, **kwargs)
+
     class Meta:
-        verbose_name = "เงื่อนไขสัญญา"
-        
+        proxy = True
+        verbose_name = "C7. สัญญาการขาย"
+        verbose_name_plural = "C7. สัญญาการขาย"
+
 class RebatePayout(models.Model):
     contract = models.ForeignKey(SalesContract, on_delete=models.CASCADE)
     period_start = models.DateField(verbose_name="ยอดสะสมตั้งแต่วันที่")

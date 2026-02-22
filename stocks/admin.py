@@ -2502,7 +2502,8 @@ class InternationalPurchaseTrackingAdmin(admin.ModelAdmin):
 class ConditionInline(admin.TabularInline):
     model = ContractCondition
     extra = 1
-    autocomplete_fields = ['product'] # 🎯 ยิงบาร์โค้ดหาสินค้าได้เหมือนเดิม
+    autocomplete_fields = ['product', 'product_tag'] 
+    extra = 1 # 🎯 ยิงบาร์โค้ดหาสินค้าได้เหมือนเดิม
     fields = ['type', 'period', 'product', 'product_tag', 'method', 'value']
 
 @admin.register(SalesContract)
