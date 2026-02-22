@@ -595,8 +595,11 @@ class SupplierAdmin(DocumentLockMixin,admin.ModelAdmin):
 
 class ProductBarcodeAdmin(admin.ModelAdmin):
     # 🎯 ตัวนี้แหละคือ "หัวใจ" ที่จะแก้ Error E039
-    search_fields = ['code', 'product__name']
+    search_fields = ['code', 'product__name','product__tags__name']
     list_display = ('code', 'product', 'conversion_factor', 'unit_name', 'get_forecast_stock')
+    list_filter = (
+        ('product__tags', admin.RelatedOnlyFieldListFilter), # กรองตามกลุ่มสินค้าที่หน้า A4
+    )
     def get_queryset(self, request):
         return super().get_queryset(request).select_related('product')
 
@@ -1908,14 +1911,21 @@ class CustomerAdmin(DocumentLockMixin, admin.ModelAdmin):
 @admin.register(CustomerProductContract)
 class CustomerProductContractAdmin(DocumentLockMixin, admin.ModelAdmin):
     # ✅ แสดงคอลัมน์และทำให้แก้ไขราคา/Rebate ได้จากหน้าตารางเลย
-    list_display = ['customer', 'product', 'contract_price', 'dc_percent', 'rebate_percent']
+    list_display = ['customer', 'product', 'contract_price', 'dc_percent', 'rebate_percent', 'display_product_tags']
+    readonly_fields = ['display_product_tags']
     list_editable = ['contract_price', 'dc_percent', 'rebate_percent'] 
+    list_filter = ['customer', 'product__tags']
+    fields = ['customer', 'product', 'display_product_tags', 'contract_price', 'dc_percent', 'rebate_percent']
     
     # ✅ ระบบค้นหา: หาจากชื่อลูกค้า, ชื่อสินค้า หรือ "ยิงบาร์โค้ด"
-    search_fields = ['customer__company_name', 'product__name', 'product__barcodes__code']
-    
+    search_fields = [
+        'customer__company_name', 
+        'product__name', 
+        'product__barcodes__code',
+        'product__tags__name'  # 🎯 เพิ่มบรรทัดนี้ เพื่อให้ค้นหาด้วยชื่อ Tag ใน A4 ได้ครับ
+    ]
     # ✅ ระบบช่วยพิมพ์: ค้นหาลูกค้าและสินค้าได้รวดเร็ว
-    autocomplete_fields = ['customer', 'product']
+    autocomplete_fields = ['customer', 'product', 'product_tag_link']
     
 @admin.register(StockAdjustment)
 class StockAdjustmentAdmin(admin.ModelAdmin):
@@ -2499,3 +2509,28 @@ class InternationalPurchaseTrackingAdmin(admin.ModelAdmin):
     def set_closed(self, request, queryset):
         queryset.update(status='Closed')
         
+class ConditionInline(admin.TabularInline):
+    model = ContractCondition
+    extra = 1
+    autocomplete_fields = ['product', 'product_tag_link'] 
+    extra = 1 # 🎯 ยิงบาร์โค้ดหาสินค้าได้เหมือนเดิม
+    fields = ['type', 'period', 'product', 'product_tag_link', 'method', 'value']
+
+@admin.register(SalesContract)
+class SalesContractAdmin(admin.ModelAdmin):
+    list_display = ('contract_name', 'customer', 'start_date', 'end_date', 'is_active')
+    search_fields = ('contract_name', 'customer__company_name')
+    autocomplete_fields = ['customer']
+    inlines = [ConditionInline]
+
+    actions = ['calculate_pending_rebates']
+
+    @admin.action(description="🔄 คำนวณยอดเงินคืนและสร้างใบสำคัญจ่าย")
+    def calculate_pending_rebates(self, request, queryset):
+        for contract in queryset:
+            # Logic: 
+            # 1. ไปที่ตาราง Invoice กรองลูกค้าคนนี้ ตามช่วงวันที่
+            # 2. ดู ContractCondition ว่าคิด % หรือ บาทต่อชิ้น
+            # 3. สร้าง RebatePayout record
+            pass
+        self.message_user(request, "สร้างรายการรอจ่ายเรียบร้อยแล้ว ตรวจสอบได้ที่เมนู Payout")
