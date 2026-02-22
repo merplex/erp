@@ -1915,7 +1915,7 @@ class CustomerProductContractAdmin(DocumentLockMixin, admin.ModelAdmin):
     search_fields = ['customer__company_name', 'product__name', 'product__barcodes__code']
     
     # ✅ ระบบช่วยพิมพ์: ค้นหาลูกค้าและสินค้าได้รวดเร็ว
-    autocomplete_fields = ['customer', 'product', 'product_tag']
+    autocomplete_fields = ['customer', 'product', 'product_tag_link']
     
 @admin.register(StockAdjustment)
 class StockAdjustmentAdmin(admin.ModelAdmin):
@@ -2502,9 +2502,9 @@ class InternationalPurchaseTrackingAdmin(admin.ModelAdmin):
 class ConditionInline(admin.TabularInline):
     model = ContractCondition
     extra = 1
-    autocomplete_fields = ['product', 'product_tag'] 
+    autocomplete_fields = ['product', 'product_tag_link'] 
     extra = 1 # 🎯 ยิงบาร์โค้ดหาสินค้าได้เหมือนเดิม
-    fields = ['type', 'period', 'product', 'product_tag', 'method', 'value']
+    fields = ['type', 'period', 'product', 'product_tag_link', 'method', 'value']
 
 @admin.register(SalesContract)
 class SalesContractAdmin(admin.ModelAdmin):
