@@ -1,24 +1,33 @@
 // static/js/filter_bom.js
-document.addEventListener('DOMContentLoaded', function() {
-    const productSelect = document.querySelector('#id_product');
-    const bomSelect = document.querySelector('#id_bom');
-
-    if (productSelect && bomSelect) {
-        productSelect.addEventListener('change', function() {
-            const productName = productSelect.options[productSelect.selectedIndex].text;
+(function($) {
+    $(document).ready(function() {
+        // ดักฟังเหตุการณ์เมื่อช่อง Product (id_product) เปลี่ยนแปลง
+        $('#id_product').on('change', function() {
+            var productId = $(this).val();
+            var bomSelect = $('#id_bom');
             
-            // วนลูปเช็คทุกตัวเลือกในช่องสูตรผลิต
-            Array.from(bomSelect.options).forEach(option => {
-                if (option.value === "") return; // ข้ามตัวเลือกว่าง
+            // ล้างค่าในช่อง BOM ก่อน
+            bomSelect.val(null).trigger('change');
+            
+            // ถ้าไม่มีการเลือกสินค้า ให้โชว์ทั้งหมด หรือซ่อนไว้
+            if (!productId) {
+                bomSelect.find('option').show();
+                return;
+            }
+
+            // กรอง Option ในช่อง BOM
+            bomSelect.find('option').each(function() {
+                var optionText = $(this).text();
+                // ดึงชื่อสินค้าออกมาจากชื่อ BOM (ที่เปรมทำไว้ใน __str__)
+                // เช่น "สินค้า C - BOM C" -> จะเช็คว่ามีคำว่า "สินค้า C" ไหม
+                var productName = $('#id_product').find('option:selected').text();
                 
-                // 🎯 ถ้าชื่อสินค้าในตัวเลือกสูตร ตรงกับชื่อสินค้าที่เลือก ให้แสดงผล
-                if (option.text.startsWith(productName)) {
-                    option.style.display = 'block';
+                if (optionText.includes(productName) || $(this).val() === "") {
+                    $(this).show();
                 } else {
-                    option.style.display = 'none';
-                    if (bomSelect.value === option.value) bomSelect.value = ""; // ล้างค่าถ้าตัวที่เลือกอยู่ถูกซ่อน
+                    $(this).hide();
                 }
             });
         });
-    }
-});
+    });
+})(django.jQuery);

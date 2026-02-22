@@ -1121,18 +1121,22 @@ class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
             obj.quantity_actual = total_finished
             obj.save()
 
-    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+    def formfield_for_foreignkey(self, db_field, request, obj=None, **kwargs):
         # 🎯 1. สำหรับฟิลด์ Product: กรองเอาเฉพาะสินค้าที่มีการติ๊ก 'มี BOM'
         if db_field.name == "product":
+            from .models import Product
             kwargs["queryset"] = Product.objects.filter(has_bom=True)
 
-        # 🎯 2. สำหรับฟิลด์ BOM: กรองสูตรผลิตให้ตรงกับตัวสินค้าที่เลือกในใบนี้
-        # หมายเหตุ: ใน Inline ของ Django ตัวแปร 'obj' คือตัวแม่ (Parent) จะถูกส่งมาทาง kwargs
-        obj = kwargs.get('obj') 
-        if db_field.name == "bom" and obj and hasattr(obj, 'product'):
-            kwargs["queryset"] = BOM.objects.filter(product=obj.product)
-
-        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+        # 🎯 2. สำหรับฟิลด์ BOM: กรองสูตรผลิตให้ตรงกับตัวสินค้าที่เลือก
+        if db_field.name == "bom":
+            # กรณีที่มีการเลือกสินค้าไว้แล้ว (เช่น ตอนแก้ไข หรือกด Save and Continue)
+            if obj and obj.product:
+                kwargs["queryset"] = BOM.objects.filter(product=obj.product)
+            # กรณีที่เป็นการสร้างใบใหม่ และมีการส่งค่า product_id มาทาง URL
+            elif 'product' in request.GET:
+                kwargs["queryset"] = BOM.objects.filter(product_id=request.GET.get('product'))
+        
+        return super().formfield_for_foreignkey(db_field, request, obj, **kwargs)
     
     class Media:
         js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
