@@ -1047,19 +1047,20 @@ class CustomerProductContract(models.Model):
         return f"{self.customer.company_name} - {self.product.name}"
 
     def display_product_tags(self):
-        if self.product:
-            # ดึง Tag ทั้งหมดที่ผูกกับสินค้าตัวนี้ในหน้า A4
-            # (สมมติว่าใน Product เปรมใช้ชื่อฟิลด์ว่า product_tag_link นะครับ)
-            tags = self.product.product_tag_link.all() if hasattr(self.product.product_tag_link, 'all') else [self.product.product_tag_link]
+    # เช็คว่ามีสินค้าไหม และสินค้ามีฟิลด์ tags ไหม
+        if self.product and hasattr(self.product, 'tags'):
+            # ดึง Tag ทั้งหมดออกมา (ใช้ .all() เพราะ 'tags' มักจะเป็น ManyToMany)
+            tags = self.product.tags.all()
             
-            html = ""
-            for tag in tags:
-                if tag:
-                    html += f'<span style="background: #d1c4e9; color: #512da8; padding: 2px 10px; border-radius: 12px; margin-right: 5px; font-size: 11px;">{tag.name}</span>'
-            return mark_safe(html) if html else "-"
+            if tags:
+                html = "".join([
+                    f'<span style="background: #e8f5e9; color: #2e7d32; padding: 2px 10px; border-radius: 12px; margin-right: 5px; font-size: 11px; border: 1px solid #a5d6a7; font-weight: bold;">{t.name}</span>' 
+                    for t in tags
+                ])
+                return mark_safe(html)
         return "-"
     
-    display_product_tags.short_description = "กลุ่มสินค้า (sync A4)"
+    display_product_tags.short_description = "กลุ่มสินค้า (Tag)"
 
     class Meta:
         verbose_name_plural = "T2. ราคาสัญญา&DC/Rebate"
