@@ -1877,38 +1877,41 @@ class ShipmentPaymentReportAdmin(admin.ModelAdmin):
     def has_add_permission(self, request):
         return False
     
-@admin.register(CustomerProductContract)
-class CustomerProductContractAdmin(DocumentLockMixin,admin.ModelAdmin):
-    list_display = ['customer', 'product', 'contract_price', 'dc_percent', 'rebate_percent']
-    list_editable = ['contract_price', 'dc_percent', 'rebate_percent'] # แก้ไขแบบรวดเร็วได้
-    search_fields = ['customer__company_name', 'product__name', 'product__barcodes__code']
-    autocomplete_fields = ['product']
 
+class CustomerProductContractInline(admin.TabularInline):
+    model = CustomerProductContract
+    # ✅ ตัวนี้แหละที่จะทำให้ "ยิงบาร์โค้ด" ได้
+    autocomplete_fields = ['product'] 
+    extra = 3  # จำนวนแถวว่างที่เตรียมไว้ให้คีย์
+    fields = ['product', 'contract_price', 'dc_percent', 'rebate_percent']
+
+@admin.register(Customer)
+class CustomerAdmin(DocumentLockMixin, admin.ModelAdmin):
+    list_display = ('company_name', 'contact_person', 'phone')
+    # ✅ ทำให้หน้าอื่น (เช่น หน้าสัญญา T2) สามารถ Search หาชื่อลูกค้าได้
+    search_fields = ('company_name', 'contact_person', 'phone')
+    # ✅ แปะตารางสัญญาไว้ท้ายหน้าข้อมูลลูกค้า
+    inlines = [CustomerProductContractInline]
+
+# --- 3. ส่วนหน้าจัดการสัญญาโดยเฉพาะ (T2. ราคาสัญญา&DC/Rebate) ---
+@admin.register(CustomerProductContract)
+class CustomerProductContractAdmin(DocumentLockMixin, admin.ModelAdmin):
+    # ✅ แสดงคอลัมน์และทำให้แก้ไขราคา/Rebate ได้จากหน้าตารางเลย
+    list_display = ['customer', 'product', 'contract_price', 'dc_percent', 'rebate_percent']
+    list_editable = ['contract_price', 'dc_percent', 'rebate_percent'] 
+    
+    # ✅ ระบบค้นหา: หาจากชื่อลูกค้า, ชื่อสินค้า หรือ "ยิงบาร์โค้ด"
+    search_fields = ['customer__company_name', 'product__name', 'product__barcodes__code']
+    
+    # ✅ ระบบช่วยพิมพ์: ค้นหาลูกค้าและสินค้าได้รวดเร็ว
+    autocomplete_fields = ['customer', 'product']
+    
 @admin.register(StockAdjustment)
 class StockAdjustmentAdmin(admin.ModelAdmin):
     list_display = ['created_at', 'product', 'adjustment_type', 'quantity', 'adjustment_value', 'reason']
     list_filter = ['adjustment_type', 'product']
     autocomplete_fields = ['product']
     search_fields = ['product__name', 'reason']
-
-# แก้ไขบรรทัดสุดท้ายของไฟล์ admin.py จากเดิมเป็นชุดนี้ค่ะ
-
-@admin.register(Customer)
-class CustomerAdmin(DocumentLockMixin, admin.ModelAdmin): # ✅ ใส่ Mixin เพื่อล็อคหน้าจอด้วย
-    # 1. กำหนดคอลัมน์ที่อยากเห็นหน้าตาราง (จะได้ไม่ต้องกดเข้าไปดูข้างใน)
-    list_display = ('company_name', 'contact_person', 'phone')
-    
-    # 2. เพิ่มช่องค้นหา (Search) ด้านบน
-    # จะช่วยให้เปรมพิมพ์ชื่อบริษัท หรือเบอร์โทรเพื่อหาลูกค้าได้ทันที
-    search_fields = ('company_name', 'contact_person', 'phone')
-    
-    # 3. (แถม) ถ้ามีรายการราคาสัญญาลูกค้า (Contract) อยากให้โชว์ในหน้านี้เลยไหมคะ?
-    # ถ้าอยากให้โชว์ ให้เอาคอมเมนต์ออกได้เลยค่ะ
-    from .models import CustomerProductContract
-    class ContractInline(admin.TabularInline):
-        model = CustomerProductContract
-        extra = 0
-    inlines = [ContractInline]
 
 @admin.register(SalesReport)
 class SalesReportAdmin(admin.ModelAdmin):
