@@ -409,8 +409,21 @@ class SupplierProductInline(admin.TabularInline):
     autocomplete_fields = ['product']
     fields = ('product', 'supplier_sku', 'latest_buy_price')
 
+from django import forms # อย่าลืม import forms ไว้ด้านบนนะครับ
+
+class BOMIngredientForm(forms.ModelForm):
+    class Meta:
+        model = BOMIngredient
+        fields = '__all__'
+        widgets = {
+            # 🎯 บังคับให้ช่อง Quantity รับทศนิยม 4 ตำแหน่ง และขยับทีละ 0.0001
+            'quantity': forms.NumberInput(attrs={'step': '0.0001', 'style': 'width: 150px;'}),
+        }
+
+
 class BOMIngredientInline(admin.TabularInline):
     model = BOMIngredient
+    form = BOMIngredientForm # ✅ เอา Form ที่เราสร้างมาใส่ตรงนี้ครับ
     fields = ('material', 'quantity', 'get_unit_display')
     readonly_fields = ('get_unit_display',)
     autocomplete_fields = ['material']
@@ -686,7 +699,7 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
             return f"Err: {str(e)[:20]}"
         return "-"
 
-    get_production_cost.short_description = "ต้นทุนผลิตเฉลี่ย (BOM)"
+    get_production_cost.short_description = "ต้นทุนBOMเฉลี่ย"
 
     def get_latest_barcode(self, obj):
         # ดึงจาก property ที่เราเขียนไว้ใน models
@@ -719,6 +732,7 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
 class BOMAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('name', 'product', 'total_cost_display', 'sale_price', 'unit', 'production_time', 'created_by')
     list_filter = ('product__category',)
+    autocomplete_fields = ['product']
     search_fields = ['name', 'product__name', 'product__code', 'product__barcodes__code']
     inlines = [BOMIngredientInline]
     readonly_fields = ('created_by', 'updated_by')
@@ -1016,12 +1030,18 @@ class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('pd_number', 'product', 'quantity_planned', 'quantity_actual', 'get_diff', 'status')
     list_filter = ('status', 'order_date', 'product')
     search_fields = ('pd_number', 'product__name')
-    autocomplete_fields = ['bom']
+    autocomplete_fields = ['product']
     inlines = [ProductionMaterialUsageInline,ProductionLogInline]
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
     readonly_fields = ('pd_number','quantity_actual',  'created_by', 'status') 
     
     actions = ['mark_as_completed']
+
+    class Media:
+        js = (
+            'js/filter_bom.js',
+            'js/admin_sum_selected.js',
+        ) # เรียกไฟล์ JS มาใช้งาน
 
     # ✅ ต้องมีฟังก์ชันนี้ และ Indent (ย่อหน้า) ให้ตรงกับฟังก์ชันอื่นในคลาสครับ
     @admin.action(description="✅ เปลี่ยนสถานะเป็น: เสร็จงาน/ปิดงาน")
@@ -1105,20 +1125,25 @@ class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
             obj.save()
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
-        # 🎯 1. สำหรับฟิลด์ Product: กรองเอาเฉพาะสินค้าที่มีการติ๊ก 'มี BOM'
+        # 🎯 ดึง obj (ข้อมูลใบผลิตนี้) ออกมาจาก kwargs (Django จะใส่มาให้เอง)
+        obj = kwargs.get('obj')
+
+        # 1. กรองสินค้า: เอาเฉพาะที่มี BOM
         if db_field.name == "product":
+            from .models import Product
             kwargs["queryset"] = Product.objects.filter(has_bom=True)
 
-        # 🎯 2. สำหรับฟิลด์ BOM: กรองสูตรผลิตให้ตรงกับตัวสินค้าที่เลือกในใบนี้
-        # หมายเหตุ: ใน Inline ของ Django ตัวแปร 'obj' คือตัวแม่ (Parent) จะถูกส่งมาทาง kwargs
-        obj = kwargs.get('obj') 
-        if db_field.name == "bom" and obj and hasattr(obj, 'product'):
-            kwargs["queryset"] = BOM.objects.filter(product=obj.product)
-
+        # 2. กรองสูตร BOM: ให้ตรงกับสินค้าในใบนี้
+        if db_field.name == "bom":
+            if obj and hasattr(obj, 'product') and obj.product:
+                kwargs["queryset"] = BOM.objects.filter(product=obj.product)
+            elif 'product' in request.GET:
+                kwargs["queryset"] = BOM.objects.filter(product_id=request.GET.get('product'))
+        
+        # 🎯 ห้ามใส่ obj ลงใน super() นะครับ! 
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
     
-    class Media:
-        js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
+
 
 class BuyPriceRangeFilter(admin.SimpleListFilter):
     title = 'ช่วงราคาทุน'
@@ -1141,7 +1166,7 @@ class BuyPriceRangeFilter(admin.SimpleListFilter):
 
 @admin.register(StockPlanning)
 class StockPlanningAdmin(admin.ModelAdmin):
-    list_display = ('name', 'category', 'stock_quantity', 'get_pending_in', 'get_pending_out', 'get_pending_prod', 'get_available', 'buy_price')
+    list_display = ('name', 'category', 'stock_quantity', 'get_pending_in', 'get_pending_out', 'get_pending_prod', 'get_available', 'buy_price', 'get_total_inventory_value')
     list_filter = ('category', 'suppliers', ProductOnlyFilter, BuyPriceRangeFilter)
     search_fields = ('name', 'barcodes__code', 'tags__name')
 
@@ -1241,6 +1266,53 @@ class StockPlanningAdmin(admin.ModelAdmin):
         color = "red" if total < 0 else "blue"
         return format_html('<b style="color: {};">{}</b>', color, total)
     get_available.short_description = "คาดการณ์ (Plan)"
+
+    def get_total_inventory_value(self, obj):
+        from .models import ProductionMaterialUsage
+        
+        # --- ส่วนที่ 1: ดึงเฉพาะตัวเลขดิบๆ มาคำนวณ (ห้ามใช้ฟังก์ชันที่ส่งค่าเป็น HTML) ---
+        on_hand = obj.stock_quantity or 0
+        
+        # แผนรับ (PO) - ดึงเฉพาะยอดค้างรับที่เป็นตัวเลข
+        from .models import PurchaseItem
+        p_in_items = PurchaseItem.objects.filter(
+            product=obj,
+            purchase_order__status__in=['Draft', 'Pending', 'Confirmed', 'Ordered', 'Paid', 'Loaded', 'Departed', 'Arrived', 'Received', 'Partially Received']
+        )
+        p_in = sum(max(0, (i.quantity_ordered or 0) - (i.quantity_received or 0)) for i in p_in_items)
+
+        # แผนส่ง (SO)
+        from .models import SalesItem
+        p_out_items = SalesItem.objects.filter(
+            product=obj,
+            sales_order__status__in=['Draft', 'Confirmed', 'Shipped']
+        )
+        p_out = sum(max(0, (i.quantity_ordered or 0) - (i.quantity_shipped or 0)) for i in p_out_items)
+        
+        # ยอดจาก PD (รอรับ - รอใช้)
+        p_receipt = sum((o.quantity_planned - o.quantity_actual) for o in obj.productionorder_set.filter(status__in=['Draft', 'Started', 'Finished']))
+        p_usage = sum((u.actual_qty_to_use - u.used_so_far) for u in ProductionMaterialUsage.objects.filter(raw_material=obj, production_order__status__in=['Draft', 'Started', 'Finished']))
+        
+        # ยอดคาดการณ์สุทธิ (Available Plan) เป็นตัวเลขแน่นอน
+        available_total = float(on_hand + p_in - p_out + (p_receipt - p_usage))
+        
+        # --- ส่วนที่ 2: คำนวณมูลค่าเงิน ---
+        unit_price = float(obj.buy_price or 0)
+        total_value = available_total * unit_price
+        
+        # --- ส่วนที่ 3: จัดรูปแบบการแสดงผล ---
+        color = "#fd7e14" if total_value < 0 else "#212529" 
+        
+        # 🎯 ใช้ f-string จัดการตัวเลขให้เสร็จก่อน แล้วค่อยส่งเข้า format_html
+        formatted_value = "{:,.2f}".format(total_value)
+        
+        return format_html(
+            '<span style="color: {}; font-weight: bold;">{}</span>',
+            color,
+            formatted_value
+        )
+
+    get_total_inventory_value.short_description = "มูลค่ารวม"
 
     class Media:
         js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
@@ -1816,38 +1888,41 @@ class ShipmentPaymentReportAdmin(admin.ModelAdmin):
     def has_add_permission(self, request):
         return False
     
-@admin.register(CustomerProductContract)
-class CustomerProductContractAdmin(DocumentLockMixin,admin.ModelAdmin):
-    list_display = ['customer', 'product', 'contract_price', 'dc_percent', 'rebate_percent']
-    list_editable = ['contract_price', 'dc_percent', 'rebate_percent'] # แก้ไขแบบรวดเร็วได้
-    search_fields = ['customer__company_name', 'product__name', 'product__barcodes__code']
-    autocomplete_fields = ['product']
 
+class CustomerProductContractInline(admin.TabularInline):
+    model = CustomerProductContract
+    # ✅ ตัวนี้แหละที่จะทำให้ "ยิงบาร์โค้ด" ได้
+    autocomplete_fields = ['product'] 
+    extra = 3  # จำนวนแถวว่างที่เตรียมไว้ให้คีย์
+    fields = ['product', 'contract_price', 'dc_percent', 'rebate_percent']
+
+@admin.register(Customer)
+class CustomerAdmin(DocumentLockMixin, admin.ModelAdmin):
+    list_display = ('company_name', 'contact_person', 'phone')
+    # ✅ ทำให้หน้าอื่น (เช่น หน้าสัญญา T2) สามารถ Search หาชื่อลูกค้าได้
+    search_fields = ('company_name', 'contact_person', 'phone')
+    # ✅ แปะตารางสัญญาไว้ท้ายหน้าข้อมูลลูกค้า
+    inlines = [CustomerProductContractInline]
+
+# --- 3. ส่วนหน้าจัดการสัญญาโดยเฉพาะ (T2. ราคาสัญญา&DC/Rebate) ---
+@admin.register(CustomerProductContract)
+class CustomerProductContractAdmin(DocumentLockMixin, admin.ModelAdmin):
+    # ✅ แสดงคอลัมน์และทำให้แก้ไขราคา/Rebate ได้จากหน้าตารางเลย
+    list_display = ['customer', 'product', 'contract_price', 'dc_percent', 'rebate_percent']
+    list_editable = ['contract_price', 'dc_percent', 'rebate_percent'] 
+    
+    # ✅ ระบบค้นหา: หาจากชื่อลูกค้า, ชื่อสินค้า หรือ "ยิงบาร์โค้ด"
+    search_fields = ['customer__company_name', 'product__name', 'product__barcodes__code']
+    
+    # ✅ ระบบช่วยพิมพ์: ค้นหาลูกค้าและสินค้าได้รวดเร็ว
+    autocomplete_fields = ['customer', 'product']
+    
 @admin.register(StockAdjustment)
 class StockAdjustmentAdmin(admin.ModelAdmin):
     list_display = ['created_at', 'product', 'adjustment_type', 'quantity', 'adjustment_value', 'reason']
     list_filter = ['adjustment_type', 'product']
     autocomplete_fields = ['product']
     search_fields = ['product__name', 'reason']
-
-# แก้ไขบรรทัดสุดท้ายของไฟล์ admin.py จากเดิมเป็นชุดนี้ค่ะ
-
-@admin.register(Customer)
-class CustomerAdmin(DocumentLockMixin, admin.ModelAdmin): # ✅ ใส่ Mixin เพื่อล็อคหน้าจอด้วย
-    # 1. กำหนดคอลัมน์ที่อยากเห็นหน้าตาราง (จะได้ไม่ต้องกดเข้าไปดูข้างใน)
-    list_display = ('company_name', 'contact_person', 'phone')
-    
-    # 2. เพิ่มช่องค้นหา (Search) ด้านบน
-    # จะช่วยให้เปรมพิมพ์ชื่อบริษัท หรือเบอร์โทรเพื่อหาลูกค้าได้ทันที
-    search_fields = ('company_name', 'contact_person', 'phone')
-    
-    # 3. (แถม) ถ้ามีรายการราคาสัญญาลูกค้า (Contract) อยากให้โชว์ในหน้านี้เลยไหมคะ?
-    # ถ้าอยากให้โชว์ ให้เอาคอมเมนต์ออกได้เลยค่ะ
-    from .models import CustomerProductContract
-    class ContractInline(admin.TabularInline):
-        model = CustomerProductContract
-        extra = 0
-    inlines = [ContractInline]
 
 @admin.register(SalesReport)
 class SalesReportAdmin(admin.ModelAdmin):
@@ -2241,8 +2316,8 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
                 SalesPayment.objects.create(
                     order=obj.sales_order,
                     amount=-obj.rebate_amount, # ติดลบเพื่อหักยอด
-                    payment_date=obj.confirmed_date,
-                    remark=f"⚠ {rebate_ref}"
+                    payment_date=obj.confirmed_date or timezone.now(),
+                    remark=f"หักค่า Rebate สินค้า {obj.product.name} [REF-ID:{obj.id}]"
                 )
 
         # 🎯 [SECTION 3] ยืนยันยอด DC (รายการหัก 2)
@@ -2252,14 +2327,16 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
                 SalesPayment.objects.create(
                     order=obj.sales_order,
                     amount=-obj.dc_amount, # ติดลบเพื่อหักยอด
-                    payment_date=obj.confirmed_date,
-                    remark=f"📦 {dc_ref}"
+                    payment_date=obj.confirmed_date or timezone.now(),
+                    remark=f"หักค่า DC สินค้า {obj.product.name} [REF-ID:{obj.id}]"
                 )
 
     # --- ✅ Actions ---
     @admin.action(description="💰 ยืนยันเฉพาะยอดรับเงิน (Revenue)")
     def confirm_revenue_only(self, request, queryset):
         for obj in queryset:
+            if obj.is_revenue_confirmed:
+                continue
             obj.is_revenue_confirmed = True
             # 🔥 บังคับเรียก save_model เพื่อให้สร้าง SalesPaymentLog
             self.save_model(request, obj, None, True) 
@@ -2268,6 +2345,8 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     @admin.action(description="🚚 ยืนยันเฉพาะค่า DC")
     def confirm_dc_only(self, request, queryset):
         for obj in queryset:
+            if obj.is_dc_confirmed:
+                continue
             obj.is_dc_confirmed = True
             # 🔥 บังคับเรียก save_model เพื่อให้สร้างรายการหักเงิน
             self.save_model(request, obj, None, True)
@@ -2276,6 +2355,8 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
     @admin.action(description="🎁 ยืนยันเฉพาะยอด Rebate")
     def confirm_rebate_only(self, request, queryset):
         for obj in queryset:
+            if obj.is_rebate_confirmed:
+                continue
             obj.is_rebate_confirmed = True
             # 🔥 บังคับเรียก save_model เพื่อให้สร้างรายการหักเงิน
             self.save_model(request, obj, None, True)

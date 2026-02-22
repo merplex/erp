@@ -105,10 +105,10 @@ class Product(models.Model):
     name = models.CharField(max_length=255, verbose_name="ชื่อสินค้า")
     category = models.ForeignKey(ProductCategory, on_delete=models.SET_NULL, null=True, blank=True)
     # ✅ เพิ่มฟิลด์แยกประเภท (True = สินค้ามีสต็อก, False = บริการ/ค่าใช้จ่าย)
-    is_product = models.BooleanField(default=True, verbose_name="เป็นสินค้า (สต็อก)")
+    is_product = models.BooleanField(default=True, verbose_name="เป็นสินค้ามีสต๊อก")
     tags = models.ManyToManyField(ProductTag, blank=True, related_name='products', verbose_name="แท็ก")
     suppliers = models.ManyToManyField(Supplier, through='ProductSupplier', related_name='products')
-    has_bom = models.BooleanField(default=False, verbose_name="สินค้าผลิตเอง (BOM)")
+    has_bom = models.BooleanField(default=False, verbose_name="มีBOM")
     buy_price = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="ราคาทุน")
     sale_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, verbose_name="ราคาขาย")
     unit = models.CharField(max_length=50, default="ชิ้น", verbose_name="หน่วย")
@@ -216,15 +216,22 @@ class BOM(models.Model):
     updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="bom_editor")
     @property
     def total_cost(self): return sum(item.subtotal for item in self.ingredients.all())
+
     def __str__(self):
-        # โชว์แบบนี้: "เสื้อยืด XL - สูตรมาตรฐาน (v.1)" อ่านง่ายขึ้นเยอะ
-        return f"{self.product.name} - {self.name}"
+        try:
+            # ดึงชื่อสินค้า และ ชื่อสูตร (บาร์โค้ด) มาโชว์
+            p_name = self.product.name if self.product else "ไม่ระบุสินค้า"
+            b_name = self.name if self.name else "ไม่มีชื่อสูตร"
+            return f"{p_name} - {b_name}"
+        except Exception:
+            return f"BOM ID: {self.id}" # ไม้ตายสุดท้ายถ้าพังจริงๆ ให้โชว์ ID แทน
+        
     class Meta: verbose_name_plural = "A5. สูตรการผลิต (BOM)"
 
 class BOMIngredient(models.Model):
     bom = models.ForeignKey(BOM, on_delete=models.CASCADE, related_name='ingredients')
     material = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="วัตถุดิบ")
-    quantity = models.DecimalField(max_digits=10, decimal_places=4, default=1.0)
+    quantity = models.DecimalField(max_digits=10, decimal_places=4, default=1.0000)
     @property
     def subtotal(self): return self.material.buy_price * self.quantity
     @property
@@ -572,6 +579,50 @@ class SalesPayment(models.Model):
         super().save(*args, **kwargs)
         # บันทึกเสร็จ ให้ไปอัปเดตสถานะที่ใบสั่งขายทันที
         self.order.update_payment_status()
+
+#ดักจับ ถ้ามีการ ลบประวัติการรับเงินออก ให้ไปอัปเดตสถานะที่ใบสั่งขาย และสถานะใน C6 ด้วยเช่นกัน
+@receiver(post_delete, sender=SalesPayment)
+def unlock_shipment_accounting(sender, instance, **kwargs):
+    """
+    เมื่อมีการลบประวัติการรับเงิน/หักออก (SalesPayment)
+    ระบบจะพยายามปลดล็อกสถานะใน C6 (ShipmentAccounting) ให้อัตโนมัติ
+    """
+    remark = instance.remark or ""
+    # 🔍 ค้นหา ID อ้างอิงจาก Remark
+    match = re.search(r"\[REF-ID:(\d+)\]", remark)
+    if match:
+        shipment_id = match.group(1)
+        try:
+            # ดึงรายการ Shipment ต้นทางขึ้นมา
+            ship = ShipmentAccounting.objects.get(id=shipment_id)
+            
+            # เช็คว่ารายการที่ลบคืออะไร แล้วปลดล็อกตัวนั้น
+            if "ยอดส่งสินค้า" in remark:
+                ship.is_revenue_confirmed = False
+            elif "DC" in remark:
+                ship.is_dc_confirmed = False
+            elif "Rebate" in remark:
+                ship.is_rebate_confirmed = False
+                
+            ship.save() # บันทึกเพื่อให้หน้า C6 กลับเป็นสีแดง
+        except Exception:
+            pass
+    order = instance.order
+    if "สินค้า" in remark or "หัก" in remark:
+        from .models import SalesDeliveryLog
+        shipments = SalesDeliveryLog.objects.filter(sales_order=order)
+        
+        for ship in shipments:
+            if "DC" in remark and ship.is_dc_confirmed:
+                if abs(ship.dc_amount) == abs(instance.amount):
+                    ship.is_dc_confirmed = False
+                    ship.save()
+                    break
+            elif "Rebate" in remark and ship.is_rebate_confirmed:
+                if abs(ship.rebate_amount) == abs(instance.amount):
+                    ship.is_rebate_confirmed = False
+                    ship.save()
+                    break
 
 # --- 4. Proxy Model สำหรับหน้า C3 (Income Report) ---
 class IncomeReport(SalesOrder):
@@ -1067,14 +1118,13 @@ class ShipmentAccounting(SalesDeliveryLog):
     def calculate_gross_revenue(self):
         return self.calculate_revenue_total()
 
-
 class ProductionMaterialUsage(models.Model):
     """รายการวัตถุดิบที่ "จอง" ไว้สำหรับใบสั่งผลิตนี้"""
     production_order = models.ForeignKey(ProductionOrder, on_delete=models.CASCADE, related_name='material_usages')
     raw_material = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="วัตถุดิบ/Package")
-    planned_qty = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="จำนวนตามสูตร (Total)")
-    actual_qty_to_use = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="จำนวนที่ต้องใช้จริง (ปรับแต่งได้)")
-    used_so_far = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="ตัดสต็อกไปแล้ว")
+    planned_qty = models.DecimalField(max_digits=12, decimal_places=4, verbose_name="จำนวนตามสูตร (Total)")
+    actual_qty_to_use = models.DecimalField(max_digits=12, decimal_places=4, verbose_name="จำนวนที่ต้องใช้จริง (ปรับแต่งได้)")
+    used_so_far = models.DecimalField(max_digits=12, decimal_places=4, default=0, verbose_name="ตัดสต็อกไปแล้ว")
 
     @property
     def pending_use(self):
