@@ -13,7 +13,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (actionContainer) actionContainer.appendChild(summaryBox);
 
     // 🎯 รายชื่อหัวตารางที่เปรมต้องการให้ระบบ "เฝ้าดู" (ใส่เพิ่มได้ไม่อั้น!)
-    const targetLabels = [ 'สต็อกปัจจุบัน','แผนรับ (PO)','แผนส่ง (SO)','แผนผลิต (PD)','คาดการณ์ (PLAN)',   
+    const targetLabels = [ 'สต็อกปัจจุบัน','แผนรับ (PO)','แผนส่ง (SO)','แผนผลิต (PD)','คาดการณ์ (PLAN)',  'มูลค่ารวม', 
         'รวมเงิน', 'รวมจ่าย', 'รวมยอด', 'กำไร', 'ยอดสุทธิ', 'ค้างจ่าย', 'GET BALANCE DUE LIST','ยอดสุทธิ (GRAND TOTAL)', 'ค้างรับ','GET BALANCE DUE DISPLAY', 'จำนวนขาย', 'ยอดขายรวม', 'ต้นทุนรวม (BUY)', 
         'กำไร (vs Buy)','จำนวน', 'INCL.VAT',  'EXCL.VAT', 'ยอดDC','ยอดREBATE', 'get_total_display'
     ];

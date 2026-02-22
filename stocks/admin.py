@@ -1155,7 +1155,7 @@ class BuyPriceRangeFilter(admin.SimpleListFilter):
 
 @admin.register(StockPlanning)
 class StockPlanningAdmin(admin.ModelAdmin):
-    list_display = ('name', 'category', 'stock_quantity', 'get_pending_in', 'get_pending_out', 'get_pending_prod', 'get_available', 'buy_price')
+    list_display = ('name', 'category', 'stock_quantity', 'get_pending_in', 'get_pending_out', 'get_pending_prod', 'get_available', 'buy_price', 'get_total_inventory_value')
     list_filter = ('category', 'suppliers', ProductOnlyFilter, BuyPriceRangeFilter)
     search_fields = ('name', 'barcodes__code', 'tags__name')
 
@@ -1255,6 +1255,37 @@ class StockPlanningAdmin(admin.ModelAdmin):
         color = "red" if total < 0 else "blue"
         return format_html('<b style="color: {};">{}</b>', color, total)
     get_available.short_description = "คาดการณ์ (Plan)"
+
+    def get_total_inventory_value(self, obj):
+        from .models import ProductionMaterialUsage
+        
+        # --- ส่วนที่ 1: ดึงตัวเลขดิบมาคำนวณ (ใช้ Logic เดียวกับ get_available) ---
+        on_hand = obj.stock_quantity or 0
+        p_in = self.get_pending_in(obj) # คืนค่าเป็น int อยู่แล้ว
+        p_out = self.get_pending_out(obj) # คืนค่าเป็นตัวเลข
+        
+        # ยอดจาก PD (รอรับ - รอใช้)
+        p_receipt = sum((o.quantity_planned - o.quantity_actual) for o in obj.productionorder_set.filter(status__in=['Draft', 'Started', 'Finished']))
+        p_usage = sum((u.actual_qty_to_use - u.used_so_far) for u in ProductionMaterialUsage.objects.filter(raw_material=obj, production_order__status__in=['Draft', 'Started', 'Finished']))
+        
+        # ยอดคาดการณ์สุทธิ (Available Plan)
+        available_total = on_hand + p_in - p_out + (p_receipt - p_usage)
+        
+        # --- ส่วนที่ 2: คำนวณมูลค่าเงิน ---
+        unit_price = obj.buy_price or 0
+        total_value = available_total * unit_price
+        
+        # --- ส่วนที่ 3: จัดรูปแบบการแสดงผล ---
+        # ถ้ามูลค่าติดลบ (จองของเกินสต็อกที่มี) ให้ใช้สีส้มเข้ม/แดง จะได้เตือนเรื่องงบประมาณ
+        color = "#fd7e14" if total_value < 0 else "#212529" 
+        
+        return format_html(
+            '<span style="color: {}; font-weight: bold;">{:,.2f}</span>',
+            color,
+            total_value
+        )
+
+    get_total_inventory_value.short_description = "มูลค่ารวม"
 
     class Media:
         js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
