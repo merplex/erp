@@ -1186,6 +1186,10 @@ class SalesContract(models.Model):
 
     def __str__(self):
         return f"{self.contract_name} - {self.customer.company_name}"
+    
+    class Meta:
+        verbose_name = "C7. สัญญาการขาย"
+        verbose_name_plural = "C7. สัญญาการขาย"
 
 class ContractCondition(models.Model):
     TYPE_CHOICES = [
