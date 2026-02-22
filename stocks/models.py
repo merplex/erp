@@ -4,6 +4,7 @@ from django.db.models import Sum
 from django.db.models.signals import post_delete
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 from django.contrib.auth.models import User
 from django.contrib.contenttypes.models import ContentType
