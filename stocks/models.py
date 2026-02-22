@@ -1046,6 +1046,21 @@ class CustomerProductContract(models.Model):
     def __str__(self):
         return f"{self.customer.company_name} - {self.product.name}"
 
+    def display_product_tags(self):
+        if self.product:
+            # ดึง Tag ทั้งหมดที่ผูกกับสินค้าตัวนี้ในหน้า A4
+            # (สมมติว่าใน Product เปรมใช้ชื่อฟิลด์ว่า product_tag_link นะครับ)
+            tags = self.product.product_tag_link.all() if hasattr(self.product.product_tag_link, 'all') else [self.product.product_tag_link]
+            
+            html = ""
+            for tag in tags:
+                if tag:
+                    html += f'<span style="background: #d1c4e9; color: #512da8; padding: 2px 10px; border-radius: 12px; margin-right: 5px; font-size: 11px;">{tag.name}</span>'
+            return mark_safe(html) if html else "-"
+        return "-"
+    
+    display_product_tags.short_description = "กลุ่มสินค้า (sync A4)"
+
     class Meta:
         verbose_name_plural = "T2. ราคาสัญญา&DC/Rebate"
         unique_together = ('customer', 'product')
