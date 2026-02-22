@@ -1048,17 +1048,12 @@ class CustomerProductContract(models.Model):
         return f"{self.customer.company_name} - {self.product.name}"
 
     def display_product_tags(self):
-    # เช็คว่ามีสินค้าไหม และสินค้ามีฟิลด์ tags ไหม
+    # เช็คว่ามีสินค้า และสินค้ามีกลุ่ม (tags) หรือไม่
         if self.product and hasattr(self.product, 'tags'):
-            # ดึง Tag ทั้งหมดออกมา (ใช้ .all() เพราะ 'tags' มักจะเป็น ManyToMany)
             tags = self.product.tags.all()
-            
             if tags:
-                html = "".join([
-                    f'<span style="background: #e8f5e9; color: #2e7d32; padding: 2px 10px; border-radius: 12px; margin-right: 5px; font-size: 11px; border: 1px solid #a5d6a7; font-weight: bold;">{t.name}</span>' 
-                    for t in tags
-                ])
-                return mark_safe(html)
+                # ดึงชื่อกลุ่มทั้งหมดมาต่อกันด้วย " , "
+                return ", ".join([t.name for t in tags])
         return "-"
     
     display_product_tags.short_description = "กลุ่มสินค้า (Tag)"
