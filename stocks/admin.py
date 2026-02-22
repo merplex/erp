@@ -1259,30 +1259,46 @@ class StockPlanningAdmin(admin.ModelAdmin):
     def get_total_inventory_value(self, obj):
         from .models import ProductionMaterialUsage
         
-        # --- ส่วนที่ 1: ดึงตัวเลขดิบมาคำนวณ (ใช้ Logic เดียวกับ get_available) ---
+        # --- ส่วนที่ 1: ดึงเฉพาะตัวเลขดิบๆ มาคำนวณ (ห้ามใช้ฟังก์ชันที่ส่งค่าเป็น HTML) ---
         on_hand = obj.stock_quantity or 0
-        p_in = self.get_pending_in(obj) # คืนค่าเป็น int อยู่แล้ว
-        p_out = self.get_pending_out(obj) # คืนค่าเป็นตัวเลข
+        
+        # แผนรับ (PO) - ดึงเฉพาะยอดค้างรับที่เป็นตัวเลข
+        from .models import PurchaseItem
+        p_in_items = PurchaseItem.objects.filter(
+            product=obj,
+            purchase_order__status__in=['Draft', 'Pending', 'Confirmed', 'Ordered', 'Paid', 'Loaded', 'Departed', 'Arrived', 'Received', 'Partially Received']
+        )
+        p_in = sum(max(0, (i.quantity_ordered or 0) - (i.quantity_received or 0)) for i in p_in_items)
+
+        # แผนส่ง (SO)
+        from .models import SalesItem
+        p_out_items = SalesItem.objects.filter(
+            product=obj,
+            sales_order__status__in=['Draft', 'Confirmed', 'Shipped']
+        )
+        p_out = sum(max(0, (i.quantity_ordered or 0) - (i.quantity_shipped or 0)) for i in p_out_items)
         
         # ยอดจาก PD (รอรับ - รอใช้)
         p_receipt = sum((o.quantity_planned - o.quantity_actual) for o in obj.productionorder_set.filter(status__in=['Draft', 'Started', 'Finished']))
         p_usage = sum((u.actual_qty_to_use - u.used_so_far) for u in ProductionMaterialUsage.objects.filter(raw_material=obj, production_order__status__in=['Draft', 'Started', 'Finished']))
         
-        # ยอดคาดการณ์สุทธิ (Available Plan)
-        available_total = on_hand + p_in - p_out + (p_receipt - p_usage)
+        # ยอดคาดการณ์สุทธิ (Available Plan) เป็นตัวเลขแน่นอน
+        available_total = float(on_hand + p_in - p_out + (p_receipt - p_usage))
         
         # --- ส่วนที่ 2: คำนวณมูลค่าเงิน ---
-        unit_price = obj.buy_price or 0
+        unit_price = float(obj.buy_price or 0)
         total_value = available_total * unit_price
         
         # --- ส่วนที่ 3: จัดรูปแบบการแสดงผล ---
-        # ถ้ามูลค่าติดลบ (จองของเกินสต็อกที่มี) ให้ใช้สีส้มเข้ม/แดง จะได้เตือนเรื่องงบประมาณ
         color = "#fd7e14" if total_value < 0 else "#212529" 
         
+        # 🎯 ใช้ f-string จัดการตัวเลขให้เสร็จก่อน แล้วค่อยส่งเข้า format_html
+        formatted_value = "{:,.2f}".format(total_value)
+        
         return format_html(
-            '<span style="color: {}; font-weight: bold;">{:,.2f}</span>',
+            '<span style="color: {}; font-weight: bold;">{}</span>',
             color,
-            total_value
+            formatted_value
         )
 
     get_total_inventory_value.short_description = "มูลค่ารวม"
