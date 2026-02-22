@@ -595,8 +595,11 @@ class SupplierAdmin(DocumentLockMixin,admin.ModelAdmin):
 
 class ProductBarcodeAdmin(admin.ModelAdmin):
     # 🎯 ตัวนี้แหละคือ "หัวใจ" ที่จะแก้ Error E039
-    search_fields = ['code', 'product__name']
+    search_fields = ['code', 'product__name','product__tags__name']
     list_display = ('code', 'product', 'conversion_factor', 'unit_name', 'get_forecast_stock')
+    list_filter = (
+        ('product__tags', admin.RelatedOnlyFieldListFilter), # กรองตามกลุ่มสินค้าที่หน้า A4
+    )
     def get_queryset(self, request):
         return super().get_queryset(request).select_related('product')
 
