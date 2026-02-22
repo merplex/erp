@@ -1118,22 +1118,23 @@ class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
             obj.quantity_actual = total_finished
             obj.save()
 
-    def formfield_for_foreignkey(self, db_field, request, obj=None, **kwargs):
-        # 1. กรอง Product: เอาเฉพาะที่มี BOM
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        # 🎯 ดึง obj (ข้อมูลใบผลิตนี้) ออกมาจาก kwargs (Django จะใส่มาให้เอง)
+        obj = kwargs.get('obj')
+
+        # 1. กรองสินค้า: เอาเฉพาะที่มี BOM
         if db_field.name == "product":
             from .models import Product
             kwargs["queryset"] = Product.objects.filter(has_bom=True)
 
-        # 2. กรอง BOM: ให้สัมพันธ์กับสินค้าที่เลือก
+        # 2. กรองสูตร BOM: ให้ตรงกับสินค้าในใบนี้
         if db_field.name == "bom":
-            # กรณีแก้ไขใบเดิม (มี obj)
             if obj and hasattr(obj, 'product') and obj.product:
                 kwargs["queryset"] = BOM.objects.filter(product=obj.product)
-            # กรณีสร้างใบใหม่ (เช็คจาก URL)
             elif 'product' in request.GET:
                 kwargs["queryset"] = BOM.objects.filter(product_id=request.GET.get('product'))
         
-        # 🎯 จุดสำคัญ: ลบ 'obj' ออกจาก super() เพื่อแก้ TypeError
+        # 🎯 ห้ามใส่ obj ลงใน super() นะครับ! 
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
     
     class Media:

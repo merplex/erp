@@ -1,33 +1,43 @@
 // static/js/filter_bom.js
 (function($) {
-    $(document).ready(function() {
-        // ดักฟังเหตุการณ์เมื่อช่อง Product (id_product) เปลี่ยนแปลง
-        $('#id_product').on('change', function() {
-            var productId = $(this).val();
-            var bomSelect = $('#id_bom');
+    'use strict';
+    $(function() {
+        const productField = $('#id_product');
+        const bomField = $('#id_bom');
+
+        function updateBOMs() {
+            // ดึงชื่อสินค้าที่เลือกอยู่ (ดึงจากตัวหนังสือใน Dropdown)
+            const selectedProductText = productField.find('option:selected').text().trim();
             
-            // ล้างค่าในช่อง BOM ก่อน
-            bomSelect.val(null).trigger('change');
-            
-            // ถ้าไม่มีการเลือกสินค้า ให้โชว์ทั้งหมด หรือซ่อนไว้
-            if (!productId) {
-                bomSelect.find('option').show();
+            if (!selectedProductText || selectedProductText === '---------') {
+                bomField.find('option').show();
                 return;
             }
 
-            // กรอง Option ในช่อง BOM
-            bomSelect.find('option').each(function() {
-                var optionText = $(this).text();
-                // ดึงชื่อสินค้าออกมาจากชื่อ BOM (ที่เปรมทำไว้ใน __str__)
-                // เช่น "สินค้า C - BOM C" -> จะเช็คว่ามีคำว่า "สินค้า C" ไหม
-                var productName = $('#id_product').find('option:selected').text();
-                
-                if (optionText.includes(productName) || $(this).val() === "") {
-                    $(this).show();
+            bomField.find('option').each(function() {
+                const option = $(this);
+                if (!option.val()) return; // ข้ามช่องว่าง
+
+                // 🎯 เช็คว่า "ชื่อสินค้า" ที่เราเลือก มีอยู่ใน "ชื่อสูตร BOM" หรือเปล่า
+                // (เพราะเปรมทำ __str__ ไว้เป็น: "ชื่อสินค้า - ชื่อสูตร")
+                if (option.text().includes(selectedProductText)) {
+                    option.show().prop('disabled', false);
                 } else {
-                    $(this).hide();
+                    option.hide().prop('disabled', true);
+                    // ถ้าสูตรที่เคยเลือกไว้ถูกซ่อน ให้ล้างค่านั้นทิ้ง
+                    if (bomField.val() === option.val()) {
+                        bomField.val('');
+                    }
                 }
             });
+        }
+
+        // ดักฟังตอนเปลี่ยนสินค้า (ใช้ $(document) เพื่อรองรับ Select2 ของ Django)
+        $(document).on('change', '#id_product', function() {
+            updateBOMs();
         });
+
+        // รันครั้งแรกตอนโหลดหน้า (เผื่อกดแก้ไขใบเดิม)
+        updateBOMs();
     });
-})(django.jQuery);
+})(django.jQuery); // 🎯 ส่ง jQuery ของ Django เข้าไปใช้ในชื่อ $
