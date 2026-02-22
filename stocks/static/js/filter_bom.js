@@ -1,43 +1,50 @@
 // static/js/filter_bom.js
-(function($) {
-    'use strict';
-    $(function() {
-        const productField = $('#id_product');
-        const bomField = $('#id_bom');
+(function() {
+    var initFilter = function($) {
+        $(document).ready(function() {
+            function updateBOMOptions() {
+                var productSelect = $('#id_product');
+                var bomSelect = $('#id_bom');
+                
+                // ดึงชื่อสินค้าที่เลือก (ตัดช่องว่างหน้าหลัง)
+                var selectedProduct = productSelect.find('option:selected').text().trim();
+                
+                if (!selectedProduct || selectedProduct.indexOf('----') !== -1) {
+                    bomSelect.find('option').show();
+                    return;
+                }
 
-        function updateBOMs() {
-            // ดึงชื่อสินค้าที่เลือกอยู่ (ดึงจากตัวหนังสือใน Dropdown)
-            const selectedProductText = productField.find('option:selected').text().trim();
-            
-            if (!selectedProductText || selectedProductText === '---------') {
-                bomField.find('option').show();
-                return;
+                bomSelect.find('option').each(function() {
+                    var option = $(this);
+                    if (!option.val()) return; // ข้ามตัวเลือกว่าง
+
+                    // 🎯 กรอง: ถ้าชื่อ BOM มีชื่อสินค้าอยู่ข้างใน ให้แสดง
+                    if (option.text().indexOf(selectedProduct) !== -1) {
+                        option.show().prop('disabled', false);
+                    } else {
+                        option.hide().prop('disabled', true);
+                        if (bomSelect.val() === option.val()) {
+                            bomSelect.val(''); // ล้างค่าถ้าตัวที่เลือกถูกซ่อน
+                        }
+                    }
+                });
             }
 
-            bomField.find('option').each(function() {
-                const option = $(this);
-                if (!option.val()) return; // ข้ามช่องว่าง
-
-                // 🎯 เช็คว่า "ชื่อสินค้า" ที่เราเลือก มีอยู่ใน "ชื่อสูตร BOM" หรือเปล่า
-                // (เพราะเปรมทำ __str__ ไว้เป็น: "ชื่อสินค้า - ชื่อสูตร")
-                if (option.text().includes(selectedProductText)) {
-                    option.show().prop('disabled', false);
-                } else {
-                    option.hide().prop('disabled', true);
-                    // ถ้าสูตรที่เคยเลือกไว้ถูกซ่อน ให้ล้างค่านั้นทิ้ง
-                    if (bomField.val() === option.val()) {
-                        bomField.val('');
-                    }
-                }
+            // ดักฟังการเปลี่ยนค่า (รองรับทั้ง Select ปกติและ Select2)
+            $(document).on('change', '#id_product', function() {
+                updateBOMOptions();
             });
-        }
 
-        // ดักฟังตอนเปลี่ยนสินค้า (ใช้ $(document) เพื่อรองรับ Select2 ของ Django)
-        $(document).on('change', '#id_product', function() {
-            updateBOMs();
+            // รันทันทีที่โหลดหน้าจอ
+            updateBOMOptions();
         });
+    };
 
-        // รันครั้งแรกตอนโหลดหน้า (เผื่อกดแก้ไขใบเดิม)
-        updateBOMs();
-    });
-})(django.jQuery); // 🎯 ส่ง jQuery ของ Django เข้าไปใช้ในชื่อ $
+    // 🎯 ตรวจสอบความพร้อมของ django.jQuery
+    var checkInterval = setInterval(function() {
+        if (typeof django !== 'undefined' && django.jQuery) {
+            initFilter(django.jQuery);
+            clearInterval(checkInterval);
+        }
+    }, 100);
+})();

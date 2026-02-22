@@ -1037,6 +1037,12 @@ class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
     
     actions = ['mark_as_completed']
 
+    class Media:
+        js = (
+            'js/filter_bom.js',
+            'js/admin_sum_selected.js',
+        ) # เรียกไฟล์ JS มาใช้งาน
+
     # ✅ ต้องมีฟังก์ชันนี้ และ Indent (ย่อหน้า) ให้ตรงกับฟังก์ชันอื่นในคลาสครับ
     @admin.action(description="✅ เปลี่ยนสถานะเป็น: เสร็จงาน/ปิดงาน")
     def mark_as_completed(self, request, queryset):
@@ -1137,11 +1143,7 @@ class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
         # 🎯 ห้ามใส่ obj ลงใน super() นะครับ! 
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
     
-    class Media:
-        js = (
-            'js/filter_bom.js',
-            'js/admin_sum_selected.js',
-        ) # เรียกไฟล์ JS มาใช้งาน
+
 
 class BuyPriceRangeFilter(admin.SimpleListFilter):
     title = 'ช่วงราคาทุน'
