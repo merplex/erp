@@ -216,9 +216,11 @@ class BOM(models.Model):
     updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="bom_editor")
     @property
     def total_cost(self): return sum(item.subtotal for item in self.ingredients.all())
+
     def __str__(self):
-        # โชว์แบบนี้: "เสื้อยืด XL - สูตรมาตรฐาน (v.1)" อ่านง่ายขึ้นเยอะ
-        return f"{self.product.name} - {self.name}"
+    # ดักไว้ก่อน: ถ้าไม่มีสินค้า ให้โชว์แค่ชื่อสูตร (บาร์โค้ด)
+        product_name = self.product.name if self.product else "ไม่มีสินค้า"
+        return f"{product_name} - {self.name}"
     class Meta: verbose_name_plural = "A5. สูตรการผลิต (BOM)"
 
 class BOMIngredient(models.Model):
