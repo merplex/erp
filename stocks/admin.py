@@ -1030,10 +1030,13 @@ class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('pd_number', 'product', 'quantity_planned', 'quantity_actual', 'get_diff', 'status')
     list_filter = ('status', 'order_date', 'product')
     search_fields = ('pd_number', 'product__name')
-    autocomplete_fields = ['product','bom']
+    autocomplete_fields = ['product']
     inlines = [ProductionMaterialUsageInline,ProductionLogInline]
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
     readonly_fields = ('pd_number','quantity_actual',  'created_by', 'status') 
+
+    class Media:
+        js = ('js/filter_bom.js',)
     
     actions = ['mark_as_completed']
 
