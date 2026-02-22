@@ -4,6 +4,7 @@ from django.db.models import Sum
 from django.db.models.signals import post_delete
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+from django.utils.translation import gettext_lazy as _
 from django.contrib.auth.models import User
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -1156,3 +1157,77 @@ class InternationalPurchaseTracking(PurchaseOrder):
         proxy = True
         verbose_name = "B4. ติดตามสินค้าต่างประเทศ"
         verbose_name_plural = "B4. ติดตามสินค้าต่างประเทศ"
+
+class SalesContract(models.Model):
+    customer = models.ForeignKey('Customer', on_delete=models.CASCADE, verbose_name="ลูกค้า")
+    contract_name = models.CharField(max_length=255, verbose_name="ชื่อสัญญา/เลขที่สัญญา")
+    start_date = models.DateField(verbose_name="วันที่เริ่มสัญญา")
+    end_date = models.DateField(verbose_name="วันที่สิ้นสุดสัญญา")
+    is_active = models.BooleanField(default=True, verbose_name="สถานะใช้งาน")
+
+    PAYOUT_TRIGGER = [
+        ('END_OF_CONTRACT', 'จ่ายครั้งเดียวเมื่อครบสัญญา'),
+        ('ANNIVERSARY', 'จ่ายทุกวันครบรอบที่ระบุ (เช่น ทุกวันที่ 5 ของปี)'),
+        ('PERIODIC', 'จ่ายตามรอบเงื่อนไข (เดือน/ไตรมาส/ปี)'),
+    ]
+    
+    PAYOUT_DELAY = [
+        ('SAME_PERIOD', 'จ่ายภายในเดือน/รอบที่เกิดยอดเลย'),
+        ('NEXT_PERIOD', 'จ่ายในเดือน/รอบถัดไป'),
+        ('SPECIFIC_DAY', 'จ่ายในวันที่ระบุของรอบถัดไป'),
+    ]
+
+    payout_trigger = models.CharField(max_length=30, choices=PAYOUT_TRIGGER, default='PERIODIC', verbose_name="เงื่อนไขการตัดจ่าย")
+    payout_delay = models.CharField(max_length=30, choices=PAYOUT_DELAY, default='NEXT_PERIOD', verbose_name="จังหวะการโอนเงิน")
+    payout_day = models.PositiveSmallIntegerField(default=5, verbose_name="จ่ายวันที่ (ระบุตัวเลข 1-31)")
+    
+    next_payout_date = models.DateField(null=True, blank=True, verbose_name="วันนัดจ่ายรอบถัดไป (ระบบคำนวณให้)")
+
+    def __str__(self):
+        return f"{self.contract_name} - {self.customer.company_name}"
+
+class ContractCondition(models.Model):
+    TYPE_CHOICES = [
+        ('TOTAL_SALES', '1. คำนวณจากยอดขายรวม'),
+        ('PRODUCT_BASED', '2. คำนวณตามสินค้า/กลุ่มสินค้า'),
+    ]
+    PERIOD_CHOICES = [
+        ('MONTHLY', 'รายเดือน'),
+        ('QUARTERLY', 'รายไตรมาส'),
+        ('YEARLY', 'รายปี'),
+        ('YTD', 'ยอดรวมถึงปัจจุบัน (YTD)'),
+    ]
+    CALC_METHOD = [
+        ('PERCENT_SALES', '% จากยอดขาย'),
+        ('AMOUNT_PER_QTY', 'บาทต่อจำนวนชิ้น (เฉพาะแบบที่ 2)'),
+    ]
+
+    contract = models.ForeignKey(SalesContract, on_delete=models.CASCADE, related_name='conditions')
+    type = models.CharField(max_length=20, choices=TYPE_CHOICES, verbose_name="ประเภทเงื่อนไข")
+    period = models.CharField(max_length=20, choices=PERIOD_CHOICES, verbose_name="รอบการคำนวณ")
+    
+    # เจาะจงสินค้า (ใช้สำหรับแบบที่ 2)
+    product = models.ForeignKey('Product', on_delete=models.SET_NULL, null=True, blank=True, verbose_name="สินค้าเฉพาะเจาะจง")
+    product_tag = models.CharField(max_length=100, blank=True, verbose_name="กลุ่มสินค้า (Tag)")
+    
+    # วิธีคำนวณและค่าที่ได้
+    method = models.CharField(max_length=20, choices=CALC_METHOD, verbose_name="วิธีคำนวณ")
+    value = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="ค่าที่ระบุ (% หรือ บาท)")
+
+    class Meta:
+        verbose_name = "เงื่อนไขสัญญา"
+        
+class RebatePayout(models.Model):
+    contract = models.ForeignKey(SalesContract, on_delete=models.CASCADE)
+    period_start = models.DateField(verbose_name="ยอดสะสมตั้งแต่วันที่")
+    period_end = models.DateField(verbose_name="ยอดสะสมถึงวันที่")
+    payout_date = models.DateField(verbose_name="กำหนดวันที่ต้องจ่าย")
+    
+    total_sales_amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="ยอดขายสะสมในรอบ")
+    rebate_amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="เงินที่ต้องจ่ายคืน")
+    
+    status = models.CharField(max_length=20, choices=[('PENDING', 'รอจ่าย'), ('PAID', 'จ่ายแล้ว')], default='PENDING')
+    ref_invoice = models.CharField(max_length=100, blank=True, verbose_name="เลขที่ใบลดหนี้/ใบจ่ายเงิน")
+
+    class Meta:
+        verbose_name = "ประวัติการจ่ายเงินคืน (Rebate Payout)"

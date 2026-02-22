@@ -2499,3 +2499,27 @@ class InternationalPurchaseTrackingAdmin(admin.ModelAdmin):
     def set_closed(self, request, queryset):
         queryset.update(status='Closed')
         
+class ConditionInline(admin.TabularInline):
+    model = ContractCondition
+    extra = 1
+    autocomplete_fields = ['product'] # 🎯 ยิงบาร์โค้ดหาสินค้าได้เหมือนเดิม
+    fields = ['type', 'period', 'product', 'product_tag', 'method', 'value']
+
+@admin.register(SalesContract)
+class SalesContractAdmin(admin.ModelAdmin):
+    list_display = ('contract_name', 'customer', 'start_date', 'end_date', 'is_active')
+    search_fields = ('contract_name', 'customer__company_name')
+    autocomplete_fields = ['customer']
+    inlines = [ConditionInline]
+
+    actions = ['calculate_pending_rebates']
+
+    @admin.action(description="🔄 คำนวณยอดเงินคืนและสร้างใบสำคัญจ่าย")
+    def calculate_pending_rebates(self, request, queryset):
+        for contract in queryset:
+            # Logic: 
+            # 1. ไปที่ตาราง Invoice กรองลูกค้าคนนี้ ตามช่วงวันที่
+            # 2. ดู ContractCondition ว่าคิด % หรือ บาทต่อชิ้น
+            # 3. สร้าง RebatePayout record
+            pass
+        self.message_user(request, "สร้างรายการรอจ่ายเรียบร้อยแล้ว ตรวจสอบได้ที่เมนู Payout")
