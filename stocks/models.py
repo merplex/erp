@@ -218,14 +218,14 @@ class BOM(models.Model):
     def total_cost(self): return sum(item.subtotal for item in self.ingredients.all())
 
     def __str__(self):
-    try:
-        # ดึงชื่อสินค้า และ ชื่อสูตร (บาร์โค้ด) มาโชว์
-        p_name = self.product.name if self.product else "ไม่ระบุสินค้า"
-        b_name = self.name if self.name else "ไม่มีชื่อสูตร"
-        return f"{p_name} - {b_name}"
-    except Exception:
-        return f"BOM ID: {self.id}" # ไม้ตายสุดท้ายถ้าพังจริงๆ ให้โชว์ ID แทน
-    
+        try:
+            # ดึงชื่อสินค้า และ ชื่อสูตร (บาร์โค้ด) มาโชว์
+            p_name = self.product.name if self.product else "ไม่ระบุสินค้า"
+            b_name = self.name if self.name else "ไม่มีชื่อสูตร"
+            return f"{p_name} - {b_name}"
+        except Exception:
+            return f"BOM ID: {self.id}" # ไม้ตายสุดท้ายถ้าพังจริงๆ ให้โชว์ ID แทน
+        
     class Meta: verbose_name_plural = "A5. สูตรการผลิต (BOM)"
 
 class BOMIngredient(models.Model):
