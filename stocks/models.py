@@ -1038,6 +1038,7 @@ class ShipmentPaymentReport(SalesDeliveryLog):
 class CustomerProductContract(models.Model):
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE, verbose_name="ลูกค้า")
     product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้า")
+    product_tag = models.ForeignKey(ProductTag, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="กลุ่มสินค้า (Tag)")
     contract_price = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="ราคาสัญญา")
     dc_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0, verbose_name="ค่า DC (%)")
     rebate_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0, verbose_name="Rebate (%)")
@@ -1242,7 +1243,6 @@ class ContractCondition(models.Model):
         super().save(*args, **kwargs)
 
     class Meta:
-        proxy = True
         verbose_name = "C7. สัญญาการขาย"
         verbose_name_plural = "C7. สัญญาการขาย"
 

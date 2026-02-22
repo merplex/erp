@@ -1915,7 +1915,7 @@ class CustomerProductContractAdmin(DocumentLockMixin, admin.ModelAdmin):
     search_fields = ['customer__company_name', 'product__name', 'product__barcodes__code']
     
     # ✅ ระบบช่วยพิมพ์: ค้นหาลูกค้าและสินค้าได้รวดเร็ว
-    autocomplete_fields = ['customer', 'product']
+    autocomplete_fields = ['customer', 'product', 'product_tag']
     
 @admin.register(StockAdjustment)
 class StockAdjustmentAdmin(admin.ModelAdmin):
