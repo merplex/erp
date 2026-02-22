@@ -1911,13 +1911,16 @@ class CustomerProductContractAdmin(DocumentLockMixin, admin.ModelAdmin):
     list_display = ['customer', 'product', 'contract_price', 'dc_percent', 'rebate_percent', 'display_product_tags']
     readonly_fields = ['display_product_tags']
     list_editable = ['contract_price', 'dc_percent', 'rebate_percent'] 
-    list_filter = ['customer', 'product_tag_link']
+    list_filter = ['customer', 'product__tags']
     fields = ['customer', 'product', 'display_product_tags', 'contract_price', 'dc_percent', 'rebate_percent']
     
     # ✅ ระบบค้นหา: หาจากชื่อลูกค้า, ชื่อสินค้า หรือ "ยิงบาร์โค้ด"
-    search_fields = ['customer__company_name', 'product__name', 'product__barcodes__code',
-        'product_tag_link__name']
-    
+    search_fields = [
+        'customer__company_name', 
+        'product__name', 
+        'product__barcodes__code',
+        'product__tags__name'  # 🎯 เพิ่มบรรทัดนี้ เพื่อให้ค้นหาด้วยชื่อ Tag ใน A4 ได้ครับ
+    ]
     # ✅ ระบบช่วยพิมพ์: ค้นหาลูกค้าและสินค้าได้รวดเร็ว
     autocomplete_fields = ['customer', 'product', 'product_tag_link']
     
