@@ -2537,3 +2537,12 @@ class SalesContractAdmin(admin.ModelAdmin):
             # 3. สร้าง RebatePayout record
             pass
         self.message_user(request, "สร้างรายการรอจ่ายเรียบร้อยแล้ว ตรวจสอบได้ที่เมนู Payout")
+
+@admin.register(RebatePayout)
+class RebatePayoutAdmin(admin.ModelAdmin):
+    list_display = ('contract', 'period_start', 'period_end', 'payout_date', 'total_sales_amount', 'rebate_amount', 'status', 'ref_invoice')
+    list_filter = ('status', 'contract__customer')
+    search_fields = ('contract__contract_name', 'contract__customer__company_name', 'ref_invoice')
+    readonly_fields = ('contract', 'period_start', 'period_end', 'total_sales_amount', 'rebate_amount')
+    list_display_links = ('contract',)
+    ordering = ('-payout_date',)

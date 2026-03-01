@@ -1276,4 +1276,5 @@ class RebatePayout(models.Model):
     ref_invoice = models.CharField(max_length=100, blank=True, verbose_name="เลขที่ใบลดหนี้/ใบจ่ายเงิน")
 
     class Meta:
-        verbose_name = "ประวัติการจ่ายเงินคืน (Rebate Payout)"
+        verbose_name = "สรุปสัญญา Rebate"
+        verbose_name_plural = "C7. สรุปสัญญา Rebate"
