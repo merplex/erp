@@ -731,6 +731,9 @@ class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
         obj.updated_by = request.user
         super().save_model(request, obj, form, change)
 
+    class Media:
+        js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
+
 @admin.register(BOM)
 class BOMAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('name', 'product', 'total_cost_display', 'sale_price', 'unit', 'production_time', 'created_by')
