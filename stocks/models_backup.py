@@ -12,6 +12,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.dispatch import receiver
 import random # ✅ เพิ่มไว้บนสุดของไฟล์
 import datetime
+import re
 
 class DocumentLock(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -195,7 +196,7 @@ class ProductBarcode(models.Model):
     def __str__(self):
         return self.code
     
-    class Meta: verbose_name_plural = "T4. หน่วยขายตามบาร์โค้ด"
+    class Meta: verbose_name_plural = "T5. หน่วยขายตามบาร์โค้ด"
 
 class ProductSupplier(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='product_suppliers')
@@ -1089,7 +1090,7 @@ class StockAdjustment(models.Model):
         super().save(*args, **kwargs)
 
     class Meta:
-        verbose_name_plural = "T3. บันทึกการปรับสต็อก"
+        verbose_name_plural = "T4. บันทึกการปรับสต็อก"
 
 class SalesReport(Product): # ใช้ Product เป็นฐาน
     class Meta:
@@ -1200,8 +1201,8 @@ class SalesContract(models.Model):
         return f"{self.contract_name} - {self.customer.company_name}"
     
     class Meta:
-        verbose_name = "C7. สัญญาการขาย"
-        verbose_name_plural = "C7. สัญญาการขาย"
+        verbose_name = "T3. สัญญาการขาย"
+        verbose_name_plural = "T3. สัญญาการขาย"
 
 class ContractCondition(models.Model):
     TYPE_CHOICES = [
@@ -1259,8 +1260,8 @@ class ContractCondition(models.Model):
         super().save(*args, **kwargs)
 
     class Meta:
-        verbose_name = "C7. สัญญาการขาย"
-        verbose_name_plural = "C7. สัญญาการขาย"
+        verbose_name = "T3. สัญญาการขาย"
+        verbose_name_plural = "T3. สัญญาการขาย"
 
 class RebatePayout(models.Model):
     contract = models.ForeignKey(SalesContract, on_delete=models.CASCADE)
