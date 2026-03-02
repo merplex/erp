@@ -1,10 +1,24 @@
-/* ── Checkbox สีน้ำเงิน ─────────────────────────────── */
+/* ── Checkbox เลือกแถว → สีน้ำเงิน (native + Unfold Tailwind) ────────── */
 input[type="checkbox"].action-select,
 input[type="checkbox"]#action-toggle {
-    accent-color: #2563eb;
-    width: 16px;
-    height: 16px;
+    accent-color: #2563eb;   /* native admin.ModelAdmin */
     cursor: pointer;
+}
+input[type="checkbox"].action-select:checked,
+input[type="checkbox"]#action-toggle:checked {
+    background-color: #2563eb !important;   /* Unfold appearance-none */
+    border-color: #2563eb !important;
+}
+
+/* ── Checkbox ลบ inline (DELETE) → กรอบแดง + แดงเมื่อ checked ──────── */
+input[type="checkbox"][id$="-DELETE"] {
+    accent-color: #dc2626;
+    border-color: #dc2626 !important;
+    cursor: pointer;
+}
+input[type="checkbox"][id$="-DELETE"]:checked {
+    background-color: #dc2626 !important;
+    border-color: #dc2626 !important;
 }
 
 /* ── Autocomplete (Select2) ให้เต็มความกว้าง ────────── */

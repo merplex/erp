@@ -2511,6 +2511,7 @@ class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
 @admin.register(InternationalPurchaseTracking)
 class InternationalPurchaseTrackingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     # ✅ ย่อหน้า (Indent) ต้องตรงกันแบบนี้ครับ สีแดงถึงจะหาย
+    actions = ['export_to_excel']
     list_display = ('po_number', 'supplier', 'status', 'payment_status', 'display_tracking_table','arrived_date')
     list_filter = ('status', 'supplier', 'order_date')
     
