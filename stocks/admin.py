@@ -46,6 +46,101 @@ from datetime import timedelta
 from django.utils import timezone
 from decimal import Decimal
 from rangefilter.filters import DateRangeFilter as DjangoDateRangeFilter
+import re
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment
+
+
+def _strip_html(text):
+    if not isinstance(text, str):
+        return '' if text is None else str(text)
+    return re.sub(r'<[^>]+>', '', text).strip()
+
+
+class ExportToExcelMixin:
+    """เพิ่ม action Export Excel ให้ ModelAdmin ใดก็ได้"""
+
+    @admin.action(description="📊 Export เป็น Excel")
+    def export_to_excel(self, request, queryset):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = str(self.model._meta.verbose_name_plural or 'Export')[:31]
+
+        header_font = Font(bold=True, color='FFFFFF')
+        header_fill = PatternFill(start_color='2563EB', end_color='2563EB', fill_type='solid')
+        header_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        ws.row_dimensions[1].height = 28
+
+        # รวบรวม columns จาก list_display
+        columns = []
+        for field_name in (self.list_display or []):
+            if field_name == 'action_checkbox':
+                continue
+            header = field_name.replace('_', ' ').title()
+            # หา short_description จาก admin method ก่อน
+            if hasattr(self, field_name):
+                attr = getattr(self, field_name)
+                if hasattr(attr, 'short_description'):
+                    header = attr.short_description
+            else:
+                # ลองหาจาก model field
+                try:
+                    field = self.model._meta.get_field(field_name)
+                    header = str(field.verbose_name).capitalize()
+                except Exception:
+                    # ลองหาจาก model method/property
+                    if hasattr(self.model, field_name):
+                        attr = getattr(self.model, field_name)
+                        if hasattr(attr, 'short_description'):
+                            header = attr.short_description
+            columns.append((header, field_name))
+
+        # เขียน header row
+        for col_idx, (header, _) in enumerate(columns, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_align
+
+        # เขียนข้อมูล
+        for row_idx, obj in enumerate(queryset, start=2):
+            for col_idx, (_, field_name) in enumerate(columns, start=1):
+                value = ''
+                try:
+                    if hasattr(self, field_name):
+                        raw = getattr(self, field_name)(obj)
+                    elif hasattr(obj, field_name):
+                        raw = getattr(obj, field_name)
+                        if callable(raw):
+                            raw = raw()
+                    else:
+                        raw = ''
+                    value = _strip_html(str(raw)) if raw is not None else ''
+                    # แปลงตัวเลขถ้าทำได้
+                    clean = value.replace(',', '').replace('%', '').strip()
+                    if clean:
+                        try:
+                            value = int(clean) if '.' not in clean else float(clean)
+                        except ValueError:
+                            pass
+                except Exception:
+                    value = ''
+                ws.cell(row=row_idx, column=col_idx, value=value)
+
+        # ปรับความกว้าง column อัตโนมัติ
+        for col in ws.columns:
+            max_len = max((len(str(cell.value or '')) for cell in col), default=8)
+            ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 45)
+
+        ws.freeze_panes = 'A2'
+
+        response = HttpResponse(
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        model_name = self.model._meta.model_name
+        response['Content-Disposition'] = f'attachment; filename="{model_name}_export.xlsx"'
+        wb.save(response)
+        return response
 
 
 class DocumentLockMixin:
@@ -607,12 +702,13 @@ class ProductBarcodeAdmin(UnfoldModelAdmin):
 admin.site.register(ProductBarcode, ProductBarcodeAdmin) # จดทะเบียนตามปกติ
     
 @admin.register(Product)
-class ProductAdmin(DocumentLockMixin,admin.ModelAdmin):
+class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
     list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit','get_total_stock_value', 'has_bom', 'created_by')
     list_filter = ('category','is_product', 'tags', 'has_bom', 'suppliers')
     search_fields = ('name', 'barcodes__code','tags__name')
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
+    actions = ['export_to_excel']
 
     # ✅ ใช้ตัวนี้แทน filter_horizontal หรือ filter_vertical ค่ะ
     autocomplete_fields = ['tags']
@@ -760,7 +856,7 @@ class BOMAdmin(DocumentLockMixin,admin.ModelAdmin):
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 @admin.register(PurchaseOrder)
-class PurchaseOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
+class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
     list_display = ('po_number', 'supplier', 'order_date', 'status', 'get_diff')
     list_filter = ('status', 'order_date', 'supplier')
     search_fields = ('po_number', 'invoice_no_supplier', 'items__product__name',
@@ -769,7 +865,7 @@ class PurchaseOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
     readonly_fields = ('created_by', 'status')
 
-    actions = ['mark_as_completed']
+    actions = ['mark_as_completed', 'export_to_excel']
 
     @admin.action(description="✅ เปลี่ยนสถานะเป็น: เสร็จงาน/ปิดงาน")
     def mark_as_completed(self, request, queryset):
@@ -827,7 +923,7 @@ class PurchaseOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
         js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
     
 @admin.register(SalesOrder)
-class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
+class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
     list_display = ('so_number', 'customer', 'order_date', 'status', 'vat_percent','get_diff')
     list_filter = ('status', 'order_date', 'customer')
     search_fields = ('so_number', 'po_no_customer', 'customer__company_name', 
@@ -835,7 +931,7 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
     inlines = [SalesItemInline, SalesDeliveryLogInline, SalesPaymentInline]
     readonly_fields = ('created_by', 'status') # ล็อค status ให้ระบบจัดการออโต้
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
-    actions = ['mark_as_completed']
+    actions = ['mark_as_completed', 'export_to_excel']
 
     @admin.action(description="✅ เปลี่ยนสถานะเป็น: เสร็จงาน/ปิดงาน")
     def mark_as_completed(self, request, queryset):
@@ -1172,10 +1268,11 @@ class BuyPriceRangeFilter(admin.SimpleListFilter):
         return queryset
 
 @admin.register(StockPlanning)
-class StockPlanningAdmin(UnfoldModelAdmin):
+class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     list_display = ('name', 'category', 'stock_quantity', 'get_pending_in', 'get_pending_out', 'get_pending_prod', 'get_available', 'buy_price', 'get_total_inventory_value')
     list_filter = ('category', 'suppliers', ProductOnlyFilter, BuyPriceRangeFilter)
     search_fields = ('name', 'barcodes__code', 'tags__name')
+    actions = ['export_to_excel']
 
     list_select_related = ('category',)
 
@@ -1505,10 +1602,10 @@ def settle_and_close_orders(modeladmin, request, queryset):
     return HttpResponse(Template(html_template).render(RequestContext(request, context)))
 
 @admin.register(FinanceReport)
-class FinanceReportAdmin(DocumentLockMixin,admin.ModelAdmin):
+class FinanceReportAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
     # หน้ารวม: ดูง่ายๆ ว่าใบไหนค้างจ่าย
     search_fields = ('po_number', 'supplier__company_name')
-    actions = [settle_and_close_orders, settle_purchase_special, 'calculate_finance_totals']
+    actions = [settle_and_close_orders, settle_purchase_special, 'calculate_finance_totals', 'export_to_excel']
 
     @admin.action(description="📝 สรุปยอดเงินรายจ่ายที่เลือก")
     def calculate_finance_totals(self, request, queryset):
@@ -1650,12 +1747,12 @@ class FinanceReportAdmin(DocumentLockMixin,admin.ModelAdmin):
 
 # 2. หน้า Admin ของ Income Report
 @admin.register(IncomeReport)
-class IncomeReportAdmin(DocumentLockMixin, admin.ModelAdmin):
+class IncomeReportAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
     # ✅ ปรับ list_display ให้เอาตัวที่มีสีมาโชว์เลย จะได้ดูง่ายๆ
     list_display = ('so_number', 'customer', 'get_grand_total_display', 'get_balance_due_display', 'payment_status')
     list_filter = (('order_date', DjangoDateRangeFilter),'payment_status', 'status', 'customer' )
     search_fields = ('so_number', 'customer__company_name')
-    actions = [settle_and_close_orders, settle_income_special, 'calculate_income_totals']
+    actions = [settle_and_close_orders, settle_income_special, 'calculate_income_totals', 'export_to_excel']
 
     @admin.display(description="ค้างรับ") 
     def get_balance_due_display(self, obj):
@@ -1939,7 +2036,7 @@ class StockAdjustmentAdmin(UnfoldModelAdmin):
     search_fields = ['product__name', 'reason']
 
 @admin.register(SalesReport)
-class SalesReportAdmin(UnfoldModelAdmin):
+class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     list_display = (
         'name', 'get_total_qty', 'get_total_revenue', 
         'get_total_cost_buy', 'get_total_cost_bom', 'get_profit_margin'
@@ -1971,12 +2068,12 @@ class SalesReportAdmin(UnfoldModelAdmin):
         # ถ้าไม่มี | ก็ให้ทำงานแบบปกติ (AND)
         return super().get_search_results(request, queryset, search_term)
 
-    actions = ['calculate_selected_totals']
+    actions = ['calculate_selected_totals', 'export_to_excel']
 
     @admin.action(description="📝 สรุปยอดรวมรายการที่เลือก")
     def calculate_selected_totals(self, request, queryset):
         from django.db.models import Sum
-        
+
         # ดึงผลรวมจากตัวแปรที่เราคำนวณไว้ใน get_queryset (total_qty และ total_sales_val)
         # เนื่องจากเป็นค่าจากการ annotate เราสามารถใช้ Sum() ซ้ำใน aggregate ได้เลยครับ
         totals = queryset.aggregate(
@@ -2137,14 +2234,15 @@ class SalesReportAdmin(UnfoldModelAdmin):
 
 # 2. ตั้งค่า Admin ตัวเดียวจบ
 @admin.register(ShipmentAccounting)
-class ShipmentAccountingAdmin(UnfoldModelAdmin):
+class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     # ✅ เพิ่ม Action ที่ต้องการให้โชว์แยกกันใน List นี้ครับ
     actions = [
-        'confirm_selected_items', 
-        'confirm_revenue_only', 
-        'confirm_dc_only', 
+        'confirm_selected_items',
+        'confirm_revenue_only',
+        'confirm_dc_only',
         'confirm_rebate_only',
-        'calculate_selected_totals'
+        'calculate_selected_totals',
+        'export_to_excel',
     ]
 
     list_display = (
@@ -2394,7 +2492,7 @@ class ShipmentAccountingAdmin(UnfoldModelAdmin):
         js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
 
 @admin.register(InternationalPurchaseTracking)
-class InternationalPurchaseTrackingAdmin(UnfoldModelAdmin):
+class InternationalPurchaseTrackingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     # ✅ ย่อหน้า (Indent) ต้องตรงกันแบบนี้ครับ สีแดงถึงจะหาย
     list_display = ('po_number', 'supplier', 'status', 'payment_status', 'display_tracking_table','arrived_date')
     list_filter = ('status', 'supplier', 'order_date')
@@ -2451,7 +2549,7 @@ class InternationalPurchaseTrackingAdmin(UnfoldModelAdmin):
     display_tracking_table.short_description = "📅 Timeline การส่งมอบ"
 
     # ✅ 5. Actions: ขยับสถานะ Milestone แบบรวดเร็ว (ครบชุด)
-    actions = ['set_paid', 'set_loaded', 'set_departed', 'set_arrived', 'set_received', 'set_closed']
+    actions = ['set_paid', 'set_loaded', 'set_departed', 'set_arrived', 'set_received', 'set_closed', 'export_to_excel']
 
     @admin.action(description='💰 2. จ่ายเงินแล้ว (Paid)')
     def set_paid(self, request, queryset):
@@ -2521,13 +2619,13 @@ class ConditionInline(UnfoldTabularInline):
     fields = ['type', 'period', 'product', 'product_tag_link', 'method', 'value']
 
 @admin.register(SalesContract)
-class SalesContractAdmin(UnfoldModelAdmin):
+class SalesContractAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     list_display = ('contract_name', 'customer', 'start_date', 'end_date', 'is_active')
     search_fields = ('contract_name', 'customer__company_name')
     autocomplete_fields = ['customer']
     inlines = [ConditionInline]
 
-    actions = ['calculate_pending_rebates']
+    actions = ['calculate_pending_rebates', 'export_to_excel']
 
     @admin.action(description="🔄 คำนวณยอดเงินคืนและสร้างใบสำคัญจ่าย")
     def calculate_pending_rebates(self, request, queryset):
@@ -2672,7 +2770,7 @@ class RebatePayoutItemInline(UnfoldTabularInline):
 
 
 @admin.register(RebatePayout)
-class RebatePayoutAdmin(UnfoldModelAdmin):
+class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     list_display = ('contract', 'period_start', 'period_end', 'payout_date', 'total_sales_amount', 'rebate_amount', 'status', 'ref_invoice')
     list_filter = ('status', 'contract__customer')
     search_fields = ('contract__contract_name', 'contract__customer__company_name', 'ref_invoice')
@@ -2680,3 +2778,4 @@ class RebatePayoutAdmin(UnfoldModelAdmin):
     list_display_links = ('contract',)
     ordering = ('-payout_date',)
     inlines = [RebatePayoutItemInline]
+    actions = ['export_to_excel']
