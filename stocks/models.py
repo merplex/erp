@@ -1197,9 +1197,29 @@ class SalesContract(models.Model):
     
     next_payout_date = models.DateField(null=True, blank=True, verbose_name="วันนัดจ่ายรอบถัดไป (ระบบคำนวณให้)")
 
+    def save(self, *args, **kwargs):
+        # 🤖 คำนวณวันนัดจ่ายรอบถัดไปอัตโนมัติ
+        if not self.next_payout_date:
+            today = timezone.now().date()
+
+            if self.payout_trigger == 'END_OF_CONTRACT':
+                target_date = self.end_date
+            else:
+                base_date = max(self.start_date, today)
+                target_date = base_date.replace(day=min(self.payout_day, 28))
+
+            if self.payout_delay == 'NEXT_PERIOD':
+                next_month = target_date.month % 12 + 1
+                year = target_date.year + (target_date.month // 12)
+                target_date = target_date.replace(year=year, month=next_month)
+
+            self.next_payout_date = target_date
+
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.contract_name} - {self.customer.company_name}"
-    
+
     class Meta:
         verbose_name = "T3. สัญญาการขาย"
         verbose_name_plural = "T3. สัญญาการขาย"
@@ -1232,36 +1252,9 @@ class ContractCondition(models.Model):
     method = models.CharField(max_length=20, choices=CALC_METHOD, verbose_name="วิธีคำนวณ")
     value = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="ค่าที่ระบุ (% หรือ บาท)")
 
-    def save(self, *args, **kwargs):
-        # 🤖 หุ่นยนต์คำนวณวันจ่ายเงิน (Auto Payout Date Logic)
-        if not self.next_payout_date:
-            today = timezone.now().date()
-            
-            # 1. กรณี: จ่ายเมื่อจบสัญญา
-            if self.payout_trigger == 'END_OF_CONTRACT':
-                target_date = self.end_date
-            
-            # 2. กรณี: จ่ายตามรอบ (เดือน/ไตรมาส)
-            else:
-                # หาฐานวันจาก วันเริ่มต้นสัญญา หรือ วันนี้ (เลือกอันที่มาทีหลัง)
-                base_date = max(self.start_date, today)
-                # ตั้งเป้าเป็นวันที่ระบุในเดือนนั้นๆ
-                target_date = base_date.replace(day=min(self.payout_day, 28))
-
-            # 3. จัดการเรื่อง "จังหวะการโอนเงิน" (Delay)
-            if self.payout_delay == 'NEXT_PERIOD':
-                # เขยิบไปเดือนหน้า
-                next_month = target_date.month % 12 + 1
-                year = target_date.year + (target_date.month // 12)
-                target_date = target_date.replace(year=year, month=next_month)
-            
-            self.next_payout_date = target_date
-
-        super().save(*args, **kwargs)
-
     class Meta:
-        verbose_name = "T3. สัญญาการขาย"
-        verbose_name_plural = "T3. สัญญาการขาย"
+        verbose_name = "เงื่อนไขสัญญา"
+        verbose_name_plural = "เงื่อนไขสัญญา"
 
 class RebatePayout(models.Model):
     contract = models.ForeignKey(SalesContract, on_delete=models.CASCADE)
