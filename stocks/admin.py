@@ -646,7 +646,7 @@ class SalesItemInline(UnfoldTabularInline):
     def get_unit_name_display(self, obj):
         if obj.barcode_obj and obj.barcode_obj.conversion_factor > 1:
             return obj.barcode_obj.unit_name
-        return "ชิ้น (ปกติ)"
+        return "ชิ้น(ปกติ)"
     get_unit_name_display.short_description = "หน่วยขาย"
 
     # 3. สร้างฟังก์ชันคำนวณราคารวม (Quantity * Sale Price)
