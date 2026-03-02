@@ -101,3 +101,13 @@ input[type="checkbox"]#action-toggle {
     display: inline-flex !important;
     align-items: center !important;
 }
+
+/* ── ปุ่ม Save (primary) ── */
+#submit-row button[name="_save"] {
+    background-color: rgb(2 132 199) !important;
+    color: #fff !important;
+    border-color: transparent !important;
+}
+#submit-row button[name="_save"]:hover {
+    background-color: rgb(3 105 161) !important;
+}

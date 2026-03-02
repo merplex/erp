@@ -615,18 +615,15 @@ class PurchaseReceiptLogInline(UnfoldTabularInline):
     }
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
-        formfield = super().formfield_for_foreignkey(db_field, request, **kwargs)
-        if db_field.name == 'product':
-            formfield.widget.attrs['style'] = 'width: 300px;'
-        return formfield
-    def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "product":
             resolved = request.resolver_match
             if resolved and 'object_id' in resolved.kwargs:
                 po_id = resolved.kwargs['object_id']
-                # แก้ไขจากขีดเดียวเป็นสองขีด (__) เพื่อป้องกัน FieldError
                 kwargs["queryset"] = Product.objects.filter(purchaseitem__purchase_order_id=po_id).distinct()
-        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+        formfield = super().formfield_for_foreignkey(db_field, request, **kwargs)
+        if db_field.name == 'product':
+            formfield.widget.attrs['style'] = 'width: 300px;'
+        return formfield
 
 class SalesItemInline(UnfoldTabularInline):
     model = SalesItem
@@ -674,18 +671,15 @@ class SalesDeliveryLogInline(UnfoldTabularInline):
     }
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
-        formfield = super().formfield_for_foreignkey(db_field, request, **kwargs)
-        if db_field.name == 'product':
-            formfield.widget.attrs['style'] = 'width: 300px;'
-        return formfield
-
-    def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "product":
             resolved = request.resolver_match
             if resolved and 'object_id' in resolved.kwargs:
                 so_id = resolved.kwargs['object_id']
                 kwargs["queryset"] = Product.objects.filter(sales_items__sales_order_id=so_id).distinct()
-        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+        formfield = super().formfield_for_foreignkey(db_field, request, **kwargs)
+        if db_field.name == 'product':
+            formfield.widget.attrs['style'] = 'width: 300px;'
+        return formfield
 
 class ProductionLogInline(UnfoldTabularInline):
     model = ProductionLog
