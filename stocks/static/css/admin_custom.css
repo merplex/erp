@@ -73,3 +73,28 @@ input[type="checkbox"]#action-toggle {
     outline: none !important;
     box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15) !important;
 }
+
+/* ── Related field icons (ปากกา/กากบาท/ลูกตา) อยู่แถวเดียวกับ field ── */
+.related-widget-wrapper {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    flex-wrap: nowrap !important;
+    gap: 4px !important;
+    width: 100% !important;
+}
+
+/* field (select/input) ใน wrapper ยืดเต็มที่เหลือ */
+.related-widget-wrapper > select,
+.related-widget-wrapper > input,
+.related-widget-wrapper > .select2-container {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+}
+
+/* icon links ไม่ยืด ไม่หด */
+.related-widget-wrapper-link {
+    flex-shrink: 0 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+}
