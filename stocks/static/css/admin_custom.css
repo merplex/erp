@@ -10,7 +10,7 @@ input[type="checkbox"]#action-toggle {
 /* ── Autocomplete (Select2) ให้เต็มความกว้าง ────────── */
 .select2-container {
     width: 100% !important;
-    min-width: 280px !important;
+    min-width: 220px !important;
 }
 .select2-container .select2-selection--single {
     min-height: 36px !important;
