@@ -102,10 +102,15 @@ class ExportToExcelMixin:
             cell.fill = header_fill
             cell.alignment = header_align
 
+        # keyword ที่บ่งบอกว่า field นี้ควรเป็น text (ไม่แปลงเป็นตัวเลข)
+        TEXT_FIELD_KEYWORDS = ('code', 'barcode', 'บาร์โค้ด', 'รหัส', 'เลขที่', 'เบอร์', 'phone', 'tax')
+
         # เขียนข้อมูล
         for row_idx, obj in enumerate(queryset, start=2):
-            for col_idx, (_, field_name) in enumerate(columns, start=1):
+            for col_idx, (header, field_name) in enumerate(columns, start=1):
                 value = ''
+                is_text_field = any(k in field_name.lower() or k in header.lower()
+                                    for k in TEXT_FIELD_KEYWORDS)
                 try:
                     if hasattr(self, field_name):
                         raw = getattr(self, field_name)(obj)
@@ -116,16 +121,20 @@ class ExportToExcelMixin:
                     else:
                         raw = ''
                     value = _strip_html(str(raw)) if raw is not None else ''
-                    # แปลงตัวเลขถ้าทำได้
-                    clean = value.replace(',', '').replace('%', '').strip()
-                    if clean:
-                        try:
-                            value = int(clean) if '.' not in clean else float(clean)
-                        except ValueError:
-                            pass
+                    if not is_text_field:
+                        # แปลงตัวเลขถ้าทำได้
+                        clean = value.replace(',', '').replace('%', '').strip()
+                        if clean:
+                            try:
+                                value = int(clean) if '.' not in clean else float(clean)
+                            except ValueError:
+                                pass
                 except Exception:
                     value = ''
-                ws.cell(row=row_idx, column=col_idx, value=value)
+                cell = ws.cell(row=row_idx, column=col_idx, value=value)
+                # บังคับ format text สำหรับ barcode/code field
+                if is_text_field and isinstance(value, str):
+                    cell.number_format = '@'
 
         # ปรับความกว้าง column อัตโนมัติ
         for col in ws.columns:
@@ -689,13 +698,15 @@ class SupplierAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('company_name', 'contact_person', 'type')
     inlines = [SupplierProductInline]
 
-class ProductBarcodeAdmin(UnfoldModelAdmin):
+class ProductBarcodeAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     # 🎯 ตัวนี้แหละคือ "หัวใจ" ที่จะแก้ Error E039
     search_fields = ['code', 'product__name','product__tags__name']
     list_display = ('code', 'product', 'conversion_factor', 'unit_name', 'get_forecast_stock')
     list_filter = (
         ('product__tags', admin.RelatedOnlyFieldListFilter), # กรองตามกลุ่มสินค้าที่หน้า A4
     )
+    actions = ['export_to_excel']
+
     def get_queryset(self, request):
         return super().get_queryset(request).select_related('product')
 
