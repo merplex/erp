@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 import os
 import dj_database_url
+from django.templatetags.static import static
 
 from pathlib import Path
 
@@ -153,6 +154,9 @@ SESSION_COOKIE_SECURE = True
 
 # ── Unfold Admin Theme ──────────────────────────────────────────────────────
 UNFOLD = {
+    "STYLES": [
+        lambda request: static("css/admin_custom.css"),
+    ],
     "SITE_TITLE": "Meebun ERP",
     "SITE_HEADER": "Meebun ERP",
     "SITE_SYMBOL": "inventory_2",   # Google Material icon
