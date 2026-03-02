@@ -1,8 +1,69 @@
-/* Checkbox checkmark สีน้ำเงิน */
+/* ── Checkbox สีน้ำเงิน ─────────────────────────────── */
 input[type="checkbox"].action-select,
 input[type="checkbox"]#action-toggle {
     accent-color: #2563eb;
     width: 16px;
     height: 16px;
     cursor: pointer;
+}
+
+/* ── Autocomplete (Select2) ให้เต็มความกว้าง ────────── */
+.select2-container {
+    width: 100% !important;
+}
+.select2-container .select2-selection--single {
+    min-height: 36px !important;
+    height: auto !important;
+    display: flex !important;
+    align-items: center !important;
+    border: 1px solid #9ca3af !important;
+    border-radius: 4px !important;
+    padding: 0 8px !important;
+}
+.select2-container .select2-selection--single .select2-selection__rendered {
+    line-height: normal !important;
+    padding: 4px 0 !important;
+}
+.select2-container .select2-selection--single .select2-selection__arrow {
+    height: 100% !important;
+}
+.select2-dropdown {
+    border: 1px solid #9ca3af !important;
+    border-radius: 4px !important;
+}
+.select2-search--dropdown .select2-search__field {
+    border: 1px solid #9ca3af !important;
+    border-radius: 4px !important;
+    padding: 4px 8px !important;
+    width: 100% !important;
+}
+
+/* ── Input / Textarea ให้มีกรอบ ──────────────────────── */
+.change-form fieldset input[type="text"],
+.change-form fieldset input[type="number"],
+.change-form fieldset input[type="email"],
+.change-form fieldset input[type="url"],
+.change-form fieldset input[type="date"],
+.change-form fieldset input[type="datetime-local"],
+.change-form fieldset input[type="password"],
+.change-form fieldset textarea {
+    border: 1px solid #9ca3af !important;
+    border-radius: 4px !important;
+    padding: 6px 10px !important;
+    background: #fff !important;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.change-form fieldset input[type="text"]:focus,
+.change-form fieldset input[type="number"]:focus,
+.change-form fieldset input[type="email"]:focus,
+.change-form fieldset input[type="url"]:focus,
+.change-form fieldset input[type="date"]:focus,
+.change-form fieldset input[type="datetime-local"]:focus,
+.change-form fieldset input[type="password"]:focus,
+.change-form fieldset textarea:focus {
+    border-color: #2563eb !important;
+    outline: none !important;
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15) !important;
 }
