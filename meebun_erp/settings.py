@@ -40,6 +40,8 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 # Application definition
 
 INSTALLED_APPS = [
+    "unfold",
+    "unfold.contrib.filters",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -148,3 +150,76 @@ STORAGES = {
 # บังคับให้คุกกี้ส่งผ่าน HTTPS เท่านั้น (Railway เป็น HTTPS)
 CSRF_COOKIE_SECURE = True
 SESSION_COOKIE_SECURE = True
+
+# ── Unfold Admin Theme ──────────────────────────────────────────────────────
+UNFOLD = {
+    "SITE_TITLE": "Meebun ERP",
+    "SITE_HEADER": "Meebun ERP",
+    "SITE_SYMBOL": "inventory_2",   # Google Material icon
+    "SHOW_HISTORY": True,
+    "SHOW_VIEW_ON_SITE": False,
+    "COLORS": {
+        "primary": {
+            "50":  "240 249 255",
+            "100": "224 242 254",
+            "200": "186 230 253",
+            "300": "125 211 252",
+            "400": "56  189 248",
+            "500": "14  165 233",
+            "600": "2   132 199",
+            "700": "3   105 161",
+            "800": "7   89  133",
+            "900": "12  74  110",
+            "950": "8   47  73",
+        },
+    },
+    "SIDEBAR": {
+        "show_search": True,
+        "show_all_applications": True,
+        "navigation": [
+            {
+                "title": "สินค้าและคลัง",
+                "collapsible": True,
+                "items": [
+                    {"title": "กลุ่มสินค้า",           "icon": "category",       "link": "/admin/stocks/productcategory/"},
+                    {"title": "รายการสินค้า (A4)",      "icon": "inventory_2",    "link": "/admin/stocks/product/"},
+                    {"title": "ผู้จำหน่าย",             "icon": "storefront",     "link": "/admin/stocks/supplier/"},
+                    {"title": "ลูกค้า",                 "icon": "people",         "link": "/admin/stocks/customer/"},
+                ],
+            },
+            {
+                "title": "การซื้อ",
+                "collapsible": True,
+                "items": [
+                    {"title": "ใบสั่งซื้อ (B1)",        "icon": "shopping_cart",  "link": "/admin/stocks/purchaseorder/"},
+                    {"title": "ติดตามนำเข้า (B4)",      "icon": "local_shipping", "link": "/admin/stocks/internationalpurchasetracking/"},
+                ],
+            },
+            {
+                "title": "การขาย",
+                "collapsible": True,
+                "items": [
+                    {"title": "ใบสั่งขาย (C1)",         "icon": "receipt_long",   "link": "/admin/stocks/salesorder/"},
+                    {"title": "บัญชี DC/Rebate (C6)",   "icon": "account_balance","link": "/admin/stocks/shipmentaccounting/"},
+                    {"title": "สรุปสัญญา Rebate (C7)",  "icon": "handshake",      "link": "/admin/stocks/rebatepayout/"},
+                ],
+            },
+            {
+                "title": "สัญญาและราคา",
+                "collapsible": True,
+                "items": [
+                    {"title": "ราคาสัญญา (T2)",         "icon": "price_check",    "link": "/admin/stocks/customerproductcontract/"},
+                    {"title": "สัญญาการขาย (T3)",        "icon": "description",    "link": "/admin/stocks/salescontract/"},
+                ],
+            },
+            {
+                "title": "การผลิต",
+                "collapsible": True,
+                "items": [
+                    {"title": "ใบสั่งผลิต",              "icon": "factory",        "link": "/admin/stocks/productionorder/"},
+                    {"title": "สูตรการผลิต (A5)",        "icon": "science",        "link": "/admin/stocks/bom/"},
+                ],
+            },
+        ],
+    },
+}

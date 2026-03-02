@@ -1,6 +1,7 @@
 import json
 import datetime # ✅ เพิ่มตัวนี้
 from django.contrib import admin
+from unfold.admin import ModelAdmin as UnfoldModelAdmin, TabularInline as UnfoldTabularInline, StackedInline as UnfoldStackedInline
 from .models import ProductTag
 from .models import *
 from .models import (
@@ -129,7 +130,7 @@ class DatePeriodFilter(admin.SimpleListFilter):
         return queryset # Default จะไปจัดการใน get_queryset
 
 # ✅ 1. Inline รายการสินค้า (แบบ Read-Only สำหรับหน้าการเงิน)
-class PurchaseItemReadOnlyInline(admin.TabularInline):
+class PurchaseItemReadOnlyInline(UnfoldTabularInline):
     model = PurchaseItem
     extra = 0
     can_delete = False # ห้ามลบรายการ
@@ -147,7 +148,7 @@ class PurchaseItemReadOnlyInline(admin.TabularInline):
     def has_add_permission(self, request, obj=None): return False
 
 # ✅ เพิ่มอันนี้เข้าไปครับ: ตารางแสดงรายการสินค้า (แบบดูได้อย่างเดียว)
-class SalesItemReadOnlyInline(admin.TabularInline):
+class SalesItemReadOnlyInline(UnfoldTabularInline):
     model = SalesItem  # ชื่อ Model สินค้าฝั่งขาย (เช็คใน models.py ว่าชื่อนี้ไหม)
     extra = 0
     fields = ['product', 'quantity_ordered', 'sale_price', 'get_total_display', 'auto_produce']
@@ -182,7 +183,7 @@ class SalesItemReadOnlyInline(admin.TabularInline):
     get_total_display.short_description = "ราคารวม"
     
 # ✅ 2. Inline การจ่ายเงิน และการรับเงิน (บันทึกยอดได้เรื่อยๆ)
-class PurchasePaymentInline(admin.TabularInline):
+class PurchasePaymentInline(UnfoldTabularInline):
     model = PurchasePaymentLog
     extra = 1
     verbose_name = "💰 บันทึกการจ่ายเงิน"
@@ -191,7 +192,7 @@ class PurchasePaymentInline(admin.TabularInline):
     readonly_fields = ('payment_date', 'user')
 
 
-class SalesPaymentInline(admin.TabularInline):
+class SalesPaymentInline(UnfoldTabularInline):
     model = SalesPayment
     extra = 1
     verbose_name = "💰 รายการรับเงิน"
@@ -221,7 +222,7 @@ class SalesPaymentInline(admin.TabularInline):
 # ---------------------------------------------------------
 # Inline แสดงรายการสินค้าในหน้ากลุ่มสินค้า (Category)
 # ---------------------------------------------------------
-class ProductInCategoryInline(admin.TabularInline):
+class ProductInCategoryInline(UnfoldTabularInline):
     model = Product
     fields = ['get_barcode', 'buy_price', 'sale_price', 'stock_quantity', 'unit']
     readonly_fields = fields # ให้ดูอย่างเดียว ไม่ให้แก้จากหน้านี้เพื่อความปลอดภัย
@@ -242,7 +243,7 @@ class ProductInCategoryInline(admin.TabularInline):
 # ---------------------------------------------------------
 # 1. สร้าง Inline สำหรับแสดงสินค้าที่ใช้แท็กนี้
 # ---------------------------------------------------------
-class ProductInTagInline(admin.TabularInline):
+class ProductInTagInline(UnfoldTabularInline):
     # ใช้ table กลางของ ManyToMany ระหว่าง Product และ Tags
     model = Product.tags.through 
     extra = 0
@@ -286,7 +287,7 @@ class ProductInTagInline(admin.TabularInline):
 # ---------------------------------------------------------
 # 1. รายการสั่งซื้อ (ค้างรับ) -> ใช้ po_number และติดลบ
 # ---------------------------------------------------------
-class PendingPurchaseInline(admin.TabularInline):
+class PendingPurchaseInline(UnfoldTabularInline):
     model = PurchaseItem
     fields = ['get_ref_no', 'quantity_ordered', 'quantity_received', 'get_pending']
     readonly_fields = fields
@@ -317,7 +318,7 @@ class PendingPurchaseInline(admin.TabularInline):
 # ---------------------------------------------------------
 # 2. รายการผลิต (ค้างผลิต) -> ใช้ pd_number
 # ---------------------------------------------------------
-class PendingProductionInline(admin.TabularInline):
+class PendingProductionInline(UnfoldTabularInline):
     model = ProductionOrder
     fields = ['pd_number', 'quantity_planned', 'quantity_actual', 'get_pending']
     readonly_fields = fields
@@ -343,7 +344,7 @@ class PendingProductionInline(admin.TabularInline):
 # ---------------------------------------------------------
 # 3. รายการขาย (ค้างส่ง) -> ใช้ so_number
 # ---------------------------------------------------------
-class PendingSaleInline(admin.TabularInline):
+class PendingSaleInline(UnfoldTabularInline):
     model = SalesItem
     fields = ['sales_order_link','quantity_ordered', 'quantity_shipped', 'get_pending','order_status']
     readonly_fields = fields
@@ -393,17 +394,17 @@ class PendingSaleInline(admin.TabularInline):
 # ---------------------------------------------------------
 # Inline สำหรับจัดการหลายบาร์โค้ดในหน้าเดียว
 # ---------------------------------------------------------
-class ProductBarcodeInline(admin.TabularInline):
+class ProductBarcodeInline(UnfoldTabularInline):
     model = ProductBarcode
     extra = 1  # จะมีช่องว่างให้เติม 1 ช่องเสมอ และมีปุ่ม + เพิ่มได้เรื่อยๆ
     verbose_name = "บาร์โค้ดสินค้า"
     verbose_name_plural = "บาร์โค้ดทั้งหมดของสินค้านี้"
 
-class ProductSupplierInline(admin.TabularInline):
+class ProductSupplierInline(UnfoldTabularInline):
     model = ProductSupplier
     extra = 1
 
-class SupplierProductInline(admin.TabularInline):
+class SupplierProductInline(UnfoldTabularInline):
     model = ProductSupplier
     extra = 1
     autocomplete_fields = ['product']
@@ -421,7 +422,7 @@ class BOMIngredientForm(forms.ModelForm):
         }
 
 
-class BOMIngredientInline(admin.TabularInline):
+class BOMIngredientInline(UnfoldTabularInline):
     model = BOMIngredient
     form = BOMIngredientForm # ✅ เอา Form ที่เราสร้างมาใส่ตรงนี้ครับ
     fields = ('material', 'quantity', 'get_unit_display')
@@ -431,7 +432,7 @@ class BOMIngredientInline(admin.TabularInline):
     def get_unit_display(self, obj): return obj.get_unit
     get_unit_display.short_description = "หน่วย"
 
-class PurchaseItemInline(admin.TabularInline):
+class PurchaseItemInline(UnfoldTabularInline):
     model = PurchaseItem
     # 🎯 เก็บความสามารถเดิมไว้: ช่วยให้ค้นหาชื่อสินค้าได้ไวขึ้น
     autocomplete_fields = ['product'] 
@@ -498,7 +499,7 @@ class PurchaseItemInline(admin.TabularInline):
     
     get_pending.short_description = "ขาดรับ"
 
-class PurchaseReceiptLogInline(admin.TabularInline):
+class PurchaseReceiptLogInline(UnfoldTabularInline):
     model = PurchaseReceiptLog
     extra = 1
     fields = ('product', 'supplier_invoice', 'quantity_received', 'user', 'notes', 'received_date')
@@ -517,7 +518,7 @@ class PurchaseReceiptLogInline(admin.TabularInline):
                 kwargs["queryset"] = Product.objects.filter(purchaseitem__purchase_order_id=po_id).distinct()
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
-class SalesItemInline(admin.TabularInline):
+class SalesItemInline(UnfoldTabularInline):
     model = SalesItem
     # สำคัญ: ต้องใส่ทั้งสองฟิลด์เพื่อให้ค้นหาและ Tab ได้เลย
     autocomplete_fields = ['barcode_obj', 'product'] 
@@ -552,7 +553,7 @@ class SalesItemInline(admin.TabularInline):
         return "0.00"
     get_total_display.short_description = "ราคารวม"
 
-class SalesDeliveryLogInline(admin.TabularInline):
+class SalesDeliveryLogInline(UnfoldTabularInline):
     model = SalesDeliveryLog
     extra = 1
     fields = ('product','shipping_no', 'quantity_shipped', 'user', 'notes','shipped_date')
@@ -570,7 +571,7 @@ class SalesDeliveryLogInline(admin.TabularInline):
                 kwargs["queryset"] = Product.objects.filter(sales_items__sales_order_id=so_id).distinct()
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
-class ProductionLogInline(admin.TabularInline):
+class ProductionLogInline(UnfoldTabularInline):
     model = ProductionLog
     extra = 1
     fields = ('quantity_finished', 'user','notes', 'finished_date')
@@ -593,7 +594,7 @@ class SupplierAdmin(DocumentLockMixin,admin.ModelAdmin):
     list_display = ('company_name', 'contact_person', 'type')
     inlines = [SupplierProductInline]
 
-class ProductBarcodeAdmin(admin.ModelAdmin):
+class ProductBarcodeAdmin(UnfoldModelAdmin):
     # 🎯 ตัวนี้แหละคือ "หัวใจ" ที่จะแก้ Error E039
     search_fields = ['code', 'product__name','product__tags__name']
     list_display = ('code', 'product', 'conversion_factor', 'unit_name', 'get_forecast_stock')
@@ -1023,7 +1024,7 @@ class SalesOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
     class Media:
         js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
     
-class ProductionMaterialUsageInline(admin.TabularInline):
+class ProductionMaterialUsageInline(UnfoldTabularInline):
     model = ProductionMaterialUsage
     extra = 0
     fields = ['raw_material', 'planned_qty', 'actual_qty_to_use', 'used_so_far']
@@ -1171,7 +1172,7 @@ class BuyPriceRangeFilter(admin.SimpleListFilter):
         return queryset
 
 @admin.register(StockPlanning)
-class StockPlanningAdmin(admin.ModelAdmin):
+class StockPlanningAdmin(UnfoldModelAdmin):
     list_display = ('name', 'category', 'stock_quantity', 'get_pending_in', 'get_pending_out', 'get_pending_prod', 'get_available', 'buy_price', 'get_total_inventory_value')
     list_filter = ('category', 'suppliers', ProductOnlyFilter, BuyPriceRangeFilter)
     search_fields = ('name', 'barcodes__code', 'tags__name')
@@ -1324,7 +1325,7 @@ class StockPlanningAdmin(admin.ModelAdmin):
         js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
 
 @admin.register(ProductCategory)
-class ProductCategoryAdmin(admin.ModelAdmin):
+class ProductCategoryAdmin(UnfoldModelAdmin):
     list_display = ('name',)
     search_fields = ('name',)
     inlines = [ProductInCategoryInline]
@@ -1369,7 +1370,7 @@ class ProductCategoryAdmin(admin.ModelAdmin):
 # Register ProductTag เพื่อให้เมนูโผล่ในหน้า Admin
 # ---------------------------------------------------------
 @admin.register(ProductTag)
-class ProductTagAdmin(admin.ModelAdmin):
+class ProductTagAdmin(UnfoldModelAdmin):
     # แสดงชื่อแท็กและตัวอย่างสีในหน้า List
     list_display = ('display_name_with_count', 'color')
     search_fields = ('name',)
@@ -1816,7 +1817,7 @@ class IncomeReportAdmin(DocumentLockMixin, admin.ModelAdmin):
         js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
 
 #@admin.register(ShipmentPaymentReport)
-class ShipmentPaymentReportAdmin(admin.ModelAdmin):
+class ShipmentPaymentReportAdmin(UnfoldModelAdmin):
     # ✅ โชว์มูลค่าที่ส่ง และวันที่จะได้รับเงินของยอดนั้นๆ
     list_display = ['payment_due_date', 'get_so_number', 'get_customer', 'quantity_shipped', 'get_shipment_value_display', 'get_dc_display','get_rebate_display', 'get_total_with_vat_display']
     search_fields = ['sales_order__so_number', 'sales_order__customer__company_name']
@@ -1895,7 +1896,7 @@ class ShipmentPaymentReportAdmin(admin.ModelAdmin):
         return False
     
 
-class CustomerProductContractInline(admin.TabularInline):
+class CustomerProductContractInline(UnfoldTabularInline):
     model = CustomerProductContract
     # ✅ ตัวนี้แหละที่จะทำให้ "ยิงบาร์โค้ด" ได้
     autocomplete_fields = ['product'] 
@@ -1931,14 +1932,14 @@ class CustomerProductContractAdmin(DocumentLockMixin, admin.ModelAdmin):
     autocomplete_fields = ['customer', 'product', 'product_tag_link']
     
 @admin.register(StockAdjustment)
-class StockAdjustmentAdmin(admin.ModelAdmin):
+class StockAdjustmentAdmin(UnfoldModelAdmin):
     list_display = ['created_at', 'product', 'adjustment_type', 'quantity', 'adjustment_value', 'reason']
     list_filter = ['adjustment_type', 'product']
     autocomplete_fields = ['product']
     search_fields = ['product__name', 'reason']
 
 @admin.register(SalesReport)
-class SalesReportAdmin(admin.ModelAdmin):
+class SalesReportAdmin(UnfoldModelAdmin):
     list_display = (
         'name', 'get_total_qty', 'get_total_revenue', 
         'get_total_cost_buy', 'get_total_cost_bom', 'get_profit_margin'
@@ -2136,7 +2137,7 @@ class SalesReportAdmin(admin.ModelAdmin):
 
 # 2. ตั้งค่า Admin ตัวเดียวจบ
 @admin.register(ShipmentAccounting)
-class ShipmentAccountingAdmin(admin.ModelAdmin):
+class ShipmentAccountingAdmin(UnfoldModelAdmin):
     # ✅ เพิ่ม Action ที่ต้องการให้โชว์แยกกันใน List นี้ครับ
     actions = [
         'confirm_selected_items', 
@@ -2393,7 +2394,7 @@ class ShipmentAccountingAdmin(admin.ModelAdmin):
         js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
 
 @admin.register(InternationalPurchaseTracking)
-class InternationalPurchaseTrackingAdmin(admin.ModelAdmin):
+class InternationalPurchaseTrackingAdmin(UnfoldModelAdmin):
     # ✅ ย่อหน้า (Indent) ต้องตรงกันแบบนี้ครับ สีแดงถึงจะหาย
     list_display = ('po_number', 'supplier', 'status', 'payment_status', 'display_tracking_table','arrived_date')
     list_filter = ('status', 'supplier', 'order_date')
@@ -2512,7 +2513,7 @@ class InternationalPurchaseTrackingAdmin(admin.ModelAdmin):
     def set_closed(self, request, queryset):
         queryset.update(status='Closed')
         
-class ConditionInline(admin.TabularInline):
+class ConditionInline(UnfoldTabularInline):
     model = ContractCondition
     extra = 1
     autocomplete_fields = ['product', 'product_tag_link'] 
@@ -2520,7 +2521,7 @@ class ConditionInline(admin.TabularInline):
     fields = ['type', 'period', 'product', 'product_tag_link', 'method', 'value']
 
 @admin.register(SalesContract)
-class SalesContractAdmin(admin.ModelAdmin):
+class SalesContractAdmin(UnfoldModelAdmin):
     list_display = ('contract_name', 'customer', 'start_date', 'end_date', 'is_active')
     search_fields = ('contract_name', 'customer__company_name')
     autocomplete_fields = ['customer']
@@ -2645,7 +2646,7 @@ class SalesContractAdmin(admin.ModelAdmin):
             msg += f" (ข้าม {skipped_count} รายการ: ซ้ำหรือไม่มีข้อมูล)"
         self.message_user(request, msg)
 
-class RebatePayoutItemInline(admin.TabularInline):
+class RebatePayoutItemInline(UnfoldTabularInline):
     model = RebatePayoutItem
     extra = 0
     can_delete = True
@@ -2671,7 +2672,7 @@ class RebatePayoutItemInline(admin.TabularInline):
 
 
 @admin.register(RebatePayout)
-class RebatePayoutAdmin(admin.ModelAdmin):
+class RebatePayoutAdmin(UnfoldModelAdmin):
     list_display = ('contract', 'period_start', 'period_end', 'payout_date', 'total_sales_amount', 'rebate_amount', 'status', 'ref_invoice')
     list_filter = ('status', 'contract__customer')
     search_fields = ('contract__contract_name', 'contract__customer__company_name', 'ref_invoice')
