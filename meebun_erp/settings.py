@@ -197,13 +197,16 @@ UNFOLD = {
                 "items": [
                     {"title": "ใบสั่งซื้อ (B1)",        "icon": "shopping_cart",  "link": "/admin/stocks/purchaseorder/"},
                     {"title": "ติดตามนำเข้า (B4)",      "icon": "local_shipping", "link": "/admin/stocks/internationalpurchasetracking/"},
+                    {"title": "สรุปรายจ่าย (C2)",        "icon": "summarize",      "link": "/admin/stocks/financereport/"},
                 ],
             },
             {
                 "title": "การขาย",
                 "collapsible": True,
                 "items": [
-                    {"title": "ใบสั่งขาย (C1)",         "icon": "receipt_long",   "link": "/admin/stocks/salesorder/"},
+                    {"title": "ใบสั่งขาย (B2)",         "icon": "receipt_long",   "link": "/admin/stocks/salesorder/"},
+                    {"title": "สรุปรายรับ (C3)",         "icon": "payments",       "link": "/admin/stocks/incomereport/"},
+                    {"title": "รายงานยอดขาย (C5)",       "icon": "bar_chart",      "link": "/admin/stocks/salesreport/"},
                     {"title": "บัญชี DC/Rebate (C6)",   "icon": "account_balance","link": "/admin/stocks/shipmentaccounting/"},
                     {"title": "สรุปสัญญา Rebate (C7)",  "icon": "handshake",      "link": "/admin/stocks/rebatepayout/"},
                 ],
@@ -217,10 +220,11 @@ UNFOLD = {
                 ],
             },
             {
-                "title": "การผลิต",
+                "title": "วางแผนและผลิต",
                 "collapsible": True,
                 "items": [
-                    {"title": "ใบสั่งผลิต",              "icon": "factory",        "link": "/admin/stocks/productionorder/"},
+                    {"title": "ตารางวางแผนสต็อก (C1)", "icon": "event_note",     "link": "/admin/stocks/stockplanning/"},
+                    {"title": "ใบสั่งผลิต (B3)",        "icon": "factory",        "link": "/admin/stocks/productionorder/"},
                     {"title": "สูตรการผลิต (A5)",        "icon": "science",        "link": "/admin/stocks/bom/"},
                 ],
             },
