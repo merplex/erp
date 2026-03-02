@@ -1,0 +1,62 @@
+{% load i18n %}
+
+<div id="changelist-actions" class="actions mx-1 {% if not cl.model_admin.list_fullwidth %}mx-auto{% endif %}" x-bind:style="'width: ' + changeListWidth + 'px'">
+    <div style="background:#fff; border:1px solid #d1d5db; box-shadow:0 2px 8px rgba(0,0,0,0.12); border-radius:6px; display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:8px 12px; margin:0 12px;">
+        {% block actions %}
+            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;" x-data="{action: '', selectAcross: 0}">
+                {% block actions-form %}
+                    {% for field in action_form %}
+                        {% if field.label %}
+                            <label style="color:#374151; font-size:13px; font-weight:500;">
+                                {{ field.label }}
+                        {% endif %}
+
+                        {{ field }}
+
+                        {% if field.label %}
+                            </label>
+                        {% endif %}
+                    {% endfor %}
+                {% endblock %}
+
+                {% block actions-submit %}
+                    <button type="submit" name="index" value="{{ action_index|default:0 }}"
+                        title="{% translate "Run the selected action" %}"
+                        style="background:#2563eb; color:#fff; border:none; border-radius:4px; padding:5px 14px; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap;">
+                        {% trans "Run" %}
+                    </button>
+                {% endblock %}
+            </div>
+
+            {% block actions-counter %}
+                {% if actions_selection_counter %}
+                    <div style="color:#6b7280; font-size:13px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                        <span class="action-counter" data-actions-icnt="{{ cl.result_list|length }}">
+                            {{ selection_note }}
+                        </span>
+
+                        {% if cl.result_count != cl.result_list|length %}
+                            <span class="all hidden">{{ selection_note_all }}</span>
+
+                            {% if not cl.model_admin.list_disable_select_all %}
+                                <div>
+                                    <span class="question hidden">
+                                        <a href="#" style="background:#2563eb; color:#fff; padding:3px 10px; border-radius:4px; font-size:12px; font-weight:500; text-decoration:none;"
+                                            title="{% translate "Click here to select the objects across all pages" %}">
+                                            {% blocktranslate with cl.result_count as total_count %}Select all {{ total_count }} {{ module_name }}{% endblocktranslate %}
+                                        </a>
+                                    </span>
+                                    <span class="clear hidden">
+                                        <a href="#" style="color:#374151; font-size:12px; text-decoration:underline;">
+                                            {% translate "Clear selection" %}
+                                        </a>
+                                    </span>
+                                </div>
+                            {% endif %}
+                        {% endif %}
+                    </div>
+                {% endif %}
+            {% endblock %}
+        {% endblock %}
+    </div>
+</div>

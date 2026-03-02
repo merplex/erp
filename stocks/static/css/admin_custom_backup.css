@@ -1,0 +1,8 @@
+/* Checkbox checkmark สีน้ำเงิน */
+input[type="checkbox"].action-select,
+input[type="checkbox"]#action-toggle {
+    accent-color: #2563eb;
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
