@@ -86,10 +86,13 @@ input[type="checkbox"]#action-toggle {
 
 /* field (select/input) ใน wrapper ยืดเต็มที่เหลือ */
 .related-widget-wrapper > select,
-.related-widget-wrapper > input,
-.related-widget-wrapper > .select2-container {
+.related-widget-wrapper > input {
     flex: 1 1 auto !important;
     min-width: 0 !important;
+}
+.related-widget-wrapper > .select2-container {
+    flex: 1 1 auto !important;
+    min-width: 220px !important;
 }
 
 /* icon links ไม่ยืด ไม่หด */
