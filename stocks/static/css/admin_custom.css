@@ -10,6 +10,7 @@ input[type="checkbox"]#action-toggle {
 /* ── Autocomplete (Select2) ให้เต็มความกว้าง ────────── */
 .select2-container {
     width: 100% !important;
+    min-width: 280px !important;
 }
 .select2-container .select2-selection--single {
     min-height: 36px !important;
@@ -18,14 +19,19 @@ input[type="checkbox"]#action-toggle {
     align-items: center !important;
     border: 1px solid #9ca3af !important;
     border-radius: 4px !important;
-    padding: 0 8px !important;
+    padding: 0 4px 0 8px !important;
 }
 .select2-container .select2-selection--single .select2-selection__rendered {
     line-height: normal !important;
-    padding: 4px 0 !important;
+    padding: 4px 4px 4px 0 !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    flex: 1 !important;
 }
 .select2-container .select2-selection--single .select2-selection__arrow {
     height: 100% !important;
+    width: 20px !important;
+    flex-shrink: 0 !important;
 }
 .select2-dropdown {
     border: 1px solid #9ca3af !important;
