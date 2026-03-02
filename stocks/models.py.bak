@@ -1,7 +1,7 @@
 from decimal import Decimal
 from django.db import models
 from django.db.models import Sum
-from django.db.models.signals import post_delete
+from django.db.models.signals import post_delete, post_save
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 from django.utils.safestring import mark_safe
@@ -12,6 +12,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.dispatch import receiver
 import random # ✅ เพิ่มไว้บนสุดของไฟล์
 import datetime
+import re
 
 class DocumentLock(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -195,7 +196,7 @@ class ProductBarcode(models.Model):
     def __str__(self):
         return self.code
     
-    class Meta: verbose_name_plural = "T4. หน่วยขายตามบาร์โค้ด"
+    class Meta: verbose_name_plural = "T5. หน่วยขายตามบาร์โค้ด"
 
 class ProductSupplier(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='product_suppliers')
@@ -1089,7 +1090,7 @@ class StockAdjustment(models.Model):
         super().save(*args, **kwargs)
 
     class Meta:
-        verbose_name_plural = "T3. บันทึกการปรับสต็อก"
+        verbose_name_plural = "T4. บันทึกการปรับสต็อก"
 
 class SalesReport(Product): # ใช้ Product เป็นฐาน
     class Meta:
@@ -1196,12 +1197,32 @@ class SalesContract(models.Model):
     
     next_payout_date = models.DateField(null=True, blank=True, verbose_name="วันนัดจ่ายรอบถัดไป (ระบบคำนวณให้)")
 
+    def save(self, *args, **kwargs):
+        # 🤖 คำนวณวันนัดจ่ายรอบถัดไปอัตโนมัติ
+        if not self.next_payout_date:
+            today = timezone.now().date()
+
+            if self.payout_trigger == 'END_OF_CONTRACT':
+                target_date = self.end_date
+            else:
+                base_date = max(self.start_date, today)
+                target_date = base_date.replace(day=min(self.payout_day, 28))
+
+            if self.payout_delay == 'NEXT_PERIOD':
+                next_month = target_date.month % 12 + 1
+                year = target_date.year + (target_date.month // 12)
+                target_date = target_date.replace(year=year, month=next_month)
+
+            self.next_payout_date = target_date
+
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.contract_name} - {self.customer.company_name}"
-    
+
     class Meta:
-        verbose_name = "C7. สัญญาการขาย"
-        verbose_name_plural = "C7. สัญญาการขาย"
+        verbose_name = "T3. สัญญาการขาย"
+        verbose_name_plural = "T3. สัญญาการขาย"
 
 class ContractCondition(models.Model):
     TYPE_CHOICES = [
@@ -1231,36 +1252,9 @@ class ContractCondition(models.Model):
     method = models.CharField(max_length=20, choices=CALC_METHOD, verbose_name="วิธีคำนวณ")
     value = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="ค่าที่ระบุ (% หรือ บาท)")
 
-    def save(self, *args, **kwargs):
-        # 🤖 หุ่นยนต์คำนวณวันจ่ายเงิน (Auto Payout Date Logic)
-        if not self.next_payout_date:
-            today = timezone.now().date()
-            
-            # 1. กรณี: จ่ายเมื่อจบสัญญา
-            if self.payout_trigger == 'END_OF_CONTRACT':
-                target_date = self.end_date
-            
-            # 2. กรณี: จ่ายตามรอบ (เดือน/ไตรมาส)
-            else:
-                # หาฐานวันจาก วันเริ่มต้นสัญญา หรือ วันนี้ (เลือกอันที่มาทีหลัง)
-                base_date = max(self.start_date, today)
-                # ตั้งเป้าเป็นวันที่ระบุในเดือนนั้นๆ
-                target_date = base_date.replace(day=min(self.payout_day, 28))
-
-            # 3. จัดการเรื่อง "จังหวะการโอนเงิน" (Delay)
-            if self.payout_delay == 'NEXT_PERIOD':
-                # เขยิบไปเดือนหน้า
-                next_month = target_date.month % 12 + 1
-                year = target_date.year + (target_date.month // 12)
-                target_date = target_date.replace(year=year, month=next_month)
-            
-            self.next_payout_date = target_date
-
-        super().save(*args, **kwargs)
-
     class Meta:
-        verbose_name = "C7. สัญญาการขาย"
-        verbose_name_plural = "C7. สัญญาการขาย"
+        verbose_name = "เงื่อนไขสัญญา"
+        verbose_name_plural = "เงื่อนไขสัญญา"
 
 class RebatePayout(models.Model):
     contract = models.ForeignKey(SalesContract, on_delete=models.CASCADE)
@@ -1274,5 +1268,56 @@ class RebatePayout(models.Model):
     status = models.CharField(max_length=20, choices=[('PENDING', 'รอจ่าย'), ('PAID', 'จ่ายแล้ว')], default='PENDING')
     ref_invoice = models.CharField(max_length=100, blank=True, verbose_name="เลขที่ใบลดหนี้/ใบจ่ายเงิน")
 
+    def recalculate_totals(self):
+        """คำนวณยอดรวมใหม่จาก RebatePayoutItem ที่เชื่อมอยู่"""
+        from django.db.models import Sum
+        totals = self.items.aggregate(
+            total_sales=Sum('delivery__shipment_value'),
+            total_rebate=Sum('delivery__rebate_amount'),
+        )
+        RebatePayout.objects.filter(pk=self.pk).update(
+            total_sales_amount=totals['total_sales'] or 0,
+            rebate_amount=totals['total_rebate'] or 0,
+        )
+
+    def __str__(self):
+        return f"{self.contract} | {self.period_start} – {self.period_end}"
+
     class Meta:
-        verbose_name = "ประวัติการจ่ายเงินคืน (Rebate Payout)"
+        verbose_name = "สรุปสัญญา Rebate"
+        verbose_name_plural = "C7. สรุปสัญญา Rebate"
+
+
+class RebatePayoutItem(models.Model):
+    """รายการส่งสินค้าที่นับในรอบการคำนวณ Rebate นี้"""
+    payout = models.ForeignKey(
+        RebatePayout, on_delete=models.CASCADE,
+        related_name='items', verbose_name="ใบสรุป Rebate"
+    )
+    delivery = models.ForeignKey(
+        SalesDeliveryLog, on_delete=models.PROTECT,
+        related_name='payout_items', verbose_name="รายการส่งของ"
+    )
+    shipped_date = models.DateTimeField(verbose_name="วันที่ส่งของ")
+
+    def save(self, *args, **kwargs):
+        # ซิงค์วันที่กลับไปที่ SalesDeliveryLog จริง
+        SalesDeliveryLog.objects.filter(pk=self.delivery_id).update(shipped_date=self.shipped_date)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.delivery.product} | {self.shipped_date:%d/%m/%Y}"
+
+    class Meta:
+        ordering = ['shipped_date']
+        verbose_name = "รายการส่งของในรอบ Rebate"
+
+
+@receiver(post_save, sender=RebatePayoutItem)
+@receiver(post_delete, sender=RebatePayoutItem)
+def recalc_payout_on_item_change(sender, instance, **kwargs):
+    """เมื่อ item เปลี่ยน (เพิ่ม/แก้/ลบ) ให้คำนวณยอดรวมใน RebatePayout ใหม่"""
+    try:
+        instance.payout.recalculate_totals()
+    except RebatePayout.DoesNotExist:
+        pass
