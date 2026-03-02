@@ -1,7 +1,7 @@
 from decimal import Decimal
 from django.db import models
 from django.db.models import Sum
-from django.db.models.signals import post_delete
+from django.db.models.signals import post_delete, post_save
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 from django.utils.safestring import mark_safe
@@ -1275,6 +1275,56 @@ class RebatePayout(models.Model):
     status = models.CharField(max_length=20, choices=[('PENDING', 'รอจ่าย'), ('PAID', 'จ่ายแล้ว')], default='PENDING')
     ref_invoice = models.CharField(max_length=100, blank=True, verbose_name="เลขที่ใบลดหนี้/ใบจ่ายเงิน")
 
+    def recalculate_totals(self):
+        """คำนวณยอดรวมใหม่จาก RebatePayoutItem ที่เชื่อมอยู่"""
+        from django.db.models import Sum
+        totals = self.items.aggregate(
+            total_sales=Sum('delivery__shipment_value'),
+            total_rebate=Sum('delivery__rebate_amount'),
+        )
+        RebatePayout.objects.filter(pk=self.pk).update(
+            total_sales_amount=totals['total_sales'] or 0,
+            rebate_amount=totals['total_rebate'] or 0,
+        )
+
+    def __str__(self):
+        return f"{self.contract} | {self.period_start} – {self.period_end}"
+
     class Meta:
         verbose_name = "สรุปสัญญา Rebate"
         verbose_name_plural = "C7. สรุปสัญญา Rebate"
+
+
+class RebatePayoutItem(models.Model):
+    """รายการส่งสินค้าที่นับในรอบการคำนวณ Rebate นี้"""
+    payout = models.ForeignKey(
+        RebatePayout, on_delete=models.CASCADE,
+        related_name='items', verbose_name="ใบสรุป Rebate"
+    )
+    delivery = models.ForeignKey(
+        SalesDeliveryLog, on_delete=models.PROTECT,
+        related_name='payout_items', verbose_name="รายการส่งของ"
+    )
+    shipped_date = models.DateTimeField(verbose_name="วันที่ส่งของ")
+
+    def save(self, *args, **kwargs):
+        # ซิงค์วันที่กลับไปที่ SalesDeliveryLog จริง
+        SalesDeliveryLog.objects.filter(pk=self.delivery_id).update(shipped_date=self.shipped_date)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.delivery.product} | {self.shipped_date:%d/%m/%Y}"
+
+    class Meta:
+        ordering = ['shipped_date']
+        verbose_name = "รายการส่งของในรอบ Rebate"
+
+
+@receiver(post_save, sender=RebatePayoutItem)
+@receiver(post_delete, sender=RebatePayoutItem)
+def recalc_payout_on_item_change(sender, instance, **kwargs):
+    """เมื่อ item เปลี่ยน (เพิ่ม/แก้/ลบ) ให้คำนวณยอดรวมใน RebatePayout ใหม่"""
+    try:
+        instance.payout.recalculate_totals()
+    except RebatePayout.DoesNotExist:
+        pass

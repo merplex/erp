@@ -2538,6 +2538,31 @@ class SalesContractAdmin(admin.ModelAdmin):
             pass
         self.message_user(request, "สร้างรายการรอจ่ายเรียบร้อยแล้ว ตรวจสอบได้ที่เมนู Payout")
 
+class RebatePayoutItemInline(admin.TabularInline):
+    model = RebatePayoutItem
+    extra = 0
+    can_delete = True
+    fields = ('get_product', 'shipped_date', 'get_qty', 'get_value', 'get_rebate')
+    readonly_fields = ('get_product', 'get_qty', 'get_value', 'get_rebate')
+    ordering = ('shipped_date',)
+
+    def get_product(self, obj):
+        return obj.delivery.product
+    get_product.short_description = "สินค้า"
+
+    def get_qty(self, obj):
+        return obj.delivery.quantity_shipped
+    get_qty.short_description = "จำนวน"
+
+    def get_value(self, obj):
+        return f"{obj.delivery.shipment_value:,.2f}"
+    get_value.short_description = "มูลค่า (บาท)"
+
+    def get_rebate(self, obj):
+        return f"{obj.delivery.rebate_amount:,.2f}"
+    get_rebate.short_description = "Rebate (บาท)"
+
+
 @admin.register(RebatePayout)
 class RebatePayoutAdmin(admin.ModelAdmin):
     list_display = ('contract', 'period_start', 'period_end', 'payout_date', 'total_sales_amount', 'rebate_amount', 'status', 'ref_invoice')
@@ -2546,3 +2571,4 @@ class RebatePayoutAdmin(admin.ModelAdmin):
     readonly_fields = ('contract', 'period_start', 'period_end', 'total_sales_amount', 'rebate_amount')
     list_display_links = ('contract',)
     ordering = ('-payout_date',)
+    inlines = [RebatePayoutItemInline]
