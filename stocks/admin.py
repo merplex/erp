@@ -613,6 +613,12 @@ class PurchaseReceiptLogInline(UnfoldTabularInline):
         models.CharField: {'widget': TextInput(attrs={'style': 'width: 120px;', 'placeholder': 'เลขใบส่งของ'})},
         models.TextField: {'widget': TextInput(attrs={'style': 'width: 200px;', 'placeholder': 'หมายเหตุ'})},
     }
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_foreignkey(db_field, request, **kwargs)
+        if db_field.name == 'product':
+            formfield.widget.attrs['style'] = 'width: 300px;'
+        return formfield
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "product":
             resolved = request.resolver_match
@@ -666,6 +672,12 @@ class SalesDeliveryLogInline(UnfoldTabularInline):
         models.CharField: {'widget': TextInput(attrs={'style': 'width: 120px;', 'placeholder': 'เลขใบส่งของ'})},
         models.TextField: {'widget': TextInput(attrs={'style': 'width: 200px;', 'placeholder': 'หมายเหตุ'})},
     }
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_foreignkey(db_field, request, **kwargs)
+        if db_field.name == 'product':
+            formfield.widget.attrs['style'] = 'width: 300px;'
+        return formfield
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "product":
