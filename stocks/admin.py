@@ -690,7 +690,7 @@ class SalesItemInline(UnfoldTabularInline):
 class SalesDeliveryLogInline(UnfoldTabularInline):
     model = SalesDeliveryLog
     extra = 1
-    fields = ('product','shipping_no', 'quantity_shipped', 'user', 'notes','shipped_date')
+    fields = ('barcode_obj', 'shipping_no', 'quantity_shipped', 'user', 'notes', 'shipped_date')
     readonly_fields = ('user',)
     formfield_overrides = {
         models.CharField: {'widget': TextInput(attrs={'style': 'width: 120px;', 'placeholder': 'เลขใบส่งของ'})},
@@ -698,24 +698,24 @@ class SalesDeliveryLogInline(UnfoldTabularInline):
     }
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
-        if db_field.name == "product":
+        if db_field.name == "barcode_obj":
             resolved = request.resolver_match
             if resolved and 'object_id' in resolved.kwargs:
                 so_id = resolved.kwargs['object_id']
                 ordered_ids = list(
                     SalesItem.objects.filter(sales_order_id=so_id)
-                    .order_by('id').exclude(product=None)
-                    .values_list('product_id', flat=True)
+                    .order_by('id').exclude(barcode_obj=None)
+                    .values_list('barcode_obj_id', flat=True)
                 )
                 seen = set()
                 unique_ids = [x for x in ordered_ids if not (x in seen or seen.add(x))]
                 if unique_ids:
                     preserved = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(unique_ids)])
-                    kwargs["queryset"] = Product.objects.filter(pk__in=unique_ids).order_by(preserved)
+                    kwargs["queryset"] = ProductBarcode.objects.filter(pk__in=unique_ids).order_by(preserved)
                 else:
-                    kwargs["queryset"] = Product.objects.none()
+                    kwargs["queryset"] = ProductBarcode.objects.none()
         formfield = super().formfield_for_foreignkey(db_field, request, **kwargs)
-        if db_field.name == 'product':
+        if db_field.name == 'barcode_obj':
             formfield.widget.attrs['style'] = 'width: 300px;'
         return formfield
 
@@ -958,8 +958,9 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin
                         items_data[pid] = {'name': str(item.product), 'base_remaining': remaining}
                     else:
                         items_data[pid]['base_remaining'] += remaining
-            smart_data = json.dumps({'type': 'receipt', 'form_prefix': 'purchasereceiptlog_set',
-                                     'qty_field': 'quantity_received', 'items': items_data})
+            smart_data = json.dumps({'type': 'receipt', 'form_prefix': 'receipt_logs',
+                                     'select_field': 'product', 'qty_field': 'quantity_received',
+                                     'items': items_data})
             inline_script = f'<script>window.SMART_INLINE_DATA={smart_data};</script>'
             response.render()
             response.content = response.content.replace(b'</body>', inline_script.encode() + b'</body>', 1)
@@ -1030,18 +1031,20 @@ class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
         context['title'] = mark_safe(f"{context['title']} {script}")
         response = super().render_change_form(request, context, add, change, form_url, obj)
         if obj and change:
-            items = SalesItem.objects.filter(sales_order=obj).order_by('id').select_related('product')
+            items = SalesItem.objects.filter(sales_order=obj).order_by('id').select_related('product', 'barcode_obj')
             items_data = {}
             for item in items:
-                if item.product_id:
-                    pid = str(item.product_id)
+                if item.barcode_obj_id:
+                    key = str(item.barcode_obj_id)
+                    name = f"{item.barcode_obj.code} — {item.product.name}"
                     remaining = max(0, item.quantity_ordered - item.quantity_shipped)
-                    if pid not in items_data:
-                        items_data[pid] = {'name': str(item.product), 'base_remaining': remaining}
+                    if key not in items_data:
+                        items_data[key] = {'name': name, 'base_remaining': remaining}
                     else:
-                        items_data[pid]['base_remaining'] += remaining
-            smart_data = json.dumps({'type': 'delivery', 'form_prefix': 'salesdeliverylog_set',
-                                     'qty_field': 'quantity_shipped', 'items': items_data})
+                        items_data[key]['base_remaining'] += remaining
+            smart_data = json.dumps({'type': 'delivery', 'form_prefix': 'delivery_logs',
+                                     'select_field': 'barcode_obj', 'qty_field': 'quantity_shipped',
+                                     'items': items_data})
             inline_script = f'<script>window.SMART_INLINE_DATA={smart_data};</script>'
             response.render()
             response.content = response.content.replace(b'</body>', inline_script.encode() + b'</body>', 1)

@@ -767,6 +767,7 @@ class SalesItem(models.Model):
 
 class SalesDeliveryLog(models.Model):
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='delivery_logs')
+    barcode_obj = models.ForeignKey('ProductBarcode', null=True, blank=True, on_delete=models.SET_NULL, verbose_name="บาร์โค้ด/แพ็คเกจ")
     product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้าที่ส่ง")
     quantity_shipped = models.PositiveIntegerField(verbose_name="จำนวน")
     shipping_no = models.CharField(max_length=100, blank=True, verbose_name="เลขใบขนส่ง/Invoice ของเรา")
@@ -789,6 +790,9 @@ class SalesDeliveryLog(models.Model):
 
     def save(self, *args, **kwargs):
         is_new = self.pk is None
+        # auto-derive product from barcode
+        if self.barcode_obj_id and not self.product_id:
+            self.product = self.barcode_obj.product
         if is_new:
             # --- 🚀 [LOGIC เดิมของเปรม] ---
             # 1. สมองกล: ลดสต็อกจริง
@@ -796,7 +800,11 @@ class SalesDeliveryLog(models.Model):
             self.product.save()
 
             # 2. สมองกล: สะสมยอดส่งในใบ SO
-            item = SalesItem.objects.get(sales_order=self.sales_order, product=self.product)
+            qs = SalesItem.objects.filter(sales_order=self.sales_order, product=self.product)
+            if self.barcode_obj_id:
+                item = qs.filter(barcode_obj=self.barcode_obj).first() or qs.first()
+            else:
+                item = qs.first()
             item.quantity_shipped += self.quantity_shipped
             item.save()
             
@@ -868,9 +876,14 @@ def handle_delivery_deletion(sender, instance, **kwargs):
     instance.product.save()
     # 2. หักยอดส่งสะสมใน SO
     try:
-        item = SalesItem.objects.get(sales_order=instance.sales_order, product=instance.product)
-        item.quantity_shipped -= instance.quantity_shipped
-        item.save()
+        qs = SalesItem.objects.filter(sales_order=instance.sales_order, product=instance.product)
+        if instance.barcode_obj_id:
+            item = qs.filter(barcode_obj=instance.barcode_obj).first() or qs.first()
+        else:
+            item = qs.first()
+        if item:
+            item.quantity_shipped -= instance.quantity_shipped
+            item.save()
     except: pass
     
     # 🤖 ออโต้สถานะ: ถ้าลบจนไม่เหลือประวัติส่งเลย ให้กลับไปเป็น 'ยืนยัน'
