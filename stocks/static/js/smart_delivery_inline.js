@@ -1,13 +1,10 @@
 (function () {
   'use strict';
 
-  // !! ต้องตรวจสอบ SMART_INLINE_DATA ใน DOMContentLoaded เท่านั้น !!
-  // JS โหลดจาก <head> → ถ้าตรวจตอนนี้จะได้ undefined เพราะ body ยัง render ไม่ครบ
-
   var formPrefix, selectField, qtyField, itemsData;
   var bound = new WeakSet();
   var idxPattern;
-  var snapshots = new WeakMap(); // select → [{value, text}, ...]
+  var snapshots = new WeakMap();
 
   // ── helpers ──────────────────────────────────────────────
 
@@ -53,29 +50,34 @@
     return totals;
   }
 
-  // ── snapshot (ถ่าย option ดั้งเดิมก่อน modify ใดๆ) ───────
+  // ── snapshot ──────────────────────────────────────────────
 
   function snapshotOptions(sel) {
-    if (snapshots.has(sel)) return; // snapshot ครั้งเดียว
+    if (snapshots.has(sel)) return;
     var opts = [];
     for (var i = 0; i < sel.options.length; i++) {
       opts.push({ value: sel.options[i].value, text: sel.options[i].text });
     }
     snapshots.set(sel, opts);
+    console.log('[SmartInline] snapshot', sel.name, '→', opts.length, 'options');
   }
 
   // ── core update ───────────────────────────────────────────
-  // แทนที่จะ display:none (ไม่ทำงานใน Select2)
-  // → ลบ option ออก DOM จริงๆ แล้ว trigger Select2 refresh
 
-  function updateDropdowns() {
+  function updateDropdowns(fromEvent) {
     var $ = window.django && window.django.jQuery;
     getAllSelects().forEach(function (sel) {
       if (!isNewRow(sel)) return;
       var currentKey = sel.value;
       var consumed   = getConsumed(sel);
       var opts = snapshots.get(sel);
-      if (!opts) return;
+
+      if (!opts) {
+        console.warn('[SmartInline] NO SNAPSHOT for', sel.name, '— skipping');
+        return;
+      }
+
+      var removedCount = 0;
 
       // Rebuild options จาก snapshot
       while (sel.options.length > 0) sel.remove(0);
@@ -83,23 +85,31 @@
       opts.forEach(function (o) {
         var key = o.value;
         if (!key) {
-          // blank option — แสดงเสมอ
           sel.add(new Option(o.text, ''));
           return;
         }
         var info = itemsData[key];
         if (!info) {
-          // ไม่อยู่ใน items_data — แสดงตามเดิม
           sel.add(new Option(o.text, key, false, key === currentKey));
           return;
         }
         var effective = info.base_remaining - (consumed[key] || 0);
-        if (effective <= 0 && key !== currentKey) return; // ซ่อน (ไม่ add)
+        if (effective <= 0 && key !== currentKey) {
+          removedCount++;
+          return; // ซ่อน
+        }
         var text = effective > 0
           ? info.name + ' (\u0e40\u0e2b\u0e25\u0e37\u0e2d ' + effective + ')'
           : info.name + ' \u2713 \u0e04\u0e23\u0e1a';
         sel.add(new Option(text, key, false, key === currentKey));
       });
+
+      if (fromEvent) {
+        console.log('[SmartInline] update', sel.name,
+          '| currentKey:', currentKey,
+          '| consumed:', JSON.stringify(consumed),
+          '| removed:', removedCount);
+      }
 
       // Trigger Select2 refresh ถ้าใช้อยู่
       if ($ && $(sel).data('select2')) {
@@ -111,19 +121,24 @@
   // ── binding ───────────────────────────────────────────────
 
   function bindSelect(sel) {
-    snapshotOptions(sel); // snapshot ก่อนเสมอ (ก่อน modify ใดๆ)
+    snapshotOptions(sel);
     if (bound.has(sel)) return;
     bound.add(sel);
-    sel.addEventListener('change', updateDropdowns);
+    sel.addEventListener('change', function () { updateDropdowns(true); });
 
     var idx = getRowIndex(sel);
     if (idx !== null) {
       var inp = document.querySelector(
         'input[name="' + formPrefix + '-' + idx + '-' + qtyField + '"]'
       );
-      if (inp && !bound.has(inp)) {
-        bound.add(inp);
-        inp.addEventListener('input', updateDropdowns);
+      if (inp) {
+        console.log('[SmartInline] bound qty input:', inp.name);
+        if (!bound.has(inp)) {
+          bound.add(inp);
+          inp.addEventListener('input', function () { updateDropdowns(true); });
+        }
+      } else {
+        console.warn('[SmartInline] qty input NOT FOUND:', formPrefix + '-' + idx + '-' + qtyField);
       }
     }
   }
@@ -151,19 +166,17 @@
 
     console.log('[SmartInline] ready prefix=' + formPrefix + ' selects=' + getAllSelects().length, itemsData);
 
-    // เมื่อกด "Add another"
     document.addEventListener('formset:added', function () {
-      setTimeout(function () { bindAll(); updateDropdowns(); }, 50);
+      setTimeout(function () { bindAll(); updateDropdowns(true); }, 50);
     });
 
-    // polling fallback
     setInterval(function () {
       bindAll();
-      updateDropdowns();
+      updateDropdowns(false);
     }, 500);
 
     bindAll();
-    updateDropdowns();
+    updateDropdowns(true);
   }
 
   if (document.readyState === 'loading') {

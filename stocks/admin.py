@@ -702,13 +702,22 @@ class SalesDeliveryLogInline(UnfoldTabularInline):
             resolved = request.resolver_match
             if resolved and 'object_id' in resolved.kwargs:
                 so_id = resolved.kwargs['object_id']
+                # คำนวณ remaining ต่อบาร์โค้ด (กรองทิ้งบาร์โค้ดที่ส่งครบแล้ว)
+                remaining_map = {}
+                for item in SalesItem.objects.filter(sales_order_id=so_id).exclude(barcode_obj=None):
+                    bid = item.barcode_obj_id
+                    rem = max(0, item.quantity_ordered - item.quantity_shipped)
+                    remaining_map[bid] = remaining_map.get(bid, 0) + rem
                 ordered_ids = list(
                     SalesItem.objects.filter(sales_order_id=so_id)
                     .order_by('id').exclude(barcode_obj=None)
                     .values_list('barcode_obj_id', flat=True)
                 )
                 seen = set()
-                unique_ids = [x for x in ordered_ids if not (x in seen or seen.add(x))]
+                # เอาเฉพาะบาร์โค้ดที่ยังมี remaining > 0
+                unique_ids = [x for x in ordered_ids
+                              if not (x in seen or seen.add(x))
+                              and remaining_map.get(x, 0) > 0]
                 if unique_ids:
                     preserved = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(unique_ids)])
                     kwargs["queryset"] = ProductBarcode.objects.filter(pk__in=unique_ids).order_by(preserved)
