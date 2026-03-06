@@ -2,13 +2,18 @@
   'use strict';
 
   var data = window.SMART_INLINE_DATA;
-  if (!data) return;
+  if (!data) {
+    console.log('[SmartInline] no SMART_INLINE_DATA, skipping');
+    return;
+  }
 
   var formPrefix  = data.form_prefix;
   var selectField = data.select_field || 'product';
   var qtyField    = data.qty_field;
   var itemsData   = data.items;
   var bound = new WeakSet();
+
+  console.log('[SmartInline] init prefix=' + formPrefix + ' field=' + selectField, itemsData);
 
   var idxPattern = new RegExp('-([0-9]+)-' + selectField + '$');
 
@@ -59,7 +64,8 @@
   // ── core update ───────────────────────────────────────────
 
   function updateDropdowns() {
-    getAllSelects().forEach(function (sel) {
+    var sels = getAllSelects();
+    sels.forEach(function (sel) {
       if (!isNewRow(sel)) return;
       var currentKey = sel.value;
       var consumed   = getConsumed(sel);
@@ -106,14 +112,14 @@
     });
   }
 
-  // ── detect new rows ───────────────────────────────────────
+  // ── detect new rows (3 methods) ───────────────────────────
 
-  // Primary: Django/Unfold fires formset:added
-  document.addEventListener('formset:added', function (e) {
+  // 1. Django formset:added event
+  document.addEventListener('formset:added', function () {
     setTimeout(function () { bindAll(); updateDropdowns(); }, 0);
   });
 
-  // Fallback: MutationObserver (debounced) — handles Unfold override
+  // 2. MutationObserver (debounced)
   var debounceTimer;
   var observer = new MutationObserver(function () {
     clearTimeout(debounceTimer);
@@ -123,18 +129,20 @@
     }, 80);
   });
 
-  // Observe the inline group container, or body as last resort
-  function startObserver() {
-    var container = document.getElementById(formPrefix + '-group') || document.body;
-    observer.observe(container, { childList: true, subtree: true });
-  }
+  // 3. Polling every 500ms (guaranteed fallback)
+  setInterval(function () {
+    bindAll();
+    updateDropdowns();
+  }, 500);
 
   // ── init ──────────────────────────────────────────────────
 
   function init() {
+    var container = document.getElementById(formPrefix + '-group') || document.body;
+    observer.observe(container, { childList: true, subtree: true });
     bindAll();
     updateDropdowns();
-    startObserver();
+    console.log('[SmartInline] ready, selects found=' + getAllSelects().length);
   }
 
   if (document.readyState === 'loading') {

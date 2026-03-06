@@ -945,8 +945,7 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin
             </script>
         """)
         # ✅ เปลี่ยนจาก help_text มาเป็นฉีดที่ Title แทน ปุ่มจะขึ้นแน่นอน
-        context['title'] = mark_safe(f"{context['title']} {script}")
-        response = super().render_change_form(request, context, add, change, form_url, obj)
+        extra = ''
         if obj and change:
             items = PurchaseItem.objects.filter(purchase_order=obj).order_by('id').select_related('product')
             items_data = {}
@@ -958,13 +957,12 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin
                         items_data[pid] = {'name': str(item.product), 'base_remaining': remaining}
                     else:
                         items_data[pid]['base_remaining'] += remaining
-            smart_data = json.dumps({'type': 'receipt', 'form_prefix': 'receipt_logs',
-                                     'select_field': 'product', 'qty_field': 'quantity_received',
-                                     'items': items_data})
-            inline_script = f'<script>window.SMART_INLINE_DATA={smart_data};</script>'
-            response.render()
-            response.content = response.content.replace(b'</body>', inline_script.encode() + b'</body>', 1)
-        return response
+            safe_json = json.dumps({'type': 'receipt', 'form_prefix': 'receipt_logs',
+                                    'select_field': 'product', 'qty_field': 'quantity_received',
+                                    'items': items_data}).replace('</', '<\\/')
+            extra = f'<script>window.SMART_INLINE_DATA={safe_json};</script>'
+        context['title'] = mark_safe(f"{context['title']} {script} {extra}")
+        return super().render_change_form(request, context, add, change, form_url, obj)
 
     # ✅ แก้ไขตรงนี้: เพื่อให้บันทึก PurchaseReceiptLog ได้
     # ✅ ปรับโครงสร้างให้เหมือน SalesOrderAdmin เป๊ะๆ
@@ -1028,27 +1026,25 @@ class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
                 });
             </script>
         """)
-        context['title'] = mark_safe(f"{context['title']} {script}")
-        response = super().render_change_form(request, context, add, change, form_url, obj)
+        extra = ''
         if obj and change:
             items = SalesItem.objects.filter(sales_order=obj).order_by('id').select_related('product', 'barcode_obj')
             items_data = {}
             for item in items:
                 if item.barcode_obj_id:
                     key = str(item.barcode_obj_id)
-                    name = f"{item.barcode_obj.code} — {item.product.name}"
+                    name = f"{item.barcode_obj.code} \u2014 {item.product.name}"
                     remaining = max(0, item.quantity_ordered - item.quantity_shipped)
                     if key not in items_data:
                         items_data[key] = {'name': name, 'base_remaining': remaining}
                     else:
                         items_data[key]['base_remaining'] += remaining
-            smart_data = json.dumps({'type': 'delivery', 'form_prefix': 'delivery_logs',
-                                     'select_field': 'barcode_obj', 'qty_field': 'quantity_shipped',
-                                     'items': items_data})
-            inline_script = f'<script>window.SMART_INLINE_DATA={smart_data};</script>'
-            response.render()
-            response.content = response.content.replace(b'</body>', inline_script.encode() + b'</body>', 1)
-        return response
+            safe_json = json.dumps({'type': 'delivery', 'form_prefix': 'delivery_logs',
+                                    'select_field': 'barcode_obj', 'qty_field': 'quantity_shipped',
+                                    'items': items_data}).replace('</', '<\\/')
+            extra = f'<script>window.SMART_INLINE_DATA={safe_json};</script>'
+        context['title'] = mark_safe(f"{context['title']} {script} {extra}")
+        return super().render_change_form(request, context, add, change, form_url, obj)
     
     def save_model(self, request, obj, form, change):
         if not change:
