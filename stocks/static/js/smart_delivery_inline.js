@@ -1,21 +1,12 @@
 (function () {
   'use strict';
 
-  var data = window.SMART_INLINE_DATA;
-  if (!data) {
-    console.log('[SmartInline] no SMART_INLINE_DATA, skipping');
-    return;
-  }
+  // !! ต้องตรวจสอบ SMART_INLINE_DATA ใน DOMContentLoaded เท่านั้น !!
+  // JS โหลดจาก <head> → ถ้าตรวจตอนนี้จะได้ undefined เพราะ body ยัง render ไม่ครบ
 
-  var formPrefix  = data.form_prefix;
-  var selectField = data.select_field || 'product';
-  var qtyField    = data.qty_field;
-  var itemsData   = data.items;
+  var formPrefix, selectField, qtyField, itemsData;
   var bound = new WeakSet();
-
-  console.log('[SmartInline] init prefix=' + formPrefix + ' field=' + selectField, itemsData);
-
-  var idxPattern = new RegExp('-([0-9]+)-' + selectField + '$');
+  var idxPattern;
 
   // ── helpers ──────────────────────────────────────────────
 
@@ -64,8 +55,7 @@
   // ── core update ───────────────────────────────────────────
 
   function updateDropdowns() {
-    var sels = getAllSelects();
-    sels.forEach(function (sel) {
+    getAllSelects().forEach(function (sel) {
       if (!isNewRow(sel)) return;
       var currentKey = sel.value;
       var consumed   = getConsumed(sel);
@@ -112,37 +102,49 @@
     });
   }
 
-  // ── detect new rows (3 methods) ───────────────────────────
-
-  // 1. Django formset:added event
-  document.addEventListener('formset:added', function () {
-    setTimeout(function () { bindAll(); updateDropdowns(); }, 0);
-  });
-
-  // 2. MutationObserver (debounced)
-  var debounceTimer;
-  var observer = new MutationObserver(function () {
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(function () {
-      bindAll();
-      updateDropdowns();
-    }, 80);
-  });
-
-  // 3. Polling every 500ms (guaranteed fallback)
-  setInterval(function () {
-    bindAll();
-    updateDropdowns();
-  }, 500);
-
-  // ── init ──────────────────────────────────────────────────
+  // ── init (ต้องรอให้ body render เสร็จก่อน) ───────────────
 
   function init() {
+    // ตรวจสอบ SMART_INLINE_DATA ที่นี่ ไม่ใช่ด้านบน
+    var data = window.SMART_INLINE_DATA;
+    if (!data) {
+      console.log('[SmartInline] no SMART_INLINE_DATA at DOMContentLoaded');
+      return;
+    }
+
+    formPrefix  = data.form_prefix;
+    selectField = data.select_field || 'product';
+    qtyField    = data.qty_field;
+    itemsData   = data.items;
+    idxPattern  = new RegExp('-([0-9]+)-' + selectField + '$');
+
+    console.log('[SmartInline] ready prefix=' + formPrefix + ' selects=' + getAllSelects().length, itemsData);
+
+    // events
+    document.addEventListener('formset:added', function () {
+      setTimeout(function () { bindAll(); updateDropdowns(); }, 0);
+    });
+
+    // MutationObserver
+    var debounceTimer;
     var container = document.getElementById(formPrefix + '-group') || document.body;
+    var observer = new MutationObserver(function () {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(function () {
+        bindAll();
+        updateDropdowns();
+      }, 80);
+    });
     observer.observe(container, { childList: true, subtree: true });
+
+    // polling fallback
+    setInterval(function () {
+      bindAll();
+      updateDropdowns();
+    }, 500);
+
     bindAll();
     updateDropdowns();
-    console.log('[SmartInline] ready, selects found=' + getAllSelects().length);
   }
 
   if (document.readyState === 'loading') {
