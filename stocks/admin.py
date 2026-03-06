@@ -32,7 +32,7 @@ from django.utils.html import format_html
 from django.core.exceptions import ValidationError
 from django.forms import TextInput
 from django.db import models # เพิ่มเพื่อรองรับ formfield_overrides
-from django.db.models import Subquery, OuterRef,Q, Sum, F, DecimalField, ExpressionWrapper
+from django.db.models import Subquery, OuterRef, Q, Sum, F, DecimalField, ExpressionWrapper, Case, When
 from django import forms # ✅ เพิ่มบรรทัดนี้ครับ ทำระบบ tag checkbox
 from django.utils.safestring import mark_safe # ✅ ต้องมีบรรทัดนี้ครับ
 # เพิ่มที่บรรทัดบนสุดของไฟล์ครับ
@@ -184,6 +184,22 @@ class DocumentLockMixin:
         super().save_model(request, obj, form, change)
         content_type = ContentType.objects.get_for_model(self.model)
         DocumentLock.objects.filter(content_type=content_type, object_id=obj.pk).delete()
+
+    def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
+        response = super().render_change_form(request, context, add, change, form_url, obj)
+        if obj and change:
+            content_type = ContentType.objects.get_for_model(self.model)
+            script = (
+                f'<script>window.addEventListener("beforeunload",function(){{'
+                f'var fd=new FormData();'
+                f'fd.append("content_type_id","{content_type.pk}");'
+                f'fd.append("object_id","{obj.pk}");'
+                f'navigator.sendBeacon("/admin/unlock-doc/",fd);'
+                f'}});</script>'
+            )
+            response.render()
+            response.content = response.content.replace(b'</body>', script.encode() + b'</body>', 1)
+        return response
 
 class ProductOnlyFilter(admin.SimpleListFilter):
     title = 'ประเภทรายการ' # หัวข้อบนแถบ Filter
@@ -619,7 +635,18 @@ class PurchaseReceiptLogInline(UnfoldTabularInline):
             resolved = request.resolver_match
             if resolved and 'object_id' in resolved.kwargs:
                 po_id = resolved.kwargs['object_id']
-                kwargs["queryset"] = Product.objects.filter(purchaseitem__purchase_order_id=po_id).distinct()
+                ordered_ids = list(
+                    PurchaseItem.objects.filter(purchase_order_id=po_id)
+                    .order_by('id').exclude(product=None)
+                    .values_list('product_id', flat=True)
+                )
+                seen = set()
+                unique_ids = [x for x in ordered_ids if not (x in seen or seen.add(x))]
+                if unique_ids:
+                    preserved = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(unique_ids)])
+                    kwargs["queryset"] = Product.objects.filter(pk__in=unique_ids).order_by(preserved)
+                else:
+                    kwargs["queryset"] = Product.objects.none()
         formfield = super().formfield_for_foreignkey(db_field, request, **kwargs)
         if db_field.name == 'product':
             formfield.widget.attrs['style'] = 'width: 300px;'
@@ -675,7 +702,18 @@ class SalesDeliveryLogInline(UnfoldTabularInline):
             resolved = request.resolver_match
             if resolved and 'object_id' in resolved.kwargs:
                 so_id = resolved.kwargs['object_id']
-                kwargs["queryset"] = Product.objects.filter(sales_items__sales_order_id=so_id).distinct()
+                ordered_ids = list(
+                    SalesItem.objects.filter(sales_order_id=so_id)
+                    .order_by('id').exclude(product=None)
+                    .values_list('product_id', flat=True)
+                )
+                seen = set()
+                unique_ids = [x for x in ordered_ids if not (x in seen or seen.add(x))]
+                if unique_ids:
+                    preserved = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(unique_ids)])
+                    kwargs["queryset"] = Product.objects.filter(pk__in=unique_ids).order_by(preserved)
+                else:
+                    kwargs["queryset"] = Product.objects.none()
         formfield = super().formfield_for_foreignkey(db_field, request, **kwargs)
         if db_field.name == 'product':
             formfield.widget.attrs['style'] = 'width: 300px;'
@@ -908,7 +946,24 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin
         """)
         # ✅ เปลี่ยนจาก help_text มาเป็นฉีดที่ Title แทน ปุ่มจะขึ้นแน่นอน
         context['title'] = mark_safe(f"{context['title']} {script}")
-        return super().render_change_form(request, context, add, change, form_url, obj)
+        response = super().render_change_form(request, context, add, change, form_url, obj)
+        if obj and change:
+            items = PurchaseItem.objects.filter(purchase_order=obj).order_by('id').select_related('product')
+            items_data = {}
+            for item in items:
+                if item.product_id:
+                    pid = str(item.product_id)
+                    remaining = max(0, item.quantity_ordered - item.quantity_received)
+                    if pid not in items_data:
+                        items_data[pid] = {'name': str(item.product), 'base_remaining': remaining}
+                    else:
+                        items_data[pid]['base_remaining'] += remaining
+            smart_data = json.dumps({'type': 'receipt', 'form_prefix': 'purchasereceiptlog_set',
+                                     'qty_field': 'quantity_received', 'items': items_data})
+            inline_script = f'<script>window.SMART_INLINE_DATA={smart_data};</script>'
+            response.render()
+            response.content = response.content.replace(b'</body>', inline_script.encode() + b'</body>', 1)
+        return response
 
     # ✅ แก้ไขตรงนี้: เพื่อให้บันทึก PurchaseReceiptLog ได้
     # ✅ ปรับโครงสร้างให้เหมือน SalesOrderAdmin เป๊ะๆ
@@ -937,8 +992,8 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin
         return color_diff(received - ordered)
     
     class Media:
-        js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
-    
+        js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js')
+
 @admin.register(SalesOrder)
 class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
     list_display = ('so_number', 'customer', 'order_date', 'status', 'vat_percent','get_diff')
@@ -973,7 +1028,24 @@ class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
             </script>
         """)
         context['title'] = mark_safe(f"{context['title']} {script}")
-        return super().render_change_form(request, context, add, change, form_url, obj)
+        response = super().render_change_form(request, context, add, change, form_url, obj)
+        if obj and change:
+            items = SalesItem.objects.filter(sales_order=obj).order_by('id').select_related('product')
+            items_data = {}
+            for item in items:
+                if item.product_id:
+                    pid = str(item.product_id)
+                    remaining = max(0, item.quantity_ordered - item.quantity_shipped)
+                    if pid not in items_data:
+                        items_data[pid] = {'name': str(item.product), 'base_remaining': remaining}
+                    else:
+                        items_data[pid]['base_remaining'] += remaining
+            smart_data = json.dumps({'type': 'delivery', 'form_prefix': 'salesdeliverylog_set',
+                                     'qty_field': 'quantity_shipped', 'items': items_data})
+            inline_script = f'<script>window.SMART_INLINE_DATA={smart_data};</script>'
+            response.render()
+            response.content = response.content.replace(b'</body>', inline_script.encode() + b'</body>', 1)
+        return response
     
     def save_model(self, request, obj, form, change):
         if not change:
@@ -1135,8 +1207,8 @@ class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
                 return False # ล็อคเฉพาะตอนกด "เสร็จงาน/ปิดงาน" เท่านั้น
         return super().has_change_permission(request, obj)
     class Media:
-        js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
-    
+        js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js')
+
 class ProductionMaterialUsageInline(UnfoldTabularInline):
     model = ProductionMaterialUsage
     extra = 0
