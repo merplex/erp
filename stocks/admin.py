@@ -944,8 +944,8 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin
                 });
             </script>
         """)
-        # ✅ เปลี่ยนจาก help_text มาเป็นฉีดที่ Title แทน ปุ่มจะขึ้นแน่นอน
-        extra = ''
+        context['title'] = mark_safe(f"{context['title']} {script}")
+        response = super().render_change_form(request, context, add, change, form_url, obj)
         if obj and change:
             items = PurchaseItem.objects.filter(purchase_order=obj).order_by('id').select_related('product')
             items_data = {}
@@ -960,9 +960,10 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin
             safe_json = json.dumps({'type': 'receipt', 'form_prefix': 'receipt_logs',
                                     'select_field': 'product', 'qty_field': 'quantity_received',
                                     'items': items_data}).replace('</', '<\\/')
-            extra = f'<script>window.SMART_INLINE_DATA={safe_json};</script>'
-        context['title'] = mark_safe(f"{context['title']} {script} {extra}")
-        return super().render_change_form(request, context, add, change, form_url, obj)
+            smart_script = f'<script>window.SMART_INLINE_DATA={safe_json};</script>'
+            response.render()
+            response.content = response.content.replace(b'</body>', smart_script.encode() + b'</body>', 1)
+        return response
 
     # ✅ แก้ไขตรงนี้: เพื่อให้บันทึก PurchaseReceiptLog ได้
     # ✅ ปรับโครงสร้างให้เหมือน SalesOrderAdmin เป๊ะๆ
@@ -1026,7 +1027,8 @@ class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
                 });
             </script>
         """)
-        extra = ''
+        context['title'] = mark_safe(f"{context['title']} {script}")
+        response = super().render_change_form(request, context, add, change, form_url, obj)
         if obj and change:
             items = SalesItem.objects.filter(sales_order=obj).order_by('id').select_related('product', 'barcode_obj')
             items_data = {}
@@ -1042,9 +1044,10 @@ class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
             safe_json = json.dumps({'type': 'delivery', 'form_prefix': 'delivery_logs',
                                     'select_field': 'barcode_obj', 'qty_field': 'quantity_shipped',
                                     'items': items_data}).replace('</', '<\\/')
-            extra = f'<script>window.SMART_INLINE_DATA={safe_json};</script>'
-        context['title'] = mark_safe(f"{context['title']} {script} {extra}")
-        return super().render_change_form(request, context, add, change, form_url, obj)
+            smart_script = f'<script>window.SMART_INLINE_DATA={safe_json};</script>'
+            response.render()
+            response.content = response.content.replace(b'</body>', smart_script.encode() + b'</body>', 1)
+        return response
     
     def save_model(self, request, obj, form, change):
         if not change:
