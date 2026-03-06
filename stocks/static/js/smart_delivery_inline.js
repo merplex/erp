@@ -4,11 +4,13 @@
   var data = window.SMART_INLINE_DATA;
   if (!data) return;
 
-  var formPrefix   = data.form_prefix;
-  var selectField  = data.select_field || 'product';
-  var qtyField     = data.qty_field;
-  var itemsData    = data.items;
+  var formPrefix  = data.form_prefix;
+  var selectField = data.select_field || 'product';
+  var qtyField    = data.qty_field;
+  var itemsData   = data.items;
   var bound = new WeakSet();
+
+  var idxPattern = new RegExp('-([0-9]+)-' + selectField + '$');
 
   // ── helpers ──────────────────────────────────────────────
 
@@ -19,8 +21,6 @@
       )
     );
   }
-
-  var idxPattern = new RegExp('-([0-9]+)-' + selectField + '$');
 
   function getRowIndex(sel) {
     var m = sel.name.match(idxPattern);
@@ -106,20 +106,35 @@
     });
   }
 
-  // Django 4.1+ fires formset:added when a new inline row is added
+  // ── detect new rows ───────────────────────────────────────
+
+  // Primary: Django/Unfold fires formset:added
   document.addEventListener('formset:added', function (e) {
-    if (!e.detail || e.detail.formsetName !== formPrefix) return;
-    setTimeout(function () {
+    setTimeout(function () { bindAll(); updateDropdowns(); }, 0);
+  });
+
+  // Fallback: MutationObserver (debounced) — handles Unfold override
+  var debounceTimer;
+  var observer = new MutationObserver(function () {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(function () {
       bindAll();
       updateDropdowns();
-    }, 0);
+    }, 80);
   });
+
+  // Observe the inline group container, or body as last resort
+  function startObserver() {
+    var container = document.getElementById(formPrefix + '-group') || document.body;
+    observer.observe(container, { childList: true, subtree: true });
+  }
 
   // ── init ──────────────────────────────────────────────────
 
   function init() {
     bindAll();
     updateDropdowns();
+    startObserver();
   }
 
   if (document.readyState === 'loading') {
