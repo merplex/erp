@@ -7,6 +7,7 @@
   var formPrefix, selectField, qtyField, itemsData;
   var bound = new WeakSet();
   var idxPattern;
+  var snapshots = new WeakMap(); // select → [{value, text}, ...]
 
   // ── helpers ──────────────────────────────────────────────
 
@@ -52,27 +53,57 @@
     return totals;
   }
 
+  // ── snapshot (ถ่าย option ดั้งเดิมก่อน modify ใดๆ) ───────
+
+  function snapshotOptions(sel) {
+    if (snapshots.has(sel)) return; // snapshot ครั้งเดียว
+    var opts = [];
+    for (var i = 0; i < sel.options.length; i++) {
+      opts.push({ value: sel.options[i].value, text: sel.options[i].text });
+    }
+    snapshots.set(sel, opts);
+  }
+
   // ── core update ───────────────────────────────────────────
+  // แทนที่จะ display:none (ไม่ทำงานใน Select2)
+  // → ลบ option ออก DOM จริงๆ แล้ว trigger Select2 refresh
 
   function updateDropdowns() {
+    var $ = window.django && window.django.jQuery;
     getAllSelects().forEach(function (sel) {
       if (!isNewRow(sel)) return;
       var currentKey = sel.value;
       var consumed   = getConsumed(sel);
+      var opts = snapshots.get(sel);
+      if (!opts) return;
 
-      for (var i = 0; i < sel.options.length; i++) {
-        var opt = sel.options[i];
-        var key = opt.value;
-        if (!key) continue;
+      // Rebuild options จาก snapshot
+      while (sel.options.length > 0) sel.remove(0);
+
+      opts.forEach(function (o) {
+        var key = o.value;
+        if (!key) {
+          // blank option — แสดงเสมอ
+          sel.add(new Option(o.text, ''));
+          return;
+        }
         var info = itemsData[key];
-        if (!info) continue;
-
+        if (!info) {
+          // ไม่อยู่ใน items_data — แสดงตามเดิม
+          sel.add(new Option(o.text, key, false, key === currentKey));
+          return;
+        }
         var effective = info.base_remaining - (consumed[key] || 0);
-        opt.text = effective > 0
+        if (effective <= 0 && key !== currentKey) return; // ซ่อน (ไม่ add)
+        var text = effective > 0
           ? info.name + ' (\u0e40\u0e2b\u0e25\u0e37\u0e2d ' + effective + ')'
           : info.name + ' \u2713 \u0e04\u0e23\u0e1a';
+        sel.add(new Option(text, key, false, key === currentKey));
+      });
 
-        opt.style.display = (effective <= 0 && key !== currentKey) ? 'none' : '';
+      // Trigger Select2 refresh ถ้าใช้อยู่
+      if ($ && $(sel).data('select2')) {
+        $(sel).trigger('change.select2');
       }
     });
   }
@@ -80,6 +111,7 @@
   // ── binding ───────────────────────────────────────────────
 
   function bindSelect(sel) {
+    snapshotOptions(sel); // snapshot ก่อนเสมอ (ก่อน modify ใดๆ)
     if (bound.has(sel)) return;
     bound.add(sel);
     sel.addEventListener('change', updateDropdowns);
@@ -102,10 +134,9 @@
     });
   }
 
-  // ── init (ต้องรอให้ body render เสร็จก่อน) ───────────────
+  // ── init ─────────────────────────────────────────────────
 
   function init() {
-    // ตรวจสอบ SMART_INLINE_DATA ที่นี่ ไม่ใช่ด้านบน
     var data = window.SMART_INLINE_DATA;
     if (!data) {
       console.log('[SmartInline] no SMART_INLINE_DATA at DOMContentLoaded');
@@ -120,22 +151,10 @@
 
     console.log('[SmartInline] ready prefix=' + formPrefix + ' selects=' + getAllSelects().length, itemsData);
 
-    // events
+    // เมื่อกด "Add another"
     document.addEventListener('formset:added', function () {
-      setTimeout(function () { bindAll(); updateDropdowns(); }, 0);
+      setTimeout(function () { bindAll(); updateDropdowns(); }, 50);
     });
-
-    // MutationObserver
-    var debounceTimer;
-    var container = document.getElementById(formPrefix + '-group') || document.body;
-    var observer = new MutationObserver(function () {
-      clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(function () {
-        bindAll();
-        updateDropdowns();
-      }, 80);
-    });
-    observer.observe(container, { childList: true, subtree: true });
 
     // polling fallback
     setInterval(function () {
