@@ -4,135 +4,112 @@
   var data = window.SMART_INLINE_DATA;
   if (!data) return;
 
-  var formPrefix = data.form_prefix;   // e.g. "salesdeliverylog_set"
-  var qtyField   = data.qty_field;     // e.g. "quantity_shipped"
-  var itemsData  = data.items;         // { "42": { name: "สินค้า A", base_remaining: 10 }, ... }
+  var formPrefix = data.form_prefix;
+  var qtyField   = data.qty_field;
+  var itemsData  = data.items;
+  var bound = new WeakSet();
 
-  // ----- helpers -----
+  // ── helpers ──────────────────────────────────────────────
 
-  function getInlineRows() {
-    // Returns all inline <tr> rows (both existing and new)
-    var tbody = document.getElementById(formPrefix + '-group');
-    if (!tbody) return [];
-    return Array.prototype.slice.call(tbody.querySelectorAll('tr.form-row, tr.dynamic-' + formPrefix));
+  function getAllSelects() {
+    return Array.prototype.slice.call(
+      document.querySelectorAll('select[name^="' + formPrefix + '-"][name$="-product"]')
+    );
   }
 
-  function isNewRow(row) {
-    // A row is "new" (unsaved) when its hidden id input is empty
-    var idInput = row.querySelector('input[name$="-id"]');
+  function getRowIndex(sel) {
+    var m = sel.name.match(/-(\d+)-product$/);
+    return m ? m[1] : null;
+  }
+
+  function isNewRow(sel) {
+    var idx = getRowIndex(sel);
+    if (idx === null) return false;
+    var idInput = document.querySelector('input[name="' + formPrefix + '-' + idx + '-id"]');
     return idInput && idInput.value === '';
   }
 
-  function getProductSelect(row) {
-    return row.querySelector('select[name$="-product"]');
+  function getQty(sel) {
+    var idx = getRowIndex(sel);
+    if (idx === null) return 0;
+    var inp = document.querySelector('input[name="' + formPrefix + '-' + idx + '-' + qtyField + '"]');
+    return inp ? (parseFloat(inp.value) || 0) : 0;
   }
 
-  function getQtyInput(row) {
-    return row.querySelector('input[name$="-' + qtyField + '"]');
-  }
-
-  // Compute how many units new (unsaved) rows have already consumed per product
-  function getNewEntries(excludeRow) {
+  function getConsumed(excludeSel) {
     var totals = {};
-    getInlineRows().forEach(function (row) {
-      if (!isNewRow(row)) return;
-      if (row === excludeRow) return;
-      var sel = getProductSelect(row);
-      var qty = getQtyInput(row);
-      if (!sel || !qty) return;
+    getAllSelects().forEach(function (sel) {
+      if (sel === excludeSel || !isNewRow(sel)) return;
       var pid = sel.value;
-      var q = parseFloat(qty.value) || 0;
-      if (pid && q > 0) {
-        totals[pid] = (totals[pid] || 0) + q;
-      }
+      var q = getQty(sel);
+      if (pid && q > 0) totals[pid] = (totals[pid] || 0) + q;
     });
     return totals;
   }
 
-  // ----- core update function -----
+  // ── core update ───────────────────────────────────────────
 
   function updateDropdowns() {
-    var rows = getInlineRows();
-    rows.forEach(function (row) {
-      if (!isNewRow(row)) return;  // only update selects in new rows
-      var sel = getProductSelect(row);
-      if (!sel) return;
-
+    getAllSelects().forEach(function (sel) {
+      if (!isNewRow(sel)) return;
       var currentPid = sel.value;
-      var consumed = getNewEntries(row);  // other new rows' usage
+      var consumed = getConsumed(sel);
 
-      var options = sel.options;
-      for (var i = 0; i < options.length; i++) {
-        var opt = options[i];
+      for (var i = 0; i < sel.options.length; i++) {
+        var opt = sel.options[i];
         var pid = opt.value;
-        if (!pid) continue;  // blank/placeholder option
-
+        if (!pid) continue;
         var info = itemsData[pid];
         if (!info) continue;
 
-        var baseRemaining = info.base_remaining;
-        var usedByOthers = consumed[pid] || 0;
-        var effective = baseRemaining - usedByOthers;
+        var effective = info.base_remaining - (consumed[pid] || 0);
+        opt.text = effective > 0
+          ? info.name + ' (\u0e40\u0e2b\u0e25\u0e37\u0e2d ' + effective + ')'
+          : info.name + ' \u2713 \u0e04\u0e23\u0e1a';
 
-        // Update option label
-        if (effective <= 0) {
-          opt.text = info.name + ' \u2713 \u0e04\u0e23\u0e1a';  // "✓ ครบ"
-        } else {
-          opt.text = info.name + ' (\u0e40\u0e2b\u0e25\u0e37\u0e2d ' + effective + ')';  // "(เหลือ N)"
-        }
-
-        // Hide/show: hide only if remaining <= 0 AND it's not the currently selected value in this row
-        if (effective <= 0 && pid !== currentPid) {
-          opt.style.display = 'none';
-        } else {
-          opt.style.display = '';
-        }
+        opt.style.display = (effective <= 0 && pid !== currentPid) ? 'none' : '';
       }
     });
   }
 
-  // ----- event wiring -----
+  // ── binding ───────────────────────────────────────────────
 
-  function bindRow(row) {
-    var sel = getProductSelect(row);
-    var qty = getQtyInput(row);
-    if (sel) {
-      sel.addEventListener('change', function () { updateDropdowns(); });
-    }
-    if (qty) {
-      qty.addEventListener('input', function () { updateDropdowns(); });
+  function bindSelect(sel) {
+    if (bound.has(sel)) return;
+    bound.add(sel);
+    sel.addEventListener('change', updateDropdowns);
+
+    var idx = getRowIndex(sel);
+    if (idx !== null) {
+      var inp = document.querySelector(
+        'input[name="' + formPrefix + '-' + idx + '-' + qtyField + '"]'
+      );
+      if (inp && !bound.has(inp)) {
+        bound.add(inp);
+        inp.addEventListener('input', updateDropdowns);
+      }
     }
   }
 
-  function bindAllRows() {
-    getInlineRows().forEach(function (row) {
-      if (isNewRow(row)) bindRow(row);
+  function bindAll() {
+    getAllSelects().forEach(function (sel) {
+      if (isNewRow(sel)) bindSelect(sel);
     });
   }
 
-  // MutationObserver: detect when Django adds a new inline row
-  function observeInlineGroup() {
-    var group = document.getElementById(formPrefix + '-group');
-    if (!group) return;
-    var observer = new MutationObserver(function (mutations) {
-      mutations.forEach(function (m) {
-        m.addedNodes.forEach(function (node) {
-          if (node.nodeType === 1) {
-            // newly added row
-            bindRow(node);
-            updateDropdowns();
-          }
-        });
-      });
-    });
-    observer.observe(group, { childList: true, subtree: false });
-  }
+  // ── Django 4.1+ fires formset:added on the new row ────────
+  document.addEventListener('formset:added', function (e) {
+    if (!e.detail || e.detail.formsetName !== formPrefix) return;
+    setTimeout(function () {
+      bindAll();
+      updateDropdowns();
+    }, 0);
+  });
 
-  // ----- init -----
+  // ── init ──────────────────────────────────────────────────
 
   function init() {
-    bindAllRows();
-    observeInlineGroup();
+    bindAll();
     updateDropdowns();
   }
 
@@ -141,5 +118,4 @@
   } else {
     init();
   }
-
 })();

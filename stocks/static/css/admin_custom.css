@@ -116,6 +116,17 @@ input[type="checkbox"][id$="-DELETE"]:checked {
     align-items: center !important;
 }
 
+/* ── ปุ่ม "Add another" (เพิ่มรายการ) ใน inline → ย้ายมาฝั่งซ้าย ── */
+.add-row,
+tr.add-row td,
+div.add-row {
+    text-align: left !important;
+}
+.add-row a {
+    float: none !important;
+    display: inline-block !important;
+}
+
 /* ── ปุ่ม Save (primary) — ทั้ง regular form และ popup ── */
 button[name="_save"] {
     background-color: rgb(2 132 199) !important;
