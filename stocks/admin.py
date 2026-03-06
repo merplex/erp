@@ -702,7 +702,13 @@ class SalesDeliveryLogInline(UnfoldTabularInline):
             resolved = request.resolver_match
             if resolved and 'object_id' in resolved.kwargs:
                 so_id = resolved.kwargs['object_id']
-                # คำนวณ remaining ต่อบาร์โค้ด (กรองทิ้งบาร์โค้ดที่ส่งครบแล้ว)
+                # barcode ที่ถูก save ใน delivery log แล้ว → ต้องอยู่ใน queryset เสมอ (ไม่งั้นแถว saved จะว่าง)
+                already_logged = set(
+                    SalesDeliveryLog.objects.filter(sales_order_id=so_id)
+                    .exclude(barcode_obj=None)
+                    .values_list('barcode_obj_id', flat=True)
+                )
+                # remaining ต่อบาร์โค้ด
                 remaining_map = {}
                 for item in SalesItem.objects.filter(sales_order_id=so_id).exclude(barcode_obj=None):
                     bid = item.barcode_obj_id
@@ -714,10 +720,10 @@ class SalesDeliveryLogInline(UnfoldTabularInline):
                     .values_list('barcode_obj_id', flat=True)
                 )
                 seen = set()
-                # เอาเฉพาะบาร์โค้ดที่ยังมี remaining > 0
+                # แสดง: remaining > 0 หรือ เคย save ใน log แล้ว
                 unique_ids = [x for x in ordered_ids
                               if not (x in seen or seen.add(x))
-                              and remaining_map.get(x, 0) > 0]
+                              and (remaining_map.get(x, 0) > 0 or x in already_logged)]
                 if unique_ids:
                     preserved = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(unique_ids)])
                     kwargs["queryset"] = ProductBarcode.objects.filter(pk__in=unique_ids).order_by(preserved)
