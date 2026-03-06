@@ -687,8 +687,24 @@ class SalesItemInline(UnfoldTabularInline):
         return "0.00"
     get_total_display.short_description = "ราคารวม"
 
+class SalesDeliveryLogForm(forms.ModelForm):
+    """แถวที่ save แล้ว → barcode_obj เป็น disabled (แสดงค่าเดิม ห้ามแก้)"""
+    class Meta:
+        model = SalesDeliveryLog
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance.pk and self.instance.barcode_obj_id:
+            self.fields['barcode_obj'].disabled = True
+            self.fields['barcode_obj'].queryset = ProductBarcode.objects.filter(
+                pk=self.instance.barcode_obj_id
+            )
+
+
 class SalesDeliveryLogInline(UnfoldTabularInline):
     model = SalesDeliveryLog
+    form = SalesDeliveryLogForm
     extra = 1
     fields = ('barcode_obj', 'shipping_no', 'quantity_shipped', 'user', 'notes', 'shipped_date')
     readonly_fields = ('user',)
@@ -702,12 +718,6 @@ class SalesDeliveryLogInline(UnfoldTabularInline):
             resolved = request.resolver_match
             if resolved and 'object_id' in resolved.kwargs:
                 so_id = resolved.kwargs['object_id']
-                # barcode ที่ถูก save ใน delivery log แล้ว → ต้องอยู่ใน queryset เสมอ (ไม่งั้นแถว saved จะว่าง)
-                already_logged = set(
-                    SalesDeliveryLog.objects.filter(sales_order_id=so_id)
-                    .exclude(barcode_obj=None)
-                    .values_list('barcode_obj_id', flat=True)
-                )
                 # remaining ต่อบาร์โค้ด
                 remaining_map = {}
                 for item in SalesItem.objects.filter(sales_order_id=so_id).exclude(barcode_obj=None):
@@ -720,10 +730,10 @@ class SalesDeliveryLogInline(UnfoldTabularInline):
                     .values_list('barcode_obj_id', flat=True)
                 )
                 seen = set()
-                # แสดง: remaining > 0 หรือ เคย save ใน log แล้ว
+                # แสดงเฉพาะ barcode ที่ยัง remaining > 0
                 unique_ids = [x for x in ordered_ids
                               if not (x in seen or seen.add(x))
-                              and (remaining_map.get(x, 0) > 0 or x in already_logged)]
+                              and remaining_map.get(x, 0) > 0]
                 if unique_ids:
                     preserved = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(unique_ids)])
                     kwargs["queryset"] = ProductBarcode.objects.filter(pk__in=unique_ids).order_by(preserved)
