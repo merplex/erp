@@ -831,8 +831,6 @@ class ProductBarcodeAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     def get_queryset(self, request):
         return super().get_queryset(request).select_related('product')
 
-admin.site.register(ProductBarcode, ProductBarcodeAdmin) # จดทะเบียนตามปกติ
-    
 @admin.register(Product)
 class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
     list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit','get_total_stock_value', 'has_bom', 'created_by')
