@@ -1088,9 +1088,25 @@ class CustomerProductContract(models.Model):
     
     display_product_tags.short_description = "กลุ่มสินค้า (Tag)"
 
+    def validate_unique(self, exclude=None):
+        """เตือนถ้า customer + barcode ซ้ำ ก่อนถึง DB constraint"""
+        from django.core.exceptions import ValidationError
+        if self.customer_id and self.barcode_id:
+            qs = CustomerProductContract.objects.filter(
+                customer_id=self.customer_id,
+                barcode_id=self.barcode_id,
+            )
+            if self.pk:
+                qs = qs.exclude(pk=self.pk)
+            if qs.exists():
+                raise ValidationError({
+                    'barcode': f'ลูกค้านี้มีราคาสัญญาของบาร์โค้ดนี้อยู่แล้ว'
+                })
+        super().validate_unique(exclude=exclude)
+
     class Meta:
         verbose_name_plural = "T2. ราคาสัญญา&DC/Rebate"
-        unique_together = ('customer', 'product')
+        unique_together = ('customer', 'barcode')
 
 # --- T2.2 ระบบปรับปรุงสต็อก (Stock Adjustment) ---
 class StockAdjustment(models.Model):

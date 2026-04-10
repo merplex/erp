@@ -2170,6 +2170,37 @@ class CustomerProductContractInline(UnfoldTabularInline):
     extra = 3
     fields = ['barcode', 'product', 'barcode_unit_info', 'contract_price', 'dc_percent', 'rebate_percent']
     readonly_fields = ['product', 'barcode_unit_info']
+    validate_min = False
+
+    def get_formset(self, request, obj=None, **kwargs):
+        formset = super().get_formset(request, obj, **kwargs)
+        customer_obj = obj  # Customer instance
+
+        class FormsetWithDupCheck(formset):
+            def clean(self):
+                super().clean()
+                seen_barcodes = set()
+                for form in self.forms:
+                    if not form.cleaned_data or form.cleaned_data.get('DELETE'):
+                        continue
+                    barcode = form.cleaned_data.get('barcode')
+                    if not barcode:
+                        continue
+                    # ซ้ำใน inline เดียวกัน
+                    if barcode.pk in seen_barcodes:
+                        form.add_error('barcode', f'บาร์โค้ด {barcode.code} ซ้ำกันในตารางนี้')
+                    seen_barcodes.add(barcode.pk)
+                    # ซ้ำกับ DB (customer อื่นหรือ record อื่น)
+                    instance_pk = form.instance.pk
+                    qs = CustomerProductContract.objects.filter(
+                        customer=customer_obj, barcode=barcode
+                    )
+                    if instance_pk:
+                        qs = qs.exclude(pk=instance_pk)
+                    if qs.exists():
+                        form.add_error('barcode', f'ลูกค้านี้มีราคาสัญญาของ {barcode.code} อยู่แล้ว')
+
+        return FormsetWithDupCheck
 
     def barcode_unit_info(self, obj):
         if obj and obj.barcode_id:
