@@ -872,9 +872,13 @@ class SalesDeliveryLog(models.Model):
         
 @receiver(post_delete, sender=SalesDeliveryLog)
 def handle_delivery_deletion(sender, instance, **kwargs):
-    # 1. คืนสต็อกสินค้า
-    instance.product.stock_quantity += instance.quantity_shipped
-    instance.product.save()
+    # 1. คืนสต็อกสินค้า (ถ้า product=None ข้ามไป — record เก่าอาจไม่มี)
+    if instance.product_id:
+        try:
+            instance.product.stock_quantity += instance.quantity_shipped
+            instance.product.save()
+        except Exception:
+            pass
     # 2. หักยอดส่งสะสมใน SO
     try:
         qs = SalesItem.objects.filter(sales_order=instance.sales_order, product=instance.product)
