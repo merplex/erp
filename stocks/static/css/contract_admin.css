@@ -1,0 +1,25 @@
+/* T2. ราคาสัญญา list view — column widths */
+
+/* ลูกค้า: กว้างขึ้น */
+.column-customer { min-width: 180px; }
+
+/* สินค้า: กว้างมาก */
+.column-product { min-width: 260px; }
+
+/* บาร์โค้ด */
+.column-barcode_display { min-width: 140px; white-space: nowrap; }
+
+/* ราคาสัญญา / DC / Rebate: แคบลง */
+.column-contract_price { width: 90px !important; min-width: 90px; }
+.column-dc_percent     { width: 80px !important; min-width: 80px; }
+.column-rebate_percent { width: 80px !important; min-width: 80px; }
+
+/* input ใน list_editable ให้แคบตาม */
+.column-contract_price input,
+.column-dc_percent input,
+.column-rebate_percent input {
+    width: 72px !important;
+}
+
+/* กลุ่มสินค้า */
+.column-display_product_tags { min-width: 100px; }

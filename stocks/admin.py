@@ -1,6 +1,7 @@
 import json
 import datetime # ✅ เพิ่มตัวนี้
 from django.contrib import admin
+from django.utils.html import format_html
 from unfold.admin import ModelAdmin as UnfoldModelAdmin, TabularInline as UnfoldTabularInline, StackedInline as UnfoldStackedInline
 from .models import ProductTag
 from .models import *
@@ -520,6 +521,12 @@ class ProductBarcodeInline(UnfoldTabularInline):
     extra = 1  # จะมีช่องว่างให้เติม 1 ช่องเสมอ และมีปุ่ม + เพิ่มได้เรื่อยๆ
     verbose_name = "บาร์โค้ดสินค้า"
     verbose_name_plural = "บาร์โค้ดทั้งหมดของสินค้านี้"
+
+@admin.register(ProductBarcode)
+class ProductBarcodeAdmin(UnfoldModelAdmin):
+    search_fields = ['code', 'product__name', 'unit_name']
+    list_display = ['code', 'product', 'unit_name', 'conversion_factor']
+    autocomplete_fields = ['product']
 
 class ProductSupplierInline(UnfoldTabularInline):
     model = ProductSupplier
@@ -2159,38 +2166,66 @@ class ShipmentPaymentReportAdmin(UnfoldModelAdmin):
 
 class CustomerProductContractInline(UnfoldTabularInline):
     model = CustomerProductContract
-    # ✅ ตัวนี้แหละที่จะทำให้ "ยิงบาร์โค้ด" ได้
-    autocomplete_fields = ['product'] 
-    extra = 3  # จำนวนแถวว่างที่เตรียมไว้ให้คีย์
-    fields = ['product', 'contract_price', 'dc_percent', 'rebate_percent']
+    autocomplete_fields = ['barcode']
+    extra = 3
+    fields = ['barcode', 'product', 'barcode_unit_info', 'contract_price', 'dc_percent', 'rebate_percent']
+    readonly_fields = ['product', 'barcode_unit_info']
+
+    def barcode_unit_info(self, obj):
+        if obj and obj.barcode_id:
+            b = obj.barcode
+            unit = b.unit_name or 'ชิ้น'
+            factor = b.conversion_factor or 1
+            return format_html('<span style="color:#6b7280;font-size:12px;">{} ({} ชิ้น/หน่วย)</span>', unit, factor)
+        return '-'
+    barcode_unit_info.short_description = 'หน่วย'
+
+    class Media:
+        js = ('js/contract_barcode_autofill.js',)
 
 @admin.register(Customer)
 class CustomerAdmin(DocumentLockMixin, admin.ModelAdmin):
     list_display = ('company_name', 'contact_person', 'phone')
-    # ✅ ทำให้หน้าอื่น (เช่น หน้าสัญญา T2) สามารถ Search หาชื่อลูกค้าได้
     search_fields = ('company_name', 'contact_person', 'phone')
-    # ✅ แปะตารางสัญญาไว้ท้ายหน้าข้อมูลลูกค้า
     inlines = [CustomerProductContractInline]
 
 # --- 3. ส่วนหน้าจัดการสัญญาโดยเฉพาะ (T2. ราคาสัญญา&DC/Rebate) ---
 @admin.register(CustomerProductContract)
 class CustomerProductContractAdmin(DocumentLockMixin, admin.ModelAdmin):
-    # ✅ แสดงคอลัมน์และทำให้แก้ไขราคา/Rebate ได้จากหน้าตารางเลย
-    list_display = ['customer', 'product', 'contract_price', 'dc_percent', 'rebate_percent', 'display_product_tags']
-    readonly_fields = ['display_product_tags']
-    list_editable = ['contract_price', 'dc_percent', 'rebate_percent'] 
+    list_display = ['customer', 'barcode_display', 'product', 'contract_price', 'dc_percent', 'rebate_percent', 'display_product_tags']
+    readonly_fields = ['display_product_tags', 'product', 'barcode_unit_detail']
+    list_editable = ['contract_price', 'dc_percent', 'rebate_percent']
     list_filter = ['customer', 'product__tags']
-    fields = ['customer', 'product', 'display_product_tags', 'contract_price', 'dc_percent', 'rebate_percent']
-    
-    # ✅ ระบบค้นหา: หาจากชื่อลูกค้า, ชื่อสินค้า หรือ "ยิงบาร์โค้ด"
+    fields = ['customer', 'barcode', 'product', 'barcode_unit_detail', 'display_product_tags', 'contract_price', 'dc_percent', 'rebate_percent']
+
     search_fields = [
-        'customer__company_name', 
-        'product__name', 
+        'customer__company_name',
+        'product__name',
+        'barcode__code',
         'product__barcodes__code',
-        'product__tags__name'  # 🎯 เพิ่มบรรทัดนี้ เพื่อให้ค้นหาด้วยชื่อ Tag ใน A4 ได้ครับ
+        'product__tags__name',
     ]
-    # ✅ ระบบช่วยพิมพ์: ค้นหาลูกค้าและสินค้าได้รวดเร็ว
-    autocomplete_fields = ['customer', 'product', 'product_tag_link']
+    autocomplete_fields = ['customer', 'barcode', 'product_tag_link']
+
+    def barcode_display(self, obj):
+        return obj.barcode.code if obj.barcode else '-'
+    barcode_display.short_description = 'บาร์โค้ด'
+
+    def barcode_unit_detail(self, obj):
+        if obj and obj.barcode_id:
+            b = obj.barcode
+            unit = b.unit_name or 'ชิ้น'
+            factor = b.conversion_factor or 1
+            return format_html(
+                '<span style="color:#374151;">หน่วย: <b>{}</b> &nbsp;|&nbsp; {} ชิ้น/หน่วย</span>',
+                unit, factor
+            )
+        return '-'
+    barcode_unit_detail.short_description = 'ข้อมูลหน่วย'
+
+    class Media:
+        css = {'all': ('css/contract_admin.css',)}
+        js = ('js/contract_barcode_autofill.js',)
     
 @admin.register(StockAdjustment)
 class StockAdjustmentAdmin(UnfoldModelAdmin):

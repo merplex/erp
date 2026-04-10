@@ -220,6 +220,25 @@ def pending_barcodes_api(request):
     return JsonResponse({'items': result})
 
 
+@staff_member_required
+def barcode_info_api(request):
+    """API: ดึงข้อมูล product + unit จาก barcode id — ใช้ใน contract autofill"""
+    from .models import ProductBarcode
+    barcode_id = request.GET.get('barcode_id', '').strip()
+    if not barcode_id:
+        return JsonResponse({})
+    try:
+        b = ProductBarcode.objects.select_related('product').get(pk=barcode_id)
+    except (ProductBarcode.DoesNotExist, ValueError):
+        return JsonResponse({})
+    return JsonResponse({
+        'product_id': b.product_id,
+        'product_name': b.product.name if b.product else '',
+        'unit_name': b.unit_name or 'ชิ้น',
+        'conversion_factor': b.conversion_factor or 1,
+    })
+
+
 @csrf_exempt
 def unlock_document_view(request):
     if request.method == 'POST' and request.user.is_authenticated:

@@ -1067,6 +1067,7 @@ class ShipmentPaymentReport(SalesDeliveryLog):
 # --- T2.1 รายการราคาสัญญาและค่าธรรมเนียม (Price List per Customer) ---
 class CustomerProductContract(models.Model):
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE, verbose_name="ลูกค้า")
+    barcode = models.ForeignKey('ProductBarcode', null=True, blank=True, on_delete=models.SET_NULL, verbose_name="บาร์โค้ด")
     product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้า")
     product_tag_link = models.ForeignKey(ProductTag, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="กลุ่มสินค้า (Tag)")
     contract_price = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="ราคาสัญญา")
