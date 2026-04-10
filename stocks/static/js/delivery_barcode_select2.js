@@ -130,8 +130,13 @@
         var $ = django.jQuery;
         var $row = $(row);
 
+        // ป้องกัน setup ซ้ำบน row เดียวกัน
+        if ($row.data('barcode-setup')) return;
+
         var $barcodeInput = $row.find('.barcode-code-input:not([readonly])');
         if (!$barcodeInput.length) return;
+
+        $row.data('barcode-setup', true);
 
         var barcodeTimer = null;
 
