@@ -15,7 +15,7 @@
     function showHint($input, text, color) {
         var $hint = $input.siblings('.barcode-hint');
         if (!$hint.length) {
-            $hint = window.django.jQuery('<div class="barcode-hint" style="font-size:11px;margin-top:2px;font-weight:bold;"></div>');
+            $hint = window.django.jQuery('<div class="barcode-hint" style="font-size:11px;margin-top:2px;font-weight:bold;text-align:center;width:180px;"></div>');
             $input.after($hint);
         }
         $hint.text(text).css('color', color).show();
@@ -50,7 +50,7 @@
                     if (callback) callback(true);
                 } else {
                     $input.css('border-color', '#dc2626');
-                    showHint($input, data.error || 'ไม่พบบาร์โค้ด', '#dc2626');
+                    showHint($input, data.error || 'ไม่พบบาร์โค้ดนี้ ในใบสั่งขาย', '#dc2626');
                     if (callback) callback(false);
                 }
             })

@@ -78,7 +78,7 @@ def delivery_log_autosave(request):
     try:
         barcode = ProductBarcode.objects.select_related('product').get(code=barcode_code)
     except ProductBarcode.DoesNotExist:
-        return JsonResponse({'success': False, 'errors': {'barcode_code': 'ไม่พบบาร์โค้ดนี้ในระบบ'}})
+        return JsonResponse({'success': False, 'errors': {'barcode_code': 'ไม่พบบาร์โค้ดนี้ ในใบสั่งขาย'}})
     if not SalesItem.objects.filter(sales_order=so, barcode_obj=barcode).exists():
         return JsonResponse({'success': False, 'errors': {'barcode_code': 'บาร์โค้ดนี้ไม่อยู่ในรายการสั่งขายนี้'}})
 
@@ -155,7 +155,7 @@ def barcode_remaining_api(request):
     try:
         barcode = ProductBarcode.objects.select_related('product').get(code=code)
     except ProductBarcode.DoesNotExist:
-        return JsonResponse({'valid': False, 'error': 'ไม่พบบาร์โค้ดนี้ในระบบ'})
+        return JsonResponse({'valid': False, 'error': 'ไม่พบบาร์โค้ดนี้ ในใบสั่งขาย'})
 
     from django.db.models import Sum
     from .models import SalesDeliveryLog
