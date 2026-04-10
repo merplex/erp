@@ -16,6 +16,9 @@ def _webhook_handler(request, secret_env, token_env):
     body = request.body
 
     if not line_webhook.verify_signature(body, signature, secret):
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning('LINE signature fail | secret_env=%s | secret_len=%d | sig=%s', secret_env, len(secret), signature[:20])
         return HttpResponse('invalid signature', status=403)
 
     try:
