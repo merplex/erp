@@ -132,6 +132,33 @@ div.add-row {
     display: none !important;
 }
 
+/* ── Native <select> ให้ text กึ่งกลางแนวตั้ง ──────────────────────── */
+select {
+    vertical-align: middle !important;
+    height: 36px !important;
+    line-height: 36px !important;
+    box-sizing: border-box !important;
+}
+
+/* ── Select2: rendered text กึ่งกลางแนวตั้ง ──────────────────────── */
+.select2-container .select2-selection--single {
+    display: flex !important;
+    align-items: center !important;
+}
+.select2-container .select2-selection--single .select2-selection__rendered {
+    display: flex !important;
+    align-items: center !important;
+    height: 100% !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    line-height: 1.4 !important;
+}
+
+/* ── Inline table cell ให้ content กึ่งกลางแนวตั้ง ──────────────── */
+.tabular.inline-related tbody tr td {
+    vertical-align: middle !important;
+}
+
 /* ── ปุ่ม Save (primary) — ทั้ง regular form และ popup ── */
 button[name="_save"] {
     background-color: rgb(2 132 199) !important;
