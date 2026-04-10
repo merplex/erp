@@ -125,10 +125,13 @@ def delivery_log_autosave(request):
         )
         log.save()  # model.save() จะ auto-set product + ลดสต็อก + อัพ quantity_shipped
 
-    # คำนวณ remaining หลัง save
-    items = SalesItem.objects.filter(sales_order=so, barcode_obj=barcode).values('quantity_ordered', 'quantity_shipped')
+    # คำนวณ remaining หลัง save จาก delivery log จริง
+    from django.db.models import Sum
+    items = SalesItem.objects.filter(sales_order=so, barcode_obj=barcode).values('quantity_ordered')
     total_ordered = sum(i['quantity_ordered'] or 0 for i in items)
-    total_shipped = sum(i['quantity_shipped'] or 0 for i in items)
+    total_shipped = SalesDeliveryLog.objects.filter(
+        sales_order=so, barcode_obj=barcode
+    ).aggregate(total=Sum('quantity_shipped'))['total'] or 0
     remaining = max(0, total_ordered - total_shipped)
 
     return JsonResponse({
@@ -154,13 +157,18 @@ def barcode_remaining_api(request):
     except ProductBarcode.DoesNotExist:
         return JsonResponse({'valid': False, 'error': 'ไม่พบบาร์โค้ดนี้ในระบบ'})
 
+    from django.db.models import Sum
+    from .models import SalesDeliveryLog
     items = list(SalesItem.objects.filter(sales_order_id=so_id, barcode_obj=barcode)
-                 .values('quantity_ordered', 'quantity_shipped'))
+                 .values('quantity_ordered'))
     if not items:
         return JsonResponse({'valid': False, 'error': 'บาร์โค้ดนี้ไม่อยู่ในรายการสั่งขายนี้'})
 
     total_ordered = sum(i['quantity_ordered'] or 0 for i in items)
-    total_shipped = sum(i['quantity_shipped'] or 0 for i in items)
+    # คำนวณจาก delivery log จริง ไม่ใช่ denormalized field ที่อาจ stale
+    total_shipped = SalesDeliveryLog.objects.filter(
+        sales_order_id=so_id, barcode_obj=barcode
+    ).aggregate(total=Sum('quantity_shipped'))['total'] or 0
     remaining = max(0, total_ordered - total_shipped)
 
     return JsonResponse({
