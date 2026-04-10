@@ -692,25 +692,87 @@ class SalesItemInline(UnfoldTabularInline):
     get_total_display.short_description = "ราคารวม"
 
 class SalesDeliveryLogForm(forms.ModelForm):
-    """แถวที่ save แล้ว → barcode_obj เป็น disabled (แสดงค่าเดิม ห้ามแก้)"""
+    """
+    ใช้ text input สำหรับรหัสบาร์โค้ด แทน dropdown
+    - แถวใหม่: กรอก barcode code → validate server-side → บันทึก FK
+    - แถวที่ save แล้ว: แสดง code แบบ readonly ห้ามแก้
+    """
+    barcode_code = forms.CharField(
+        label='บาร์โค้ด',
+        required=False,
+        widget=forms.TextInput(attrs={
+            'placeholder': 'กรอกรหัสบาร์โค้ด',
+            'autocomplete': 'off',
+            'class': 'barcode-code-input',
+            'style': 'width: 180px;',
+        })
+    )
+
     class Meta:
         model = SalesDeliveryLog
-        fields = '__all__'
+        exclude = ['barcode_obj']
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if self.instance.pk and self.instance.barcode_obj_id:
-            self.fields['barcode_obj'].disabled = True
-            self.fields['barcode_obj'].queryset = ProductBarcode.objects.filter(
-                pk=self.instance.barcode_obj_id
-            )
+        if self.instance.pk and self.instance.barcode_obj:
+            # row ที่ save แล้ว → แสดง code เดิม + readonly
+            self.fields['barcode_code'].initial = self.instance.barcode_obj.code
+            self.fields['barcode_code'].widget.attrs.update({
+                'readonly': True,
+                'style': 'width: 180px; background:#f3f4f6; color:#374151;',
+            })
+
+    def clean(self):
+        cleaned = super().clean()
+        # row ที่ save แล้ว → ใช้ barcode เดิม ไม่ต้องแปลง
+        if self.instance.pk and self.instance.barcode_obj:
+            self._resolved_barcode = self.instance.barcode_obj
+            return cleaned
+
+        code = (cleaned.get('barcode_code') or '').strip()
+        if not code:
+            self._resolved_barcode = None
+            return cleaned
+
+        try:
+            barcode = ProductBarcode.objects.get(code=code)
+        except ProductBarcode.DoesNotExist:
+            self.add_error('barcode_code', 'ไม่พบบาร์โค้ดนี้ในระบบ')
+            self._resolved_barcode = None
+            return cleaned
+
+        # ตรวจว่า barcode นี้อยู่ใน SO ด้วย (ถ้า so_id ถูก inject มา)
+        so_id = getattr(self.__class__, '_so_id', None)
+        if so_id:
+            in_so = SalesItem.objects.filter(
+                sales_order_id=so_id, barcode_obj=barcode
+            ).exists()
+            if not in_so:
+                self.add_error('barcode_code', 'บาร์โค้ดนี้ไม่อยู่ในรายการสั่งขายนี้')
+                self._resolved_barcode = None
+                return cleaned
+
+        self._resolved_barcode = barcode
+        return cleaned
+
+    def save(self, commit=True):
+        instance = super().save(commit=False)
+        barcode = getattr(self, '_resolved_barcode', None)
+        if barcode:
+            instance.barcode_obj = barcode
+        elif self.instance.pk and self.instance.barcode_obj:
+            instance.barcode_obj = self.instance.barcode_obj
+        if commit:
+            instance.save()
+            self.save_m2m()
+        return instance
 
 
 class SalesDeliveryLogInline(UnfoldTabularInline):
     model = SalesDeliveryLog
     form = SalesDeliveryLogForm
     extra = 1
-    fields = ('barcode_obj', 'shipping_no', 'quantity_shipped', 'user', 'notes', 'shipped_date')
+    fields = ('barcode_code', 'shipping_no', 'quantity_shipped', 'user', 'notes', 'shipped_date')
     readonly_fields = ('user',)
     formfield_overrides = {
         models.CharField: {'widget': TextInput(attrs={'style': 'width: 120px;', 'placeholder': 'เลขใบส่งของ'})},
@@ -720,54 +782,12 @@ class SalesDeliveryLogInline(UnfoldTabularInline):
     def get_queryset(self, request):
         return super().get_queryset(request).select_related('barcode_obj')
 
-    def _get_barcode_queryset(self, request):
-        """คำนวณ barcode queryset ครั้งเดียวแล้ว cache ไว้ใน request"""
-        if hasattr(request, '_delivery_barcode_qs'):
-            return request._delivery_barcode_qs
-
-        resolved = request.resolver_match
-        if not (resolved and 'object_id' in resolved.kwargs):
-            request._delivery_barcode_qs = None
-            return None
-
-        so_id = resolved.kwargs['object_id']
-        items = list(
-            SalesItem.objects
-            .filter(sales_order_id=so_id)
-            .exclude(barcode_obj=None)
-            .order_by('id')
-            .values('barcode_obj_id', 'quantity_ordered', 'quantity_shipped')
-        )
-        remaining_map = {}
-        ordered_ids = []
-        seen = set()
-        for item in items:
-            bid = item['barcode_obj_id']
-            rem = max(0, item['quantity_ordered'] - item['quantity_shipped'])
-            remaining_map[bid] = remaining_map.get(bid, 0) + rem
-            if bid not in seen:
-                seen.add(bid)
-                ordered_ids.append(bid)
-
-        unique_ids = [x for x in ordered_ids if remaining_map.get(x, 0) > 0]
-        if unique_ids:
-            preserved = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(unique_ids)])
-            qs = ProductBarcode.objects.filter(pk__in=unique_ids).order_by(preserved)
-        else:
-            qs = ProductBarcode.objects.none()
-
-        request._delivery_barcode_qs = qs
-        return qs
-
-    def formfield_for_foreignkey(self, db_field, request, **kwargs):
-        if db_field.name == "barcode_obj":
-            qs = self._get_barcode_queryset(request)
-            if qs is not None:
-                kwargs["queryset"] = qs
-        formfield = super().formfield_for_foreignkey(db_field, request, **kwargs)
-        if db_field.name == 'barcode_obj':
-            formfield.widget.attrs['style'] = 'width: 300px;'
-        return formfield
+    def get_formset(self, request, obj=None, **kwargs):
+        """Inject so_id เข้า form class เพื่อ validate barcode ใน SO"""
+        so_id = obj.pk if obj else None
+        DynamicForm = type('SalesDeliveryLogForm', (SalesDeliveryLogForm,), {'_so_id': so_id})
+        kwargs['form'] = DynamicForm
+        return super().get_formset(request, obj, **kwargs)
 
 class ProductionLogInline(UnfoldTabularInline):
     model = ProductionLog
@@ -1262,7 +1282,7 @@ class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
                 return False # ล็อคเฉพาะตอนกด "เสร็จงาน/ปิดงาน" เท่านั้น
         return super().has_change_permission(request, obj)
     class Media:
-        js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js')
+        js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js', 'js/delivery_barcode_select2.js')
 
 class ProductionMaterialUsageInline(UnfoldTabularInline):
     model = ProductionMaterialUsage

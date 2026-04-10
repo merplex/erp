@@ -1,7 +1,8 @@
 import json
 import os
 from django.views.decorators.csrf import csrf_exempt
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
+from django.contrib.admin.views.decorators import staff_member_required
 from .models import DocumentLock
 from . import line_webhook
 
@@ -41,6 +42,37 @@ def line_webhook_view(request):
 def line_webhook2_view(request):
     """OA ส่วนตัว (Meebunholder Stock)"""
     return _webhook_handler(request, 'LINE2_CHANNEL_SECRET', 'LINE2_CHANNEL_ACCESS_TOKEN')
+
+
+@staff_member_required
+def barcode_remaining_api(request):
+    """API: ตรวจสอบ barcode code ว่าอยู่ใน SO ไหน และเหลือส่งเท่าไร"""
+    from .models import ProductBarcode, SalesItem
+    so_id = request.GET.get('so_id', '').strip()
+    code = request.GET.get('barcode', '').strip()
+
+    if not so_id or not code:
+        return JsonResponse({'valid': False})
+
+    try:
+        barcode = ProductBarcode.objects.select_related('product').get(code=code)
+    except ProductBarcode.DoesNotExist:
+        return JsonResponse({'valid': False, 'error': 'ไม่พบบาร์โค้ดนี้ในระบบ'})
+
+    items = list(SalesItem.objects.filter(sales_order_id=so_id, barcode_obj=barcode)
+                 .values('quantity_ordered', 'quantity_shipped'))
+    if not items:
+        return JsonResponse({'valid': False, 'error': 'บาร์โค้ดนี้ไม่อยู่ในรายการสั่งขายนี้'})
+
+    total_ordered = sum(i['quantity_ordered'] or 0 for i in items)
+    total_shipped = sum(i['quantity_shipped'] or 0 for i in items)
+    remaining = max(0, total_ordered - total_shipped)
+
+    return JsonResponse({
+        'valid': True,
+        'remaining': remaining,
+        'product_name': barcode.product.name if barcode.product else '',
+    })
 
 
 @csrf_exempt
