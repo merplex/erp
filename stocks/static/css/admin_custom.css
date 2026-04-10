@@ -127,6 +127,11 @@ div.add-row {
     display: inline-block !important;
 }
 
+/* ── ซ่อนปุ่ม X (clear) ใน autocomplete ของ SalesItemInline ── */
+#salesitem_set-group .select2-selection__clear {
+    display: none !important;
+}
+
 /* ── ปุ่ม Save (primary) — ทั้ง regular form และ popup ── */
 button[name="_save"] {
     background-color: rgb(2 132 199) !important;
