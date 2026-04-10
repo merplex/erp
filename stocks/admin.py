@@ -321,9 +321,10 @@ class SalesPaymentInline(UnfoldTabularInline):
     readonly_fields = ('get_status_from_logs',)
 
     def get_status_from_logs(self, obj):
-        # 🎯 สายไฟเชื่อมข้อมูล: ไปดึงยอดที่ยืนยันแล้วจาก SalesDeliveryLog มาโชว์
-        # ถ้าเปรมอยากให้ล็อคยอดอัตโนมัติ เราจะใช้ readonly_fields คลุมทับอีกทีครับ
-        return "ยืนยันแล้วจากหน้า C6" if obj.sales_order.salesdeliverylog_set.filter(is_revenue_confirmed=True).exists() else "รอยืนยัน"
+        # ใช้ prefetch_related จาก get_queryset แทนการ query ใหม่ต่อแถว
+        logs = obj.sales_order.delivery_logs.all()
+        confirmed = any(getattr(log, 'is_revenue_confirmed', False) for log in logs)
+        return "ยืนยันแล้วจากหน้า C6" if confirmed else "รอยืนยัน"
     get_status_from_logs.short_description = "สถานะรับเงิน"
 
     def has_change_permission(self, request, obj=None):
@@ -716,32 +717,53 @@ class SalesDeliveryLogInline(UnfoldTabularInline):
         models.TextField: {'widget': TextInput(attrs={'style': 'width: 200px;', 'placeholder': 'หมายเหตุ'})},
     }
 
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('barcode_obj')
+
+    def _get_barcode_queryset(self, request):
+        """คำนวณ barcode queryset ครั้งเดียวแล้ว cache ไว้ใน request"""
+        if hasattr(request, '_delivery_barcode_qs'):
+            return request._delivery_barcode_qs
+
+        resolved = request.resolver_match
+        if not (resolved and 'object_id' in resolved.kwargs):
+            request._delivery_barcode_qs = None
+            return None
+
+        so_id = resolved.kwargs['object_id']
+        items = list(
+            SalesItem.objects
+            .filter(sales_order_id=so_id)
+            .exclude(barcode_obj=None)
+            .order_by('id')
+            .values('barcode_obj_id', 'quantity_ordered', 'quantity_shipped')
+        )
+        remaining_map = {}
+        ordered_ids = []
+        seen = set()
+        for item in items:
+            bid = item['barcode_obj_id']
+            rem = max(0, item['quantity_ordered'] - item['quantity_shipped'])
+            remaining_map[bid] = remaining_map.get(bid, 0) + rem
+            if bid not in seen:
+                seen.add(bid)
+                ordered_ids.append(bid)
+
+        unique_ids = [x for x in ordered_ids if remaining_map.get(x, 0) > 0]
+        if unique_ids:
+            preserved = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(unique_ids)])
+            qs = ProductBarcode.objects.filter(pk__in=unique_ids).order_by(preserved)
+        else:
+            qs = ProductBarcode.objects.none()
+
+        request._delivery_barcode_qs = qs
+        return qs
+
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "barcode_obj":
-            resolved = request.resolver_match
-            if resolved and 'object_id' in resolved.kwargs:
-                so_id = resolved.kwargs['object_id']
-                # remaining ต่อบาร์โค้ด
-                remaining_map = {}
-                for item in SalesItem.objects.filter(sales_order_id=so_id).exclude(barcode_obj=None):
-                    bid = item.barcode_obj_id
-                    rem = max(0, item.quantity_ordered - item.quantity_shipped)
-                    remaining_map[bid] = remaining_map.get(bid, 0) + rem
-                ordered_ids = list(
-                    SalesItem.objects.filter(sales_order_id=so_id)
-                    .order_by('id').exclude(barcode_obj=None)
-                    .values_list('barcode_obj_id', flat=True)
-                )
-                seen = set()
-                # แสดงเฉพาะ barcode ที่ยัง remaining > 0
-                unique_ids = [x for x in ordered_ids
-                              if not (x in seen or seen.add(x))
-                              and remaining_map.get(x, 0) > 0]
-                if unique_ids:
-                    preserved = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(unique_ids)])
-                    kwargs["queryset"] = ProductBarcode.objects.filter(pk__in=unique_ids).order_by(preserved)
-                else:
-                    kwargs["queryset"] = ProductBarcode.objects.none()
+            qs = self._get_barcode_queryset(request)
+            if qs is not None:
+                kwargs["queryset"] = qs
         formfield = super().formfield_for_foreignkey(db_field, request, **kwargs)
         if db_field.name == 'barcode_obj':
             formfield.widget.attrs['style'] = 'width: 300px;'
@@ -1026,12 +1048,15 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin
 class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
     list_display = ('so_number', 'customer', 'order_date', 'status', 'vat_percent','get_diff')
     list_filter = ('status', 'order_date', 'customer')
-    search_fields = ('so_number', 'po_no_customer', 'customer__company_name', 
+    search_fields = ('so_number', 'po_no_customer', 'customer__company_name',
         'items__product__barcodes__code')
     inlines = [SalesItemInline, SalesDeliveryLogInline, SalesPaymentInline]
     readonly_fields = ('created_by', 'status') # ล็อค status ให้ระบบจัดการออโต้
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
     actions = ['mark_as_completed', 'export_to_excel']
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('customer').prefetch_related('items', 'delivery_logs')
 
     @admin.action(description="✅ เปลี่ยนสถานะเป็น: เสร็จงาน/ปิดงาน")
     def mark_as_completed(self, request, queryset):
