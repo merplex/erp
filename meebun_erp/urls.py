@@ -17,9 +17,11 @@ Including another URLconf
 
 from django.contrib import admin
 from django.urls import path
+from django.views.generic import RedirectView
 from stocks.views import unlock_document_view, line_webhook_view, line_webhook2_view
 
 urlpatterns = [
+    path("", RedirectView.as_view(url="/admin/")),
     path("admin/", admin.site.urls),
     path("admin/unlock-doc/", unlock_document_view),
     path("webhook/line/", line_webhook_view),
