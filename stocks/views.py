@@ -178,6 +178,38 @@ def barcode_remaining_api(request):
     })
 
 
+@staff_member_required
+def pending_barcodes_api(request):
+    """API: รายการบาร์โค้ดที่ยังส่งไม่ครบใน SO — แสดงใน pending bar"""
+    from .models import ProductBarcode, SalesItem, SalesDeliveryLog, SalesOrder
+    from django.db.models import Sum
+    so_id = request.GET.get('so_id', '').strip()
+    if not so_id:
+        return JsonResponse({'items': []})
+    try:
+        so = SalesOrder.objects.get(pk=so_id)
+    except (SalesOrder.DoesNotExist, ValueError, TypeError):
+        return JsonResponse({'items': []})
+
+    items = SalesItem.objects.filter(sales_order=so).select_related('barcode_obj', 'product')
+    result = []
+    for item in items:
+        if not item.barcode_obj:
+            continue
+        ordered = item.quantity_ordered or 0
+        shipped = SalesDeliveryLog.objects.filter(
+            sales_order=so, barcode_obj=item.barcode_obj
+        ).aggregate(total=Sum('quantity_shipped'))['total'] or 0
+        remaining = max(0, ordered - shipped)
+        if remaining > 0:
+            result.append({
+                'barcode': item.barcode_obj.code,
+                'product': item.product.name if item.product else '',
+                'remaining': remaining,
+            })
+    return JsonResponse({'items': result})
+
+
 @csrf_exempt
 def unlock_document_view(request):
     if request.method == 'POST' and request.user.is_authenticated:

@@ -18,7 +18,7 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path
 from django.views.generic import RedirectView
-from stocks.views import unlock_document_view, line_webhook_view, line_webhook2_view, barcode_remaining_api, delivery_log_autosave
+from stocks.views import unlock_document_view, line_webhook_view, line_webhook2_view, barcode_remaining_api, delivery_log_autosave, pending_barcodes_api
 
 urlpatterns = [
     path("", RedirectView.as_view(url="/admin/")),
@@ -26,6 +26,7 @@ urlpatterns = [
     path("admin/unlock-doc/", unlock_document_view),
     path("api/barcode-remaining/", barcode_remaining_api),
     path("api/delivery-log/save/", delivery_log_autosave),
+    path("api/pending-barcodes/", pending_barcodes_api),
     path("webhook/line/", line_webhook_view),
     path("webhook/line2/", line_webhook2_view),
 ]

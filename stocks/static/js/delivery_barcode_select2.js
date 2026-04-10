@@ -178,8 +178,118 @@
         });
     }
 
+    // --- Pending Bar: แถบ scroll แสดงบาร์โค้ดที่ยังส่งไม่ครบ ---
+    function injectPendingBarStyles() {
+        if (document.getElementById('pending-bar-style')) return;
+        var style = document.createElement('style');
+        style.id = 'pending-bar-style';
+        style.textContent = [
+            '@keyframes pending-scroll {',
+            '  0%   { transform: translateX(0); }',
+            '  100% { transform: translateX(-50%); }',
+            '}',
+            '#delivery-pending-bar {',
+            '  display: flex;',
+            '  align-items: center;',
+            '  gap: 8px;',
+            '  margin: 6px 0 4px 0;',
+            '  padding: 5px 10px;',
+            '  background: #fefce8;',
+            '  border: 1px solid #fbbf24;',
+            '  border-radius: 6px;',
+            '  font-size: 12px;',
+            '  overflow: hidden;',
+            '}',
+            '#delivery-pending-bar .pb-label {',
+            '  white-space: nowrap;',
+            '  font-weight: bold;',
+            '  color: #92400e;',
+            '  flex-shrink: 0;',
+            '}',
+            '#delivery-pending-bar .pb-track {',
+            '  overflow: hidden;',
+            '  flex: 1;',
+            '}',
+            '#delivery-pending-bar .pb-content {',
+            '  display: inline-block;',
+            '  white-space: nowrap;',
+            '  color: #78350f;',
+            '  animation: pending-scroll 30s linear infinite;',
+            '}',
+        ].join('\n');
+        document.head.appendChild(style);
+    }
+
+    function renderPendingBar(items) {
+        if (!window.django) return;
+        var $ = django.jQuery;
+
+        // หา container ใส่ bar: หลัง tr.add-row ใน inline delivery_logs
+        var $addRow = $('tr.add-row').filter(function () {
+            return $(this).closest('[id*="delivery_logs"]').length > 0 ||
+                   $(this).closest('.tabular').length > 0;
+        }).last();
+
+        // fallback: tr.add-row ตัวสุดท้ายของ page
+        if (!$addRow.length) {
+            $addRow = $('tr.add-row').last();
+        }
+
+        var $existing = $('#delivery-pending-bar');
+        if (!items || !items.length) {
+            $existing.hide();
+            return;
+        }
+
+        // สร้าง text (duplicate ไว้ seamless loop)
+        var text = items.map(function (i) {
+            return i.barcode + '  (ค้าง ' + i.remaining + ' ชิ้น)';
+        }).join('     ·     ');
+        var fullText = text + '     ·     ' + text; // ซ้ำ 2 รอบให้ scroll ต่อเนื่อง
+
+        if ($existing.length) {
+            $existing.find('.pb-content').text(fullText).css(
+                'animation-duration', Math.max(15, items.length * 5) + 's'
+            );
+            $existing.show();
+            return;
+        }
+
+        injectPendingBarStyles();
+
+        var $bar = $([
+            '<div id="delivery-pending-bar">',
+            '  <span class="pb-label">📋 ค้างส่ง:</span>',
+            '  <div class="pb-track">',
+            '    <span class="pb-content"></span>',
+            '  </div>',
+            '</div>',
+        ].join(''));
+
+        $bar.find('.pb-content').text(fullText).css(
+            'animation-duration', Math.max(15, items.length * 5) + 's'
+        );
+
+        // ใส่หลัง tr.add-row (ออกจาก table แล้ว wrap ใน tr > td)
+        var $table = $addRow.closest('table');
+        if ($table.length) {
+            $table.after($bar);
+        } else {
+            $addRow.after($('<tr><td colspan="99"></td></tr>').find('td').append($bar).end());
+        }
+    }
+
+    function loadPendingBar() {
+        if (!soId) return;
+        fetch('/api/pending-barcodes/?so_id=' + encodeURIComponent(soId))
+            .then(function (r) { return r.json(); })
+            .then(function (data) { renderPendingBar(data.items); })
+            .catch(function () {});
+    }
+
     document.addEventListener('DOMContentLoaded', function () {
         setTimeout(initAllRows, 300);
+        setTimeout(loadPendingBar, 500);
 
         // MutationObserver: จับ row ที่เพิ่มมาแบบ dynamic ได้แน่นอน ไม่ต้องพึ่ง formset:added
         var observer = new MutationObserver(function (mutations) {
