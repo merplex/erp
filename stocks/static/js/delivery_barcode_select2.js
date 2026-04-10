@@ -181,9 +181,30 @@
     document.addEventListener('DOMContentLoaded', function () {
         setTimeout(initAllRows, 300);
 
+        // MutationObserver: จับ row ที่เพิ่มมาแบบ dynamic ได้แน่นอน ไม่ต้องพึ่ง formset:added
+        var observer = new MutationObserver(function (mutations) {
+            mutations.forEach(function (mutation) {
+                mutation.addedNodes.forEach(function (node) {
+                    if (node.nodeType !== 1) return; // element nodes only
+                    if (node.tagName === 'TR') {
+                        // row ถูก insert โดยตรง
+                        setTimeout(function () { setupRow(node); }, 50);
+                    } else {
+                        // node อื่น (เช่น tbody) ที่มี TR ข้างใน
+                        node.querySelectorAll('tr').forEach(function (tr) {
+                            setTimeout(function () { setupRow(tr); }, 50);
+                        });
+                    }
+                });
+            });
+        });
+
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        // formset:added เป็น safety net เพิ่มเติม
         if (window.django && django.jQuery) {
             django.jQuery(document).on('formset:added', function (e, $row) {
-                setTimeout(function () { setupRow($row[0]); }, 100);
+                setTimeout(function () { setupRow($row[0]); }, 150);
             });
         }
     });
