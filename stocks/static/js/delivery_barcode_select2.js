@@ -245,7 +245,7 @@
 
         // สร้าง text (duplicate ไว้ seamless loop)
         var text = items.map(function (i) {
-            return i.barcode + '  (ค้าง ' + i.remaining + ' ชิ้น)';
+            return i.barcode + '  (ค้าง ' + i.remaining + ' ' + (i.unit_name || 'ชิ้น') + ')';
         }).join('     ·     ');
         var fullText = text + '     ·     ' + text; // ซ้ำ 2 รอบให้ scroll ต่อเนื่อง
 

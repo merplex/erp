@@ -804,13 +804,15 @@ class SalesDeliveryLog(models.Model):
             self.product.stock_quantity -= qty_pieces
             self.product.save()
 
-            # 2. สมองกล: สะสมยอดส่งในใบ SO (quantity_shipped ใน SalesItem เป็นชิ้น)
+            # 2. สมองกล: สะสมยอดส่งในใบ SO
+            # quantity_shipped ใน SalesItem เป็น "หน่วยบาร์โค้ด" (ไม่ใช่ชิ้น)
+            # เพราะ sale_price = ราคาต่อหน่วยบาร์โค้ด → revenue = sale_price × quantity_shipped ถูกต้อง
             qs = SalesItem.objects.filter(sales_order=self.sales_order, product=self.product)
             if self.barcode_obj_id:
                 item = qs.filter(barcode_obj=self.barcode_obj).first() or qs.first()
             else:
                 item = qs.first()
-            item.quantity_shipped += qty_pieces
+            item.quantity_shipped += self.quantity_shipped  # หน่วยบาร์โค้ด
             item.save()
 
             # 🤖 ออโต้สถานะ: เปลี่ยนเป็น 'ส่งบางส่วน' (Shipped)
@@ -886,7 +888,7 @@ def handle_delivery_deletion(sender, instance, **kwargs):
             instance.product.save()
         except Exception:
             pass
-    # 2. หักยอดส่งสะสมใน SO (เป็นชิ้น)
+    # 2. หักยอดส่งสะสมใน SO (หน่วยบาร์โค้ด — ตรงกับ sale_price ต่อหน่วย)
     try:
         qs = SalesItem.objects.filter(sales_order=instance.sales_order, product=instance.product)
         if instance.barcode_obj_id:
@@ -894,7 +896,7 @@ def handle_delivery_deletion(sender, instance, **kwargs):
         else:
             item = qs.first()
         if item:
-            item.quantity_shipped -= qty_pieces
+            item.quantity_shipped -= instance.quantity_shipped  # หน่วยบาร์โค้ด
             item.save()
     except Exception:
         pass

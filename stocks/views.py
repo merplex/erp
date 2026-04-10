@@ -203,16 +203,19 @@ def pending_barcodes_api(request):
     for item in items:
         if not item.barcode_obj:
             continue
-        ordered = item.quantity_ordered or 0
-        shipped = SalesDeliveryLog.objects.filter(
+        factor = item.barcode_obj.conversion_factor or 1
+        ordered_pieces = item.quantity_ordered or 0  # ชิ้น
+        shipped_units = SalesDeliveryLog.objects.filter(
             sales_order=so, barcode_obj=item.barcode_obj
         ).aggregate(total=Sum('quantity_shipped'))['total'] or 0
-        remaining = max(0, ordered - shipped)
+        remaining_pieces = max(0, ordered_pieces - shipped_units * factor)
+        remaining = remaining_pieces // factor  # แสดงเป็นหน่วยบาร์โค้ด
         if remaining > 0:
             result.append({
                 'barcode': item.barcode_obj.code,
                 'product': item.product.name if item.product else '',
                 'remaining': remaining,
+                'unit_name': item.barcode_obj.unit_name or 'ชิ้น',
             })
     return JsonResponse({'items': result})
 
