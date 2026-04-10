@@ -655,11 +655,14 @@ class PurchaseReceiptLogInline(UnfoldTabularInline):
 class SalesItemInline(UnfoldTabularInline):
     model = SalesItem
     # สำคัญ: ต้องใส่ทั้งสองฟิลด์เพื่อให้ค้นหาและ Tab ได้เลย
-    autocomplete_fields = ['barcode_obj', 'product'] 
+    autocomplete_fields = ['barcode_obj', 'product']
     extra = 1
-    
+
     # product ต้องเอาออกจาก readonly_fields เพื่อให้เปรมเลือกเองได้กรณีไม่มีบาร์โค้ด
     readonly_fields = ('quantity_ordered', 'get_unit_name_display','get_total_display')
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('product', 'barcode_obj', 'bom')
 
     # 1. เรียงลำดับคอลัมน์จากซ้ายไปขวา
     fields = [

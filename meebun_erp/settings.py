@@ -152,6 +152,11 @@ STORAGES = {
 CSRF_COOKIE_SECURE = True
 SESSION_COOKIE_SECURE = True
 
+# เพิ่ม limit จำนวน fields ที่รับได้ต่อ request
+# default คือ 1000 ซึ่งน้อยเกินไปเมื่อ SalesOrder มี item เยอะ
+# (63 items × ~9 fields/row + inlines อื่นๆ = เกิน 1000 ได้ง่าย)
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 10000
+
 # ── Unfold Admin Theme ──────────────────────────────────────────────────────
 UNFOLD = {
     "STYLES": [
