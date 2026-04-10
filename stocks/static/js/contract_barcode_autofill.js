@@ -6,21 +6,22 @@
         if (!$) return;
 
         // ---- หน้า detail ของ CustomerProductContract (ไม่ใช่ inline) ----
-        // เมื่อเลือก barcode → auto-submit แบบ "Save and continue editing"
-        // หน้าจะ reload กลับมาพร้อม product + unit info ที่ถูก set โดย save_model
+        // เมื่อผู้ใช้เปลี่ยน barcode → auto-submit แบบ "Save and continue editing"
 
         var $barcodeMain = $('select[name="barcode"]');
         if ($barcodeMain.length) {
+            // จำค่าเริ่มต้น ณ ตอน page load — ไม่ submit ถ้า value ไม่เปลี่ยน
+            var initialVal = $barcodeMain.val();
+
             $barcodeMain.on('change', function () {
-                var val = this.value;
-                if (!val) return;
+                var newVal = this.value;
+                if (!newVal) return;
+                if (newVal === initialVal) return; // ค่าเดิม ไม่ต้อง submit
 
                 var $form = $(this).closest('form');
-                // เพิ่ม hidden field _continue → Django จะ save แล้วกลับมาหน้าเดิม
                 if (!$form.find('input[name="_continue"]').length) {
                     $form.append('<input type="hidden" name="_continue" value="1">');
                 }
-                // submit ทันที
                 $form.submit();
             });
         }
