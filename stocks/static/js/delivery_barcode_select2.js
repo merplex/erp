@@ -3,78 +3,174 @@
 
     var soId = (window.location.pathname.match(/\/(\d+)\/change\//) || [])[1];
 
-    function checkBarcode($input) {
-        var code = ($input.val() || '').trim();
-        var $td = $input.closest('td');
-        var $hint = $td.find('.barcode-hint');
+    // ดึง CSRF token
+    function getCsrf() {
+        var m = document.cookie.match(/csrftoken=([^;]+)/);
+        if (m) return m[1];
+        var el = document.querySelector('[name=csrfmiddlewaretoken]');
+        return el ? el.value : '';
+    }
 
+    // แสดง remaining hint ใต้ barcode input
+    function showHint($input, text, color) {
+        var $hint = $input.siblings('.barcode-hint');
         if (!$hint.length) {
-            $hint = $('<div class="barcode-hint" style="font-size:12px;margin-top:3px;font-weight:bold;"></div>');
+            $hint = window.django.jQuery('<div class="barcode-hint" style="font-size:11px;margin-top:2px;font-weight:bold;"></div>');
             $input.after($hint);
         }
+        $hint.text(text).css('color', color).show();
+    }
 
-        if (!code) {
+    // ทำ barcode input เป็น readonly หลัง save
+    function lockBarcodeInput($input) {
+        $input.prop('readonly', true).css({
+            background: '#f3f4f6',
+            color: '#374151',
+            'border-color': '#d1d5db',
+        });
+    }
+
+    // ตรวจสอบ barcode (validate + แสดง remaining) ไม่บันทึก
+    function checkBarcode($input, callback) {
+        var code = ($input.val() || '').trim();
+        if (!code || !soId) {
             $input.css('border-color', '');
-            $hint.text('').hide();
             return;
         }
-
-        if (!soId) {
-            $hint.text('').hide();
-            return;
-        }
-
-        // AJAX ไป API ของเราเอง
         fetch('/api/barcode-remaining/?so_id=' + encodeURIComponent(soId) + '&barcode=' + encodeURIComponent(code))
             .then(function (r) { return r.json(); })
             .then(function (data) {
                 if (data.valid) {
                     $input.css('border-color', '#22c55e');
                     var rem = data.remaining;
-                    if (rem > 0) {
-                        $hint.text('คงเหลือ: ' + rem + ' ชิ้น').css('color', '#16a34a').show();
-                    } else {
-                        $hint.text('ส่งครบแล้ว (0)').css('color', '#dc2626').show();
-                    }
+                    showHint($input,
+                        rem > 0 ? ('คงเหลือ: ' + rem + ' ชิ้น') : 'ส่งครบแล้ว (0)',
+                        rem > 0 ? '#16a34a' : '#dc2626'
+                    );
+                    if (callback) callback(true);
                 } else {
                     $input.css('border-color', '#dc2626');
-                    $hint.text(data.error || 'ไม่พบบาร์โค้ด').css('color', '#dc2626').show();
+                    showHint($input, data.error || 'ไม่พบบาร์โค้ด', '#dc2626');
+                    if (callback) callback(false);
                 }
             })
-            .catch(function () {
-                $hint.text('').hide();
-            });
+            .catch(function () { if (callback) callback(false); });
+    }
+
+    // Auto-save row ผ่าน AJAX — เหมือนกด Save
+    function autoSaveRow($row) {
+        var $barcodeInput = $row.find('.barcode-code-input');
+        var barcodeCode = ($barcodeInput.val() || '').trim();
+        if (!barcodeCode || !soId) return;
+
+        var $qtyInput = $row.find('input[name*="delivery_logs-"][name$="-quantity_shipped"]');
+        var qty = ($qtyInput.val() || '').trim();
+        if (!qty) return;
+
+        // ถ้า barcode เป็น readonly แล้ว (save แล้ว) → ไม่ต้อง create ใหม่
+        var $idInput = $row.find('input[name$="-id"]');
+        var logId = $idInput.val() || null;
+
+        var shippingNo  = ($row.find('input[name*="delivery_logs-"][name$="-shipping_no"]').val() || '').trim();
+        var notes       = ($row.find('input[name*="delivery_logs-"][name$="-notes"]').val() || '').trim();
+        var shippedDate = ($row.find('input[name*="delivery_logs-"][name$="-shipped_date"]').val() || '').trim();
+
+        fetch('/api/delivery-log/save/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCsrf(),
+            },
+            body: JSON.stringify({
+                so_id: soId,
+                log_id: logId,
+                barcode_code: barcodeCode,
+                shipping_no: shippingNo,
+                quantity_shipped: qty,
+                notes: notes,
+                shipped_date: shippedDate,
+            }),
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (result) {
+            if (result.success) {
+                // อัปเดต id hidden field → กด Save ใหญ่จะ UPDATE ไม่ใช่ CREATE ซ้ำ
+                if (!$idInput.val()) {
+                    $idInput.val(result.log_id);
+                }
+                // ล็อค barcode
+                lockBarcodeInput($barcodeInput);
+                // อัปเดต remaining
+                var rem = result.remaining;
+                showHint($barcodeInput,
+                    '✓ บันทึกแล้ว' + (rem > 0 ? ' — คงเหลือ: ' + rem + ' ชิ้น' : ' — ส่งครบแล้ว'),
+                    rem > 0 ? '#16a34a' : '#2563eb'
+                );
+            } else if (result.errors) {
+                if (result.errors.barcode_code) {
+                    $barcodeInput.css('border-color', '#dc2626');
+                    showHint($barcodeInput, result.errors.barcode_code, '#dc2626');
+                }
+            } else if (result.error) {
+                showHint($barcodeInput, result.error, '#dc2626');
+            }
+        })
+        .catch(function (err) {
+            console.error('Autosave error:', err);
+        });
     }
 
     function setupRow(row) {
-        var input = row.querySelector('input.barcode-code-input:not([readonly])');
-        if (!input) return;
-        var $input = window.django ? django.jQuery(input) : null;
-        if (!$input) return;
+        if (!row || !window.django) return;
+        var $ = django.jQuery;
+        var $row = $(row);
 
-        var timer = null;
+        var $barcodeInput = $row.find('.barcode-code-input:not([readonly])');
+        if (!$barcodeInput.length) return;
 
-        $input.on('input', function () {
-            clearTimeout(timer);
-            timer = setTimeout(function () { checkBarcode($input); }, 500);
+        var barcodeTimer = null;
+
+        // ออกจากกล่อง barcode → validate + ลอง save (ถ้ามี qty แล้ว)
+        $barcodeInput.on('blur', function () {
+            clearTimeout(barcodeTimer);
+            checkBarcode($barcodeInput, function (valid) {
+                if (valid) autoSaveRow($row);
+            });
         });
 
-        $input.on('blur', function () {
-            clearTimeout(timer);
-            checkBarcode($input);
+        // พิมพ์ใน barcode → validate หลัง 600ms
+        $barcodeInput.on('input', function () {
+            clearTimeout(barcodeTimer);
+            barcodeTimer = setTimeout(function () {
+                checkBarcode($barcodeInput, null);
+            }, 600);
+        });
+
+        // ออกจากกล่อง quantity → auto-save
+        $row.find('input[name*="delivery_logs-"][name$="-quantity_shipped"]').on('blur', function () {
+            autoSaveRow($row);
+        });
+
+        // ออกจากกล่องอื่นๆ (shipping_no, notes) → auto-save ถ้า barcode+qty ครบ
+        $row.find(
+            'input[name*="delivery_logs-"][name$="-shipping_no"],' +
+            'input[name*="delivery_logs-"][name$="-notes"]'
+        ).on('blur', function () {
+            autoSaveRow($row);
         });
     }
 
-    function init() {
-        document.querySelectorAll('input.barcode-code-input:not([readonly])').forEach(function (el) {
-            setupRow(el.closest('tr') || el.parentElement);
+    function initAllRows() {
+        document.querySelectorAll('tr').forEach(function (row) {
+            if (row.querySelector('.barcode-code-input:not([readonly])')) {
+                setupRow(row);
+            }
         });
     }
 
     document.addEventListener('DOMContentLoaded', function () {
-        setTimeout(init, 300);
+        setTimeout(initAllRows, 300);
 
-        // รองรับแถวที่เพิ่มใหม่ด้วย "Add another"
         if (window.django && django.jQuery) {
             django.jQuery(document).on('formset:added', function (e, $row) {
                 setTimeout(function () { setupRow($row[0]); }, 100);
