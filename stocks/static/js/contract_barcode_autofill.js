@@ -44,7 +44,7 @@
 
             if (!hasProduct) {
                 $td.append(
-                    '<div class="barcode-save-hint" style="font-size:11px;color:#dc2626;margin-top:3px;">กด Save เพื่อแสดงชื่อสินค้า</div>'
+                    '<div class="barcode-save-hint" style="font-size:11px;color:#dc2626;margin-top:3px;">กด Save เมื่อเปลี่ยน barcode เพื่อแสดงชื่อสินค้า</div>'
                 );
             }
         });
