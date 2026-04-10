@@ -1,28 +1,25 @@
 import hashlib
 import hmac
 import base64
-import json
 import os
 import requests
 from .models import Product, ProductCategory
 
-LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET', '')
-LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN', '')
 LINE_OWNER_USER_ID = os.environ.get('LINE_OWNER_USER_ID', '')
 
 REPLY_URL = 'https://api.line.me/v2/bot/message/reply'
 
 
-def verify_signature(body: bytes, signature: str) -> bool:
-    mac = hmac.new(LINE_CHANNEL_SECRET.encode('utf-8'), body, hashlib.sha256).digest()
+def verify_signature(body: bytes, signature: str, secret: str) -> bool:
+    mac = hmac.new(secret.encode('utf-8'), body, hashlib.sha256).digest()
     expected = base64.b64encode(mac).decode('utf-8')
     return hmac.compare_digest(expected, signature)
 
 
-def reply_message(reply_token, messages):
+def reply_message(reply_token, messages, access_token: str):
     headers = {
         'Content-Type': 'application/json',
-        'Authorization': f'Bearer {LINE_CHANNEL_ACCESS_TOKEN}',
+        'Authorization': f'Bearer {access_token}',
     }
     requests.post(REPLY_URL, headers=headers, json={
         'replyToken': reply_token,
@@ -30,7 +27,7 @@ def reply_message(reply_token, messages):
     }, timeout=10)
 
 
-def handle_event(event):
+def handle_event(event, access_token: str):
     if event.get('type') != 'message':
         return
     if event['message'].get('type') != 'text':
@@ -42,7 +39,7 @@ def handle_event(event):
 
     # ถ้ายังไม่ตั้ง owner → ตอบ user id กลับ (ใช้ตอน setup ครั้งแรก)
     if not LINE_OWNER_USER_ID:
-        reply_message(reply_token, [{'type': 'text', 'text': f'Your User ID:\n{user_id}'}])
+        reply_message(reply_token, [{'type': 'text', 'text': f'Your User ID:\n{user_id}'}], access_token)
         return
 
     # ตรวจสิทธิ์
@@ -52,23 +49,23 @@ def handle_event(event):
     text_lower = text.lower()
 
     if text_lower in ['report', 'สต็อก', 'สต๊อก', 'stock', 'สต']:
-        _handle_stock_menu(reply_token)
+        _handle_stock_menu(reply_token, access_token)
     elif text.startswith('กลุ่ม:'):
-        _handle_category(reply_token, text[len('กลุ่ม:'):].strip())
+        _handle_category(reply_token, text[len('กลุ่ม:'):].strip(), access_token)
     elif text_lower.startswith('ค้นหา '):
-        _handle_search(reply_token, text[len('ค้นหา '):].strip())
+        _handle_search(reply_token, text[len('ค้นหา '):].strip(), access_token)
     elif text_lower in ['มูลค่า', 'value', 'มูลค่าสต็อก']:
-        _handle_total_value(reply_token)
+        _handle_total_value(reply_token, access_token)
     else:
-        _handle_help(reply_token)
+        _handle_help(reply_token, access_token)
 
 
 # ── Menu หลัก ──────────────────────────────────────────────────────────────
 
-def _handle_stock_menu(reply_token):
+def _handle_stock_menu(reply_token, access_token):
     categories = list(ProductCategory.objects.order_by('name'))
     items = []
-    for cat in categories[:12]:  # Line limit 13 quick reply items
+    for cat in categories[:12]:
         items.append({
             'type': 'action',
             'action': {
@@ -86,23 +83,23 @@ def _handle_stock_menu(reply_token):
         'type': 'text',
         'text': '📦 เลือกกลุ่มสินค้าที่ต้องการดูสต็อก:',
         'quickReply': {'items': items},
-    }])
+    }], access_token)
 
 
 # ── สต็อกตามกลุ่ม ──────────────────────────────────────────────────────────
 
-def _handle_category(reply_token, category_name):
+def _handle_category(reply_token, category_name, access_token):
     try:
         category = ProductCategory.objects.get(name__iexact=category_name)
     except ProductCategory.DoesNotExist:
-        reply_message(reply_token, [{'type': 'text', 'text': f'ไม่พบกลุ่ม "{category_name}"'}])
+        reply_message(reply_token, [{'type': 'text', 'text': f'ไม่พบกลุ่ม "{category_name}"'}], access_token)
         return
 
     products = list(
         Product.objects.filter(category=category, is_product=True).order_by('name')
     )
     if not products:
-        reply_message(reply_token, [{'type': 'text', 'text': f'ไม่มีสินค้าในกลุ่ม {category_name}'}])
+        reply_message(reply_token, [{'type': 'text', 'text': f'ไม่มีสินค้าในกลุ่ม {category_name}'}], access_token)
         return
 
     bubbles = [_product_bubble(p) for p in products[:10]]
@@ -111,17 +108,17 @@ def _handle_category(reply_token, category_name):
         'type': 'flex',
         'altText': f'สต็อกกลุ่ม {category_name} ({len(products)} รายการ)',
         'contents': {'type': 'carousel', 'contents': bubbles},
-    }])
+    }], access_token)
 
 
 # ── ค้นหาตามชื่อ ────────────────────────────────────────────────────────────
 
-def _handle_search(reply_token, keyword):
+def _handle_search(reply_token, keyword, access_token):
     products = list(
         Product.objects.filter(name__icontains=keyword, is_product=True).order_by('name')[:10]
     )
     if not products:
-        reply_message(reply_token, [{'type': 'text', 'text': f'ไม่พบสินค้าที่ค้นหา "{keyword}"'}])
+        reply_message(reply_token, [{'type': 'text', 'text': f'ไม่พบสินค้าที่ค้นหา "{keyword}"'}], access_token)
         return
 
     bubbles = [_product_bubble(p) for p in products]
@@ -130,12 +127,12 @@ def _handle_search(reply_token, keyword):
         'type': 'flex',
         'altText': f'ค้นหา "{keyword}" พบ {len(products)} รายการ',
         'contents': {'type': 'carousel', 'contents': bubbles},
-    }])
+    }], access_token)
 
 
 # ── มูลค่าสต็อกรวมทุกกลุ่ม ──────────────────────────────────────────────────
 
-def _handle_total_value(reply_token):
+def _handle_total_value(reply_token, access_token):
     categories = ProductCategory.objects.order_by('name')
     rows = []
     grand_total = 0
@@ -173,7 +170,6 @@ def _handle_total_value(reply_token):
             'paddingAll': '15px',
             'spacing': 'none',
             'contents': [
-                # header row
                 {
                     'type': 'box',
                     'layout': 'horizontal',
@@ -203,21 +199,21 @@ def _handle_total_value(reply_token):
         'type': 'flex',
         'altText': f'มูลค่าสต็อกรวม {grand_total:,.0f} บาท',
         'contents': bubble,
-    }])
+    }], access_token)
 
 
 # ── Help ────────────────────────────────────────────────────────────────────
 
-def _handle_help(reply_token):
+def _handle_help(reply_token, access_token):
     reply_message(reply_token, [{
         'type': 'text',
         'text': (
             '📋 คำสั่งที่ใช้ได้:\n'
-            '• สต็อก — ดูสต็อกตามกลุ่ม\n'
+            '• report — ดูสต็อกตามกลุ่ม\n'
             '• ค้นหา [ชื่อ] — ค้นหาสินค้า\n'
             '• มูลค่า — มูลค่าสต็อกรวมทุกกลุ่ม'
         ),
-    }])
+    }], access_token)
 
 
 # ── Flex Bubble สินค้า ──────────────────────────────────────────────────────
