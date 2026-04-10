@@ -188,24 +188,20 @@
         style.textContent = [
             '@keyframes pending-scroll {',
             '  0%   { transform: translateX(0); }',
-            '  100% { transform: translateX(-50%); }',
+            '  100% { transform: translateX(-100%); }',
             '}',
             '#delivery-pending-bar {',
             '  display: flex;',
             '  align-items: center;',
             '  gap: 8px;',
             '  margin: 6px 0 4px 0;',
-            '  padding: 5px 10px;',
-            '  background: #fefce8;',
-            '  border: 1px solid #fbbf24;',
-            '  border-radius: 6px;',
             '  font-size: 12px;',
             '  overflow: hidden;',
             '}',
             '#delivery-pending-bar .pb-label {',
             '  white-space: nowrap;',
             '  font-weight: bold;',
-            '  color: #92400e;',
+            '  color: #dc2626;',
             '  flex-shrink: 0;',
             '}',
             '#delivery-pending-bar .pb-track {',
@@ -215,7 +211,9 @@
             '#delivery-pending-bar .pb-content {',
             '  display: inline-block;',
             '  white-space: nowrap;',
-            '  color: #78350f;',
+            '  color: #dc2626;',
+            '}',
+            '#delivery-pending-bar .pb-content.scrolling {',
             '  animation: pending-scroll 30s linear infinite;',
             '}',
         ].join('\n');
@@ -262,16 +260,24 @@
             return;
         }
 
-        // สร้าง text (duplicate ไว้ seamless loop)
+        // สร้าง text (ไม่ duplicate)
         var text = items.map(function (i) {
             return i.barcode + '  (ค้าง ' + i.remaining + ' ' + (i.unit_name || 'ชิ้น') + ')';
         }).join('     ·     ');
-        var fullText = text + '     ·     ' + text;
 
         if ($existing.length) {
-            $existing.find('.pb-content').text(fullText).css(
-                'animation-duration', Math.max(15, items.length * 5) + 's'
-            );
+            var $content = $existing.find('.pb-content');
+            $content.text(text);
+            // ตรวจสอบว่าต้อง scroll ไหม
+            var trackWidth = $existing.find('.pb-track')[0].offsetWidth;
+            var contentWidth = $content[0].scrollWidth;
+            if (contentWidth > trackWidth) {
+                $content.addClass('scrolling').css(
+                    'animation-duration', Math.max(15, items.length * 5) + 's'
+                );
+            } else {
+                $content.removeClass('scrolling').css('animation-duration', '');
+            }
             $existing.show();
             return;
         }
@@ -287,9 +293,7 @@
             '</div>',
         ].join(''));
 
-        $bar.find('.pb-content').text(fullText).css(
-            'animation-duration', Math.max(15, items.length * 5) + 's'
-        );
+        $bar.find('.pb-content').text(text);
 
         // แทรก bar ก่อน "Add another" link (ขึ้นไปอยู่เหนือมัน)
         var $anchor = findAddAnotherAnchor($);
@@ -301,6 +305,18 @@
             // fallback: ต่อท้าย body
             $('body').append($bar);
         }
+
+        // ตรวจสอบว่าต้อง scroll ไหม (ต้องทำหลัง insert เพื่อให้ได้ width จริง)
+        setTimeout(function () {
+            var $content = $bar.find('.pb-content');
+            var trackWidth = $bar.find('.pb-track')[0].offsetWidth;
+            var contentWidth = $content[0].scrollWidth;
+            if (contentWidth > trackWidth) {
+                $content.addClass('scrolling').css(
+                    'animation-duration', Math.max(15, items.length * 5) + 's'
+                );
+            }
+        }, 50);
     }
 
     function loadPendingBar() {

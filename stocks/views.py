@@ -239,6 +239,45 @@ def barcode_info_api(request):
     })
 
 
+@staff_member_required
+def contract_update_barcode_api(request):
+    """API: อัปเดต barcode ของ CustomerProductContract แบบ AJAX (ไม่ reload หน้า)"""
+    if request.method != 'POST':
+        return JsonResponse({'error': 'method not allowed'}, status=405)
+    import json
+    from .models import CustomerProductContract, ProductBarcode
+    try:
+        data = json.loads(request.body)
+    except Exception:
+        return JsonResponse({'error': 'invalid json'}, status=400)
+
+    contract_id = data.get('contract_id')
+    barcode_id = data.get('barcode_id')
+
+    if not barcode_id:
+        return JsonResponse({'error': 'barcode_id required'}, status=400)
+
+    try:
+        barcode = ProductBarcode.objects.select_related('product').get(pk=barcode_id)
+    except (ProductBarcode.DoesNotExist, ValueError):
+        return JsonResponse({'error': 'barcode not found'}, status=404)
+
+    if contract_id:
+        try:
+            contract = CustomerProductContract.objects.get(pk=contract_id)
+            contract.barcode = barcode
+            contract.product = barcode.product
+            contract.save(update_fields=['barcode', 'product'])
+        except CustomerProductContract.DoesNotExist:
+            pass  # contract ใหม่ที่ยังไม่ได้ save — แค่คืน info
+
+    return JsonResponse({
+        'product_name': barcode.product.name if barcode.product else '-',
+        'unit_name': barcode.unit_name or 'ชิ้น',
+        'conversion_factor': barcode.conversion_factor or 1,
+    })
+
+
 @csrf_exempt
 def unlock_document_view(request):
     if request.method == 'POST' and request.user.is_authenticated:
