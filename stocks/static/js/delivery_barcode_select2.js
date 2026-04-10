@@ -222,20 +222,39 @@
         document.head.appendChild(style);
     }
 
+    function findAddAnotherAnchor($) {
+        // หา "Add another Sales delivery log" link/button
+        // ลอง selector หลายแบบรองรับ Unfold และ Django vanilla
+        var $anchor = null;
+
+        // 1. หา <a> ที่มีข้อความ "Add another" ใน inline delivery_logs
+        $('a').each(function () {
+            var text = $(this).text().toLowerCase();
+            if (text.indexOf('add another') !== -1 || text.indexOf('เพิ่ม') !== -1) {
+                var $closest = $(this).closest('[id*="delivery_logs"], [class*="delivery"]');
+                if ($closest.length) {
+                    $anchor = $(this);
+                    return false;
+                }
+            }
+        });
+
+        // 2. fallback: หา <a> "Add another" ตัวสุดท้ายในหน้า
+        if (!$anchor || !$anchor.length) {
+            $('a').each(function () {
+                var text = $(this).text().toLowerCase();
+                if (text.indexOf('add another') !== -1) {
+                    $anchor = $(this);
+                }
+            });
+        }
+
+        return $anchor;
+    }
+
     function renderPendingBar(items) {
         if (!window.django) return;
         var $ = django.jQuery;
-
-        // หา container ใส่ bar: หลัง tr.add-row ใน inline delivery_logs
-        var $addRow = $('tr.add-row').filter(function () {
-            return $(this).closest('[id*="delivery_logs"]').length > 0 ||
-                   $(this).closest('.tabular').length > 0;
-        }).last();
-
-        // fallback: tr.add-row ตัวสุดท้ายของ page
-        if (!$addRow.length) {
-            $addRow = $('tr.add-row').last();
-        }
 
         var $existing = $('#delivery-pending-bar');
         if (!items || !items.length) {
@@ -247,7 +266,7 @@
         var text = items.map(function (i) {
             return i.barcode + '  (ค้าง ' + i.remaining + ' ' + (i.unit_name || 'ชิ้น') + ')';
         }).join('     ·     ');
-        var fullText = text + '     ·     ' + text; // ซ้ำ 2 รอบให้ scroll ต่อเนื่อง
+        var fullText = text + '     ·     ' + text;
 
         if ($existing.length) {
             $existing.find('.pb-content').text(fullText).css(
@@ -272,12 +291,15 @@
             'animation-duration', Math.max(15, items.length * 5) + 's'
         );
 
-        // ใส่หลัง tr.add-row (ออกจาก table แล้ว wrap ใน tr > td)
-        var $table = $addRow.closest('table');
-        if ($table.length) {
-            $table.after($bar);
+        // แทรก bar ก่อน "Add another" link (ขึ้นไปอยู่เหนือมัน)
+        var $anchor = findAddAnotherAnchor($);
+        if ($anchor && $anchor.length) {
+            // หา parent ที่ใกล้สุด (อาจเป็น div, p, หรือ tr)
+            var $parent = $anchor.parent();
+            $parent.before($bar);
         } else {
-            $addRow.after($('<tr><td colspan="99"></td></tr>').find('td').append($bar).end());
+            // fallback: ต่อท้าย body
+            $('body').append($bar);
         }
     }
 
