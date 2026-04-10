@@ -2210,6 +2210,7 @@ class CustomerProductContractInline(UnfoldTabularInline):
     barcode_unit_info.short_description = 'หน่วย'
 
     class Media:
+        css = {'all': ('css/contract_admin.css',)}
         js = ('js/contract_barcode_autofill.js',)
 
 @admin.register(Customer)

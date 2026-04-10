@@ -14,12 +14,42 @@
 .column-dc_percent     { width: 80px !important; min-width: 80px; }
 .column-rebate_percent { width: 80px !important; min-width: 80px; }
 
-/* input ใน list_editable ให้แคบตาม */
-.column-contract_price input,
-.column-dc_percent input,
-.column-rebate_percent input {
+/* กลุ่มสินค้า */
+.column-display_product_tags { min-width: 100px; }
+
+
+/* ======================================================
+   Inline ใน Customer admin (CustomerProductContractInline)
+   ====================================================== */
+
+/* เอา spinner ออกจาก input[type=number] ทั้งหมดใน inline */
+#customerproductcontract_set-group input[type="number"]::-webkit-outer-spin-button,
+#customerproductcontract_set-group input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+#customerproductcontract_set-group input[type="number"] {
+    -moz-appearance: textfield;
+}
+
+/* คอลัมน์ราคาสัญญา / DC / Rebate ในตาราง inline */
+#customerproductcontract_set-group .field-contract_price { width: 90px; }
+#customerproductcontract_set-group .field-dc_percent     { width: 70px; }
+#customerproductcontract_set-group .field-rebate_percent { width: 70px; }
+
+#customerproductcontract_set-group .field-contract_price input,
+#customerproductcontract_set-group .field-dc_percent input,
+#customerproductcontract_set-group .field-rebate_percent input {
     width: 72px !important;
 }
 
-/* กลุ่มสินค้า */
-.column-display_product_tags { min-width: 100px; }
+/* คอลัมน์หน่วย — กว้างขึ้นเพื่อแสดง "ชิ้น (1 ชิ้น/หน่วย)" ครบ */
+#customerproductcontract_set-group .field-barcode_unit_info {
+    min-width: 130px;
+    width: 130px;
+}
+
+/* คอลัมน์สินค้า (readonly) */
+#customerproductcontract_set-group .field-product {
+    min-width: 180px;
+}
