@@ -2223,7 +2223,7 @@ class CustomerAdmin(DocumentLockMixin, admin.ModelAdmin):
 class CustomerProductContractAdmin(DocumentLockMixin, admin.ModelAdmin):
     list_display = ['customer', 'barcode_display', 'product', 'contract_price', 'dc_percent', 'rebate_percent', 'display_product_tags']
     readonly_fields = ['display_product_tags', 'product', 'barcode_unit_detail']
-    list_editable = ['contract_price', 'dc_percent', 'rebate_percent']
+    # ไม่ใช้ list_editable → ไม่มี spinner, คอลัมน์แคบลง
     list_filter = ['customer', 'product__tags']
     fields = ['customer', 'barcode', 'product', 'barcode_unit_detail', 'display_product_tags', 'contract_price', 'dc_percent', 'rebate_percent']
 
@@ -2235,6 +2235,12 @@ class CustomerProductContractAdmin(DocumentLockMixin, admin.ModelAdmin):
         'product__tags__name',
     ]
     autocomplete_fields = ['customer', 'barcode', 'product_tag_link']
+
+    def save_model(self, request, obj, form, change):
+        # auto-set product จาก barcode
+        if obj.barcode_id and obj.barcode:
+            obj.product = obj.barcode.product
+        super().save_model(request, obj, form, change)
 
     def barcode_display(self, obj):
         return obj.barcode.code if obj.barcode else '-'
