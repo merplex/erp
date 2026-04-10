@@ -17,9 +17,10 @@ Including another URLconf
 
 from django.contrib import admin
 from django.urls import path
-from stocks.views import unlock_document_view
+from stocks.views import unlock_document_view, line_webhook_view
 
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("admin/unlock-doc/", unlock_document_view),
+    path("webhook/line/", line_webhook_view),
 ]
