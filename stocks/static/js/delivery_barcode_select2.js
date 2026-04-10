@@ -43,8 +43,9 @@
                 if (data.valid) {
                     $input.css('border-color', '#22c55e');
                     var rem = data.remaining;
+                    var unit = data.unit_name || 'ชิ้น';
                     showHint($input,
-                        rem > 0 ? ('คงเหลือ: ' + rem + ' ชิ้น') : 'ส่งครบแล้ว (0)',
+                        rem > 0 ? ('คงเหลือ: ' + rem + ' ' + unit) : 'ส่งครบแล้ว (0)',
                         rem > 0 ? '#16a34a' : '#dc2626'
                     );
                     if (callback) callback(true);
@@ -106,8 +107,9 @@
                 lockBarcodeInput($barcodeInput);
                 // อัปเดต remaining
                 var rem = result.remaining;
+                var unit = result.unit_name || 'ชิ้น';
                 showHint($barcodeInput,
-                    '✓ บันทึกแล้ว' + (rem > 0 ? ' — คงเหลือ: ' + rem + ' ชิ้น' : ' — ส่งครบแล้ว'),
+                    '✓ บันทึกแล้ว' + (rem > 0 ? ' — คงเหลือ: ' + rem + ' ' + unit : ' — ส่งครบแล้ว'),
                     rem > 0 ? '#16a34a' : '#2563eb'
                 );
             } else if (result.errors) {

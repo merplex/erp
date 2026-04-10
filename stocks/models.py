@@ -795,20 +795,24 @@ class SalesDeliveryLog(models.Model):
         if self.barcode_obj_id and not self.product_id:
             self.product = self.barcode_obj.product
         if is_new:
+            # factor = จำนวนชิ้นต่อหน่วยบาร์โค้ด (เช่น โหล=12, ชิ้น=1)
+            factor = getattr(self.barcode_obj, 'conversion_factor', 1) or 1
+            qty_pieces = self.quantity_shipped * factor  # แปลงเป็นชิ้นเพื่อตัดสต็อก
+
             # --- 🚀 [LOGIC เดิมของเปรม] ---
-            # 1. สมองกล: ลดสต็อกจริง
-            self.product.stock_quantity -= self.quantity_shipped
+            # 1. สมองกล: ลดสต็อกจริง (เป็นชิ้น)
+            self.product.stock_quantity -= qty_pieces
             self.product.save()
 
-            # 2. สมองกล: สะสมยอดส่งในใบ SO
+            # 2. สมองกล: สะสมยอดส่งในใบ SO (quantity_shipped ใน SalesItem เป็นชิ้น)
             qs = SalesItem.objects.filter(sales_order=self.sales_order, product=self.product)
             if self.barcode_obj_id:
                 item = qs.filter(barcode_obj=self.barcode_obj).first() or qs.first()
             else:
                 item = qs.first()
-            item.quantity_shipped += self.quantity_shipped
+            item.quantity_shipped += qty_pieces
             item.save()
-            
+
             # 🤖 ออโต้สถานะ: เปลี่ยนเป็น 'ส่งบางส่วน' (Shipped)
             so = self.sales_order
             if so.status in ['Draft', 'Confirmed']:
@@ -818,7 +822,7 @@ class SalesDeliveryLog(models.Model):
 
 
             # --- 2. [ส่วนที่เรเพิ่มให้: คำนวณเงินแยกถัง] ---
-            # คำนวณมูลค่าสินค้าดิบ (ราคาขาย x จำนวนส่ง)
+            # sale_price คือราคาต่อหน่วยบาร์โค้ด (โหล/ชิ้น) × จำนวนที่ส่ง (หน่วยบาร์โค้ด)
             self.shipment_value = item.sale_price * self.quantity_shipped
 
             # ดึงข้อมูล DC/Rebate จากสัญญา (Price List) มาคำนวณแยกเก็บเป็น "บาท"
@@ -872,14 +876,17 @@ class SalesDeliveryLog(models.Model):
         
 @receiver(post_delete, sender=SalesDeliveryLog)
 def handle_delivery_deletion(sender, instance, **kwargs):
-    # 1. คืนสต็อกสินค้า (ถ้า product=None ข้ามไป — record เก่าอาจไม่มี)
+    factor = getattr(instance.barcode_obj, 'conversion_factor', 1) or 1
+    qty_pieces = instance.quantity_shipped * factor
+
+    # 1. คืนสต็อกสินค้า (เป็นชิ้น)
     if instance.product_id:
         try:
-            instance.product.stock_quantity += instance.quantity_shipped
+            instance.product.stock_quantity += qty_pieces
             instance.product.save()
         except Exception:
             pass
-    # 2. หักยอดส่งสะสมใน SO
+    # 2. หักยอดส่งสะสมใน SO (เป็นชิ้น)
     try:
         qs = SalesItem.objects.filter(sales_order=instance.sales_order, product=instance.product)
         if instance.barcode_obj_id:
@@ -887,9 +894,10 @@ def handle_delivery_deletion(sender, instance, **kwargs):
         else:
             item = qs.first()
         if item:
-            item.quantity_shipped -= instance.quantity_shipped
+            item.quantity_shipped -= qty_pieces
             item.save()
-    except: pass
+    except Exception:
+        pass
     
     # 🤖 ออโต้สถานะ: ถ้าลบจนไม่เหลือประวัติส่งเลย ให้กลับไปเป็น 'ยืนยัน'
     so = instance.sales_order

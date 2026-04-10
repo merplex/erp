@@ -125,19 +125,22 @@ def delivery_log_autosave(request):
         )
         log.save()  # model.save() จะ auto-set product + ลดสต็อก + อัพ quantity_shipped
 
-    # คำนวณ remaining หลัง save จาก delivery log จริง
+    # คำนวณ remaining หลัง save (เป็นหน่วยบาร์โค้ด)
     from django.db.models import Sum
+    factor = barcode.conversion_factor or 1
     items = SalesItem.objects.filter(sales_order=so, barcode_obj=barcode).values('quantity_ordered')
-    total_ordered = sum(i['quantity_ordered'] or 0 for i in items)
-    total_shipped = SalesDeliveryLog.objects.filter(
+    total_ordered = sum(i['quantity_ordered'] or 0 for i in items)  # ชิ้น
+    total_shipped_units = SalesDeliveryLog.objects.filter(
         sales_order=so, barcode_obj=barcode
     ).aggregate(total=Sum('quantity_shipped'))['total'] or 0
-    remaining = max(0, total_ordered - total_shipped)
+    remaining_pieces = max(0, total_ordered - total_shipped_units * factor)
+    remaining = remaining_pieces // factor  # แสดงเป็นหน่วยบาร์โค้ด
 
     return JsonResponse({
         'success': True,
         'log_id': log.pk,
         'remaining': remaining,
+        'unit_name': barcode.unit_name or 'ชิ้น',
         'barcode_code': barcode.code,
     })
 
@@ -164,16 +167,20 @@ def barcode_remaining_api(request):
     if not items:
         return JsonResponse({'valid': False, 'error': 'บาร์โค้ดนี้ไม่อยู่ในรายการสั่งขายนี้'})
 
-    total_ordered = sum(i['quantity_ordered'] or 0 for i in items)
-    # คำนวณจาก delivery log จริง ไม่ใช่ denormalized field ที่อาจ stale
-    total_shipped = SalesDeliveryLog.objects.filter(
+    factor = barcode.conversion_factor or 1
+    total_ordered = sum(i['quantity_ordered'] or 0 for i in items)  # เป็นชิ้น
+    # quantity_shipped ใน log เป็นหน่วยบาร์โค้ด → แปลงเป็นชิ้นก่อนเทียบ
+    total_shipped_units = SalesDeliveryLog.objects.filter(
         sales_order_id=so_id, barcode_obj=barcode
     ).aggregate(total=Sum('quantity_shipped'))['total'] or 0
-    remaining = max(0, total_ordered - total_shipped)
+    total_shipped_pieces = total_shipped_units * factor
+    remaining_pieces = max(0, total_ordered - total_shipped_pieces)
+    remaining = remaining_pieces // factor  # แสดงผลเป็นหน่วยบาร์โค้ด
 
     return JsonResponse({
         'valid': True,
         'remaining': remaining,
+        'unit_name': barcode.unit_name or 'ชิ้น',
         'product_name': barcode.product.name if barcode.product else '',
     })
 
