@@ -59,6 +59,9 @@
 
     // Auto-save row ผ่าน AJAX — เหมือนกด Save
     function autoSaveRow($row) {
+        // ป้องกัน save ซ้ำซ้อนในเวลาเดียวกัน
+        if ($row.data('saving')) return;
+
         var $barcodeInput = $row.find('.barcode-code-input');
         var barcodeCode = ($barcodeInput.val() || '').trim();
         if (!barcodeCode || !soId) return;
@@ -67,7 +70,6 @@
         var qty = ($qtyInput.val() || '').trim();
         if (!qty) return;
 
-        // ถ้า barcode เป็น readonly แล้ว (save แล้ว) → ไม่ต้อง create ใหม่
         var $idInput = $row.find('input[name$="-id"]');
         var logId = $idInput.val() || null;
 
@@ -75,6 +77,7 @@
         var notes       = ($row.find('input[name*="delivery_logs-"][name$="-notes"]').val() || '').trim();
         var shippedDate = ($row.find('input[name*="delivery_logs-"][name$="-shipped_date"]').val() || '').trim();
 
+        $row.data('saving', true);
         fetch('/api/delivery-log/save/', {
             method: 'POST',
             headers: {
@@ -93,6 +96,7 @@
         })
         .then(function (r) { return r.json(); })
         .then(function (result) {
+            $row.data('saving', false);
             if (result.success) {
                 // อัปเดต id hidden field → กด Save ใหญ่จะ UPDATE ไม่ใช่ CREATE ซ้ำ
                 if (!$idInput.val()) {
@@ -116,6 +120,7 @@
             }
         })
         .catch(function (err) {
+            $row.data('saving', false);
             console.error('Autosave error:', err);
         });
     }

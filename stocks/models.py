@@ -781,6 +781,7 @@ class SalesDeliveryLog(models.Model):
     rebate_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="ยอดหัก Rebate")
     shipment_value = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="ยอดรวมสินค้า (ก่อนหัก)")
     payment_due_date = models.DateField(blank=True, null=True, verbose_name="วันกำหนดรับเงิน")
+    is_barcode_locked = models.BooleanField(default=False, verbose_name='ล็อค')
     is_revenue_confirmed = models.BooleanField(default=False, verbose_name="Paid")
     is_dc_confirmed = models.BooleanField(default=False, verbose_name="DC")
     is_rebate_confirmed = models.BooleanField(default=False, verbose_name="Rebate")
