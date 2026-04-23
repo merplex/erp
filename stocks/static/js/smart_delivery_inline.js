@@ -185,3 +185,40 @@
     init();
   }
 })();
+
+// ── ป้องกัน double-submit ─────────────────────────────────────
+(function () {
+  'use strict';
+  function preventDoubleSubmit() {
+    var form = document.getElementById('changelist-form') ||
+               document.querySelector('form#content-main form') ||
+               document.querySelector('form[method="post"]');
+    if (!form) return;
+
+    form.addEventListener('submit', function () {
+      var btns = form.querySelectorAll('input[type="submit"], button[type="submit"]');
+      btns.forEach(function (btn) {
+        btn.disabled = true;
+        btn.style.opacity = '0.5';
+        btn.style.cursor  = 'not-allowed';
+        var orig = btn.value || btn.textContent;
+        if (btn.value) btn.value = 'กำลังบันทึก...';
+        else btn.textContent = 'กำลังบันทึก...';
+        // คืนสภาพหลัง 15 วิ เผื่อ server error แล้วยังกดได้
+        setTimeout(function () {
+          btn.disabled = false;
+          btn.style.opacity = '';
+          btn.style.cursor  = '';
+          if (btn.value) btn.value = orig;
+          else btn.textContent = orig;
+        }, 15000);
+      });
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', preventDoubleSubmit);
+  } else {
+    preventDoubleSubmit();
+  }
+})();
