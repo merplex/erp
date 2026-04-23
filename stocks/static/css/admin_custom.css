@@ -21,31 +21,33 @@ input[type="checkbox"][id$="-DELETE"]:checked {
     border-color: #dc2626 !important;
 }
 
-/* ── Autocomplete (Select2) ให้เต็มความกว้าง ────────── */
+/* ── Autocomplete (Select2) ให้เต็มความกว้าง + text กึ่งกลางแนวตั้ง ── */
 .select2-container {
     width: 100% !important;
     min-width: 220px !important;
 }
 .select2-container .select2-selection--single {
-    min-height: 36px !important;
-    height: auto !important;
+    height: 36px !important;
     display: flex !important;
     align-items: center !important;
     border: 1px solid #9ca3af !important;
     border-radius: 4px !important;
     padding: 0 4px 0 8px !important;
+    box-sizing: border-box !important;
 }
 .select2-container .select2-selection--single .select2-selection__rendered {
-    line-height: normal !important;
-    padding: 4px 4px 4px 0 !important;
+    flex: 1 !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
-    flex: 1 !important;
+    white-space: nowrap !important;
+    padding: 0 4px 0 0 !important;
+    line-height: normal !important;
 }
 .select2-container .select2-selection--single .select2-selection__arrow {
     height: 100% !important;
     width: 20px !important;
     flex-shrink: 0 !important;
+    position: static !important;
 }
 .select2-dropdown {
     border: 1px solid #9ca3af !important;
@@ -134,24 +136,10 @@ div.add-row {
 
 /* ── Native <select> ให้ text กึ่งกลางแนวตั้ง ──────────────────────── */
 select {
-    vertical-align: middle !important;
     height: 36px !important;
-    line-height: 36px !important;
+    padding: 0 8px !important;
     box-sizing: border-box !important;
-}
-
-/* ── Select2: rendered text กึ่งกลางแนวตั้ง ──────────────────────── */
-.select2-container .select2-selection--single {
-    display: flex !important;
-    align-items: center !important;
-}
-.select2-container .select2-selection--single .select2-selection__rendered {
-    display: flex !important;
-    align-items: center !important;
-    height: 100% !important;
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
-    line-height: 1.4 !important;
+    vertical-align: middle !important;
 }
 
 /* ── Inline table cell ให้ content กึ่งกลางแนวตั้ง ──────────────── */
