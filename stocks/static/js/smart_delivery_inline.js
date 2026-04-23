@@ -200,20 +200,12 @@
 
     // ใช้ CSS แทน disabled เพราะ disabled จะทำให้ค่าปุ่ม (_continue/_addanother)
     // ไม่ถูกส่งใน POST แล้ว Django ไม่รู้จะ redirect ไปไหน
+    // ไม่ต้องมี timeout เพราะ save สำเร็จหรือ error หน้าโหลดใหม่ทั้งนั้น JS รีเซ็ตเอง
     var btns = document.querySelectorAll('input[type="submit"], button[type="submit"]');
     btns.forEach(function (btn) {
-      btn.style.opacity      = '0.5';
-      btn.style.cursor       = 'not-allowed';
+      btn.style.opacity       = '0.5';
+      btn.style.cursor        = 'not-allowed';
       btn.style.pointerEvents = 'none';
     });
-
-    setTimeout(function () {
-      submitted = false;
-      btns.forEach(function (btn) {
-        btn.style.opacity      = '';
-        btn.style.cursor       = '';
-        btn.style.pointerEvents = '';
-      });
-    }, 15000);
   }, true);
 })();
