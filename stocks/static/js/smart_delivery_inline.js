@@ -198,22 +198,22 @@
     }
     submitted = true;
 
+    // ใช้ CSS แทน disabled เพราะ disabled จะทำให้ค่าปุ่ม (_continue/_addanother)
+    // ไม่ถูกส่งใน POST แล้ว Django ไม่รู้จะ redirect ไปไหน
     var btns = document.querySelectorAll('input[type="submit"], button[type="submit"]');
     btns.forEach(function (btn) {
-      btn.disabled = true;
-      btn.style.opacity = '0.5';
-      btn.style.cursor  = 'not-allowed';
-      var orig = btn.value || btn.textContent;
-      if (btn.tagName === 'INPUT') btn.value = 'กำลังบันทึก...';
-      else btn.textContent = 'กำลังบันทึก...';
-      setTimeout(function () {
-        submitted = false;
-        btn.disabled = false;
-        btn.style.opacity = '';
-        btn.style.cursor  = '';
-        if (btn.tagName === 'INPUT') btn.value = orig;
-        else btn.textContent = orig;
-      }, 15000);
+      btn.style.opacity      = '0.5';
+      btn.style.cursor       = 'not-allowed';
+      btn.style.pointerEvents = 'none';
     });
+
+    setTimeout(function () {
+      submitted = false;
+      btns.forEach(function (btn) {
+        btn.style.opacity      = '';
+        btn.style.cursor       = '';
+        btn.style.pointerEvents = '';
+      });
+    }, 15000);
   }, true);
 })();
