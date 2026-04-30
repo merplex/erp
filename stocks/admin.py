@@ -859,7 +859,7 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
             if new_buy == 0:
                 best_supplier = obj.product_suppliers.filter(
                     latest_buy_price__gt=0
-                ).order_by('latest_buy_price').first()
+                ).order_by('-latest_buy_price').first()
                 if best_supplier:
                     new_buy = (best_supplier.latest_buy_price * Decimal('1.15')).quantize(Decimal('0.01'))
                     changed = True
@@ -870,7 +870,7 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
                     contract = CustomerProductContract.objects.filter(
                         product=obj,
                         contract_price__gt=0,
-                    ).order_by('contract_price').first()
+                    ).order_by('-contract_price').first()
                     if contract:
                         new_sale = (contract.contract_price * Decimal('1.15')).quantize(Decimal('0.01'))
                         changed = True
@@ -1029,7 +1029,7 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
         if new_buy == 0:
             best_supplier = obj.product_suppliers.filter(
                 latest_buy_price__gt=0
-            ).order_by('latest_buy_price').first()
+            ).order_by('-latest_buy_price').first()
             if best_supplier:
                 new_buy = (best_supplier.latest_buy_price * Decimal('1.15')).quantize(Decimal('0.01'))
                 auto_filled.append(f"ต้นทุน = {new_buy:,.2f}")
@@ -1043,7 +1043,7 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
                 contract = CustomerProductContract.objects.filter(
                     product=obj,
                     contract_price__gt=0,
-                ).order_by('contract_price').first()
+                ).order_by('-contract_price').first()
                 if contract:
                     new_sale = (contract.contract_price * Decimal('1.15')).quantize(Decimal('0.01'))
                     auto_filled.append(f"ราคาขาย = {new_sale:,.2f}")
