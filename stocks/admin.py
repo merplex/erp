@@ -978,7 +978,7 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
                 return format_html('<b style="color: #28a745;">{}</b> <span style="color: #666;">({})</span>', display_num, count)
             
             if getattr(obj, 'has_bom', False):
-                return format_html('<span style="color: #999;">0.00 (0)</span>')
+                return mark_safe('<span style="color: #999;">0.00 (0)</span>')
         except Exception as e:
             return f"Err: {str(e)[:20]}"
         return "-"
