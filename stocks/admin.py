@@ -838,7 +838,61 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
     search_fields = ('name', 'barcodes__code','tags__name')
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
-    actions = ['export_to_excel']
+    actions = ['export_to_excel', 'auto_fill_cost_price']
+
+    @admin.action(description="💰 คำนวณต้นทุน/ราคาขายอัตโนมัติ (เฉพาะที่ยังเป็น 0)")
+    def auto_fill_cost_price(self, request, queryset):
+        updated_count = 0
+        skipped_count = 0
+
+        for obj in queryset.select_related('category').prefetch_related('product_suppliers'):
+            if not obj.category:
+                skipped_count += 1
+                continue
+
+            cat_name = obj.category.name.strip().lower()
+            new_buy = obj.buy_price
+            new_sale = obj.sale_price
+            changed = False
+
+            # Auto-fill buy_price จาก supplier ถูกสุด +15%
+            if new_buy == 0:
+                best_supplier = obj.product_suppliers.filter(
+                    latest_buy_price__gt=0
+                ).order_by('latest_buy_price').first()
+                if best_supplier:
+                    new_buy = (best_supplier.latest_buy_price * Decimal('1.15')).quantize(Decimal('0.01'))
+                    changed = True
+
+            # Auto-fill sale_price
+            if new_sale == 0:
+                if cat_name == 'product':
+                    contract = CustomerProductContract.objects.filter(
+                        product=obj,
+                        contract_price__gt=0,
+                    ).order_by('contract_price').first()
+                    if contract:
+                        new_sale = (contract.contract_price * Decimal('1.15')).quantize(Decimal('0.01'))
+                        changed = True
+                else:
+                    if new_buy > 0:
+                        new_sale = new_buy
+                        changed = True
+
+            if changed:
+                Product.objects.filter(pk=obj.pk).update(
+                    buy_price=new_buy,
+                    sale_price=new_sale,
+                )
+                updated_count += 1
+            else:
+                skipped_count += 1
+
+        self.message_user(
+            request,
+            f"คำนวณอัตโนมัติเสร็จ: อัปเดต {updated_count} รายการ, ข้าม {skipped_count} รายการ (ราคาไม่เป็น 0 หรือไม่มีข้อมูล supplier/contract)",
+            messages.SUCCESS,
+        )
 
     # ✅ ใช้ตัวนี้แทน filter_horizontal หรือ filter_vertical ค่ะ
     autocomplete_fields = ['tags']
@@ -957,6 +1011,58 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
             obj.created_by = request.user
         obj.updated_by = request.user
         super().save_model(request, obj, form, change)
+
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        obj = form.instance
+
+        if not obj.pk or not obj.category:
+            return
+
+        # อ่านค่าล่าสุดจาก DB (หลัง inline ทุกตัว save เสร็จแล้ว)
+        obj.refresh_from_db()
+        new_buy = obj.buy_price
+        new_sale = obj.sale_price
+        auto_filled = []
+
+        # --- Auto-fill buy_price จาก supplier (ถูกสุด) +15% ถ้าเป็น 0 ---
+        if new_buy == 0:
+            best_supplier = obj.product_suppliers.filter(
+                latest_buy_price__gt=0
+            ).order_by('latest_buy_price').first()
+            if best_supplier:
+                new_buy = (best_supplier.latest_buy_price * Decimal('1.15')).quantize(Decimal('0.01'))
+                auto_filled.append(f"ต้นทุน = {new_buy:,.2f}")
+
+        # --- Auto-fill sale_price ถ้าเป็น 0 ---
+        if new_sale == 0:
+            cat_name = obj.category.name.strip().lower()
+
+            if cat_name == 'product':
+                # กลุ่ม product: ใช้ราคาจาก customer contract +15% (ถ้าไม่มีปล่อย 0)
+                contract = CustomerProductContract.objects.filter(
+                    product=obj,
+                    contract_price__gt=0,
+                ).order_by('contract_price').first()
+                if contract:
+                    new_sale = (contract.contract_price * Decimal('1.15')).quantize(Decimal('0.01'))
+                    auto_filled.append(f"ราคาขาย = {new_sale:,.2f}")
+            else:
+                # กลุ่ม package / sample / other: ไม่ขายต่อ ใช้ buy_price เลย
+                if new_buy > 0:
+                    new_sale = new_buy
+                    auto_filled.append(f"ราคาขาย = {new_sale:,.2f}")
+
+        if auto_filled:
+            Product.objects.filter(pk=obj.pk).update(
+                buy_price=new_buy,
+                sale_price=new_sale,
+            )
+            self.message_user(
+                request,
+                f"คำนวณอัตโนมัติ ({obj.name}): {', '.join(auto_filled)} บาท",
+                messages.INFO,
+            )
 
     class Media:
         js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
