@@ -2472,10 +2472,29 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             )
         ).values('total')
 
+        # ต้นทุน BOM: เฉพาะรายการที่มี bom ถูก assign เท่านั้น
+        # ใช้ BOM ที่เลือกในแต่ละรายการ ไม่ใช่ค่าเฉลี่ย
+        bom_cost_subquery = SalesItem.objects.filter(
+            product=OuterRef('pk'),
+            bom__isnull=False,
+            **{f"{k}": v for k, v in date_query.children}
+        ).annotate(
+            item_bom_cost=Subquery(
+                BOMIngredient.objects.filter(
+                    bom=OuterRef('bom')
+                ).values('bom').annotate(
+                    cost=Sum(F('material__buy_price') * F('quantity'), output_field=DecimalField())
+                ).values('cost')[:1]
+            )
+        ).values('product').annotate(
+            total=Sum(F('item_bom_cost') * F('quantity_shipped'), output_field=DecimalField())
+        ).values('total')
+
         # 4. เอาค่าที่บวกได้มาแปะในรายงาน
         return qs.annotate(
             total_qty=Subquery(shipped_subquery),
-            total_sales_val=Subquery(revenue_subquery)
+            total_sales_val=Subquery(revenue_subquery),
+            total_bom_cost=Subquery(bom_cost_subquery)
         ).filter(total_qty__gt=0) # 🎯 โชว์เฉพาะสินค้าที่ "ส่งสำเร็จ" จริงๆ ในรอบนั้นๆ
     
     # 🎯 หัวใจหลัก: คำนวณยอดรวมของทั้งหน้า (Grand Total)
@@ -2490,14 +2509,13 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             aggregates = qs.aggregate(
                 g_qty=Sum('total_qty'),
                 g_rev=Sum('total_sales_val'),
-                g_buy_cost=Sum(F('buy_price') * F('total_qty'), output_field=DecimalField())
+                g_buy_cost=Sum(F('buy_price') * F('total_qty'), output_field=DecimalField()),
+                g_bom_cost=Sum('total_bom_cost')
             )
 
-            # คำนวณ BOM (Property)
-            g_bom_cost = sum(Decimal(str(p.production_cost_avg or 0)) * (p.total_qty or 0) for p in qs)
-            
             g_rev = aggregates['g_rev'] or 0
             g_buy_cost = aggregates['g_buy_cost'] or 0
+            g_bom_cost = aggregates['g_bom_cost'] or 0
             g_profit = g_rev - g_buy_cost
 
             summary = {
@@ -2558,8 +2576,8 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
 
     @admin.display(description="ต้นทุน BOM")
     def get_total_cost_bom(self, obj):
-        cost = Decimal(str(obj.production_cost_avg or 0)) * (obj.total_qty or 0)
-        return f"{cost:,.2f}"
+        cost = obj.total_bom_cost or 0
+        return f"{float(cost):,.2f}"
 
     @admin.display(description="กำไร (vs Buy)")
     def get_profit_margin(self, obj):
