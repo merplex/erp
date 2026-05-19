@@ -327,9 +327,11 @@ class PurchaseOrder(models.Model):
 
     @property
     def total_paid_amount(self):
-        if hasattr(self, 'payments'):
-            return self.payments.aggregate(t=Sum('amount'))['t'] or Decimal(0)
-        return Decimal(0)
+        return self.payment_logs.aggregate(t=Sum('amount'))['t'] or Decimal(0)
+
+    @property
+    def total_paid(self):
+        return self.total_paid_amount
 
     @property
     def balance_due(self):
