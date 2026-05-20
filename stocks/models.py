@@ -342,8 +342,8 @@ class PurchaseOrder(models.Model):
     # ==========================================
     def update_status(self):
         """เรียกเมื่อมีการเปลี่ยนแปลง Receipt Log"""
-        total_ordered = self.items.aggregate(t=Sum('quantity'))['t'] or 0
-        total_received = self.receipt_logs.aggregate(t=Sum('quantity'))['t'] or 0
+        total_ordered = self.items.aggregate(t=Sum('quantity_ordered'))['t'] or 0
+        total_received = self.receipt_logs.aggregate(t=Sum('quantity_received'))['t'] or 0
 
         if total_ordered > 0:
             if total_received >= total_ordered:
@@ -471,11 +471,9 @@ class PurchaseReceiptLog(models.Model):
             item = PurchaseItem.objects.get(purchase_order=self.purchase_order, product=self.product)
             item.quantity_received += self.quantity_received
             item.save()
-            po = self.purchase_order
-            if po.status in ['Draft', 'Confirmed']:
-                po.status = 'Received'
-                po.save()
         super().save(*args, **kwargs)
+        if is_new:
+            self.purchase_order.update_status()
 
 # --- ย้ายออกมานอก Class และจัดแนวแถวให้ตรงกัน ---
 @receiver(post_delete, sender=PurchaseReceiptLog)
@@ -488,10 +486,7 @@ def handle_receipt_deletion(sender, instance, **kwargs):
         item.save()
     except:
         pass
-    po = instance.purchase_order
-    if not po.receipt_logs.exists() and po.status == 'Received':
-        po.status = 'Confirmed'
-        po.save()
+    instance.purchase_order.update_status()
 
 # 7. ระบบเอกสารสั่งขาย
 class SalesOrder(models.Model):
