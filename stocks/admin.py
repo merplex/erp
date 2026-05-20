@@ -1903,7 +1903,7 @@ class FinanceReportAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin
 
     # จัดหน้าตาฟอร์ม
     # ✅ 1. เปลี่ยน list_display ให้โชว์ Payment Status แทน
-    list_display = ('po_number', 'supplier', 'get_grand_total_list', 'get_balance_due_list', 'payment_status')
+    list_display = ('po_number', 'get_invoice_no_supplier', 'get_supplier_truncated', 'get_grand_total_list', 'get_balance_due_list', 'payment_status')
     # ✅ 2. ตัวกรอง ก็ต้องกรองตามการจ่ายเงิน
     list_filter = (('order_date', DjangoDateRangeFilter), 'payment_status', 'supplier') 
     # ✅ 3. ในหน้า Detail ก็เปลี่ยน fields
@@ -1917,23 +1917,34 @@ class FinanceReportAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin
             'classes': ('wide',), 
         }),
         ('📝 ข้อมูลเอกสาร', {
-            # โชว์ทั้ง 2 สถานะเลยก็ได้ครับ บัญชีจะได้รู้ว่า ของมาครบหรือยัง
-            'fields': ('po_number', 'supplier', 'order_date', 'status', 'payment_status')
+            'fields': ('po_number', 'invoice_no_supplier', 'supplier', 'order_date', 'status', 'payment_status')
         }),
     )
 
     readonly_fields = (
-        'po_number', 'supplier', 'order_date', 
-        'get_total_items_display', 'get_subtotal_display', 
-        'get_vat_amount_display', 'get_grand_total_display', 
+        'po_number', 'supplier', 'order_date',
+        'get_total_items_display', 'get_subtotal_display',
+        'get_vat_amount_display', 'get_grand_total_display',
         'get_total_paid_display', 'get_balance_due_display',
-        'status', 'payment_status' # <-- ห้ามแก้สถานะมือ ให้ระบบคำนวณเอง
+        'status', 'payment_status'
     )
 
     inlines = [PurchaseItemReadOnlyInline, PurchasePaymentInline]
 
-    # --- ส่วนที่แก้ไข: ใช้ f-string จัดตัวเลขก่อนส่งไป format_html ทุกตัว ---
-        # บันทึก User คนจ่ายเงินอัตโนมัติ
+    def get_invoice_no_supplier(self, obj):
+        val = obj.invoice_no_supplier or '-'
+        return format_html('<span style="font-size:12px;color:#555;">{}</span>', val)
+    get_invoice_no_supplier.short_description = "Invoice ผู้ขาย"
+
+    def get_supplier_truncated(self, obj):
+        name = str(obj.supplier) if obj.supplier else '-'
+        return format_html(
+            '<span style="display:inline-block;max-width:140px;overflow:hidden;'
+            'text-overflow:ellipsis;white-space:nowrap;" title="{}">{}</span>',
+            name, name
+        )
+    get_supplier_truncated.short_description = "Supplier"
+
     def save_formset(self, request, form, formset, change):
         # 1. บันทึกข้อมูลที่กรอกในตารางก่อน
         formset.save()
@@ -2024,7 +2035,7 @@ class FinanceReportAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin
 @admin.register(IncomeReport)
 class IncomeReportAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
     # ✅ ปรับ list_display ให้เอาตัวที่มีสีมาโชว์เลย จะได้ดูง่ายๆ
-    list_display = ('so_number', 'customer', 'get_grand_total_display', 'get_balance_due_display', 'payment_status')
+    list_display = ('so_number', 'get_po_no_customer', 'get_customer_truncated', 'get_grand_total_display', 'get_balance_due_display', 'payment_status')
     list_filter = (('order_date', DjangoDateRangeFilter),'payment_status', 'status', 'customer' )
     search_fields = ('so_number', 'customer__company_name')
     actions = [settle_and_close_orders, settle_income_special, 'calculate_income_totals', 'export_to_excel']
@@ -2073,18 +2084,32 @@ class IncomeReportAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin)
             ),
         }),
         ('📝 ข้อมูลเอกสาร', {
-            'fields': ('so_number', 'customer', 'order_date', 'status', 'payment_status')
+            'fields': ('so_number', 'po_no_customer', 'customer', 'order_date', 'status', 'payment_status')
         }),
     )
 
     readonly_fields = (
         'so_number', 'customer', 'order_date', 'status', 'payment_status',
         'get_total_items_display', 'get_subtotal_display', 'get_vat_percent_display',
-        'get_vat_amount_display', 'get_grand_total_display', 
+        'get_vat_amount_display', 'get_grand_total_display',
         'get_total_paid_display', 'get_balance_due_display'
     )
 
     inlines = [SalesItemReadOnlyInline, SalesPaymentInline]
+
+    def get_po_no_customer(self, obj):
+        val = obj.po_no_customer or '-'
+        return format_html('<span style="font-size:12px;color:#555;">{}</span>', val)
+    get_po_no_customer.short_description = "PO ลูกค้า"
+
+    def get_customer_truncated(self, obj):
+        name = str(obj.customer) if obj.customer else '-'
+        return format_html(
+            '<span style="display:inline-block;max-width:140px;overflow:hidden;'
+            'text-overflow:ellipsis;white-space:nowrap;" title="{}">{}</span>',
+            name, name
+        )
+    get_customer_truncated.short_description = "Customer"
 
     # --- Methods ที่ปรับปรุงใหม่ (ใช้ได้ทั้ง List และ Detail) ---
     def save_formset(self, request, form, formset, change):
