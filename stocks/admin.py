@@ -660,6 +660,29 @@ class PurchaseReceiptLogInline(UnfoldTabularInline):
             formfield.widget.attrs['style'] = 'width: 300px;'
         return formfield
 
+    def _lock_reason(self, po):
+        if po is None:
+            return None
+        if po.status == 'Cancelled':
+            return "ใบสั่งซื้อถูกยกเลิก"
+        if po.status == 'Completed':
+            return "ใบสั่งซื้อปิดงานแล้ว"
+        if po.payment_status == 'Paid':
+            return "จ่ายเงินครบแล้ว"
+        return None
+
+    def has_add_permission(self, request, obj=None):
+        if self._lock_reason(obj): return False
+        return super().has_add_permission(request, obj)
+
+    def has_change_permission(self, request, obj=None):
+        if self._lock_reason(obj): return False
+        return super().has_change_permission(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        if self._lock_reason(obj): return False
+        return super().has_delete_permission(request, obj)
+
 class SalesItemInline(UnfoldTabularInline):
     model = SalesItem
     # สำคัญ: ต้องใส่ทั้งสองฟิลด์เพื่อให้ค้นหาและ Tab ได้เลย
@@ -795,6 +818,31 @@ class SalesDeliveryLogInline(UnfoldTabularInline):
         DynamicForm = type('SalesDeliveryLogForm', (SalesDeliveryLogForm,), {'_so_id': so_id})
         kwargs['form'] = DynamicForm
         return super().get_formset(request, obj, **kwargs)
+
+    def _lock_reason(self, so):
+        if so is None:
+            return None
+        if so.status == 'Cancelled':
+            return "ใบสั่งขายถูกยกเลิก"
+        if so.status == 'Completed':
+            return "ใบสั่งขายปิดงานแล้ว"
+        if so.delivery_logs.filter(
+            Q(is_revenue_confirmed=True) | Q(is_dc_confirmed=True) | Q(is_rebate_confirmed=True)
+        ).exists():
+            return "มีรายการที่ยืนยันใน C6 แล้ว"
+        return None
+
+    def has_add_permission(self, request, obj=None):
+        if self._lock_reason(obj): return False
+        return super().has_add_permission(request, obj)
+
+    def has_change_permission(self, request, obj=None):
+        if self._lock_reason(obj): return False
+        return super().has_change_permission(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        if self._lock_reason(obj): return False
+        return super().has_delete_permission(request, obj)
 
 class ProductionLogInline(UnfoldTabularInline):
     model = ProductionLog
@@ -1117,6 +1165,15 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin
         return super().response_change(request, obj)
 
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
+        if obj and change:
+            reasons = []
+            if obj.status in ('Completed', 'Cancelled'):
+                reasons.append(f"สถานะ '{obj.status}'")
+            if obj.payment_status == 'Paid':
+                reasons.append("จ่ายเงินครบแล้ว")
+            if reasons:
+                messages.warning(request,
+                    f"🔒 เอกสารนี้ถูกล็อค ({', '.join(reasons)}) — ไม่สามารถเพิ่ม/แก้ไข/ลบรายการรับของได้")
         script = mark_safe("""
             <script>
                 django.jQuery(document).ready(function() {
@@ -1203,6 +1260,17 @@ class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
         return super().response_change(request, obj)
 
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
+        if obj and change:
+            reasons = []
+            if obj.status in ('Completed', 'Cancelled'):
+                reasons.append(f"สถานะ '{obj.status}'")
+            if obj.delivery_logs.filter(
+                Q(is_revenue_confirmed=True) | Q(is_dc_confirmed=True) | Q(is_rebate_confirmed=True)
+            ).exists():
+                reasons.append("มีรายการที่ยืนยันใน C6 แล้ว")
+            if reasons:
+                messages.warning(request,
+                    f"🔒 เอกสารนี้ถูกล็อค ({', '.join(reasons)}) — ไม่สามารถเพิ่ม/แก้ไข/ลบรายการส่งของได้")
         script = mark_safe("""
             <script>
                 django.jQuery(document).ready(function() {

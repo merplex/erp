@@ -466,14 +466,20 @@ class PurchaseReceiptLog(models.Model):
     def save(self, *args, **kwargs):
         is_new = self.pk is None
         if is_new:
-            self.product.stock_quantity += self.quantity_received
-            self.product.save()
+            diff = self.quantity_received
+        else:
+            old_qty = PurchaseReceiptLog.objects.values_list('quantity_received', flat=True).get(pk=self.pk)
+            diff = self.quantity_received - old_qty
+
+        if diff != 0:
+            self.product.stock_quantity += diff
+            self.product.save(update_fields=['stock_quantity'])
             item = PurchaseItem.objects.get(purchase_order=self.purchase_order, product=self.product)
-            item.quantity_received += self.quantity_received
-            item.save()
+            item.quantity_received += diff
+            item.save(update_fields=['quantity_received'])
+
         super().save(*args, **kwargs)
-        if is_new:
-            self.purchase_order.update_status()
+        self.purchase_order.update_status()
 
 # --- ย้ายออกมานอก Class และจัดแนวแถวให้ตรงกัน ---
 @receiver(post_delete, sender=PurchaseReceiptLog)
