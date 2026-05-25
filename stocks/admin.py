@@ -685,9 +685,23 @@ class PurchaseReceiptLogInline(UnfoldTabularInline):
 
 class SalesItemInline(UnfoldTabularInline):
     model = SalesItem
-    # สำคัญ: ต้องใส่ทั้งสองฟิลด์เพื่อให้ค้นหาและ Tab ได้เลย
     autocomplete_fields = ['barcode_obj', 'product']
     extra = 1
+
+    def _is_locked(self, so):
+        return so is not None and so.status in ('Completed', 'Cancelled')
+
+    def has_add_permission(self, request, obj=None):
+        if self._is_locked(obj): return False
+        return super().has_add_permission(request, obj)
+
+    def has_change_permission(self, request, obj=None):
+        if self._is_locked(obj): return False
+        return super().has_change_permission(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        if self._is_locked(obj): return False
+        return super().has_delete_permission(request, obj)
 
     # product ต้องเอาออกจาก readonly_fields เพื่อให้เปรมเลือกเองได้กรณีไม่มีบาร์โค้ด
     readonly_fields = ('quantity_ordered', 'get_unit_name_display','get_total_display')

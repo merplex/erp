@@ -527,11 +527,24 @@ class SalesOrder(models.Model):
     def __str__(self):
         return self.so_number
     
+    def update_status(self):
+        """เรียกเมื่อมีการเปลี่ยนแปลง DeliveryLog"""
+        if self.status in ('Completed', 'Cancelled'):
+            return
+        total_ordered = self.items.aggregate(t=Sum('quantity_ordered'))['t'] or 0
+        total_shipped = self.items.aggregate(t=Sum('quantity_shipped'))['t'] or 0
+
+        if total_ordered > 0 and total_shipped >= total_ordered:
+            self.status = 'Completed'
+        elif total_shipped > 0:
+            self.status = 'Shipped'
+        else:
+            self.status = 'Confirmed'
+        self.save(update_fields=['status'])
+
     def save(self, *args, **kwargs):
         if not self.so_number: self.so_number = generate_number('SO', SalesOrder, 'so_number')
         super().save(*args, **kwargs)
-    class Meta: verbose_name_plural = "B2. ใบสั่งขาย (Sales)"
-
 
     class Meta: verbose_name_plural = "B2. ใบสั่งขาย (Sales)"
     def delete(self, *args, **kwargs):
@@ -818,11 +831,6 @@ class SalesDeliveryLog(models.Model):
             item.quantity_shipped += self.quantity_shipped  # หน่วยบาร์โค้ด
             item.save()
 
-            # 🤖 ออโต้สถานะ: เปลี่ยนเป็น 'ส่งบางส่วน' (Shipped)
-            so = self.sales_order
-            if so.status in ['Draft', 'Confirmed']:
-                so.status = 'Shipped'
-                so.save()
             # --- 🛑 [จบ LOGIC เดิม] ---
 
 
@@ -871,6 +879,8 @@ class SalesDeliveryLog(models.Model):
 
         # บันทึกลงฐานข้อมูลจริง
         super().save(*args, **kwargs)
+        if is_new:
+            self.sales_order.update_status()
 
     @property
     def total_with_vat(self):
@@ -904,11 +914,11 @@ def handle_delivery_deletion(sender, instance, **kwargs):
     except Exception:
         pass
     
-    # 🤖 ออโต้สถานะ: ถ้าลบจนไม่เหลือประวัติส่งเลย ให้กลับไปเป็น 'ยืนยัน'
+    # 🤖 ออโต้สถานะ
     so = instance.sales_order
-    if not so.delivery_logs.exists() and so.status == 'Shipped':
-        so.status = 'Confirmed'
-        so.save()
+    so.status = 'Shipped' if so.status == 'Completed' else so.status
+    so.save(update_fields=['status'])
+    so.update_status()
 
 
 # 8. ระบบเอกสารสั่งผลิต
