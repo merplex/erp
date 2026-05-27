@@ -841,10 +841,10 @@ class SalesDeliveryLog(models.Model):
             # ดึงข้อมูล DC/Rebate จากสัญญา (Price List) มาคำนวณแยกเก็บเป็น "บาท"
             from .models import CustomerProductContract 
             contract = CustomerProductContract.objects.filter(
-                customer=so.customer, 
+                customer=self.sales_order.customer,
                 product=self.product
             ).first()
-            
+
             if contract:
                 # แยกเก็บค่า DC และ Rebate ลงคอลัมน์ของตัวเองชัดๆ
                 self.dc_amount = self.shipment_value * (contract.dc_percent / 100)
@@ -854,9 +854,9 @@ class SalesDeliveryLog(models.Model):
                 self.rebate_amount = 0
 
             # --- 3. [คำนวณวันจ่ายเงินตามรอบบัญชี] ---
-            if so.customer:
-                close_day = so.customer.account_close_day
-                term = so.customer.payment_term
+            if self.sales_order.customer:
+                close_day = self.sales_order.customer.account_close_day
+                term = self.sales_order.customer.payment_term
                 ref_date = datetime.date.today()
 
                 try:
