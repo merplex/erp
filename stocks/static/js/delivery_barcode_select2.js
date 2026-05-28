@@ -372,17 +372,6 @@
     }
 
     document.addEventListener('DOMContentLoaded', function () {
-        // ลดความกว้างช่องวันที่/เวลา ~20-25%
-        if (!document.getElementById('dl-date-style')) {
-            var s = document.createElement('style');
-            s.id = 'dl-date-style';
-            s.textContent = [
-                'input[name*="delivery_logs-"][name$="-shipped_date_0"] { width: 110px !important; }',
-                'input[name*="delivery_logs-"][name$="-shipped_date_1"] { width: 78px !important; }',
-            ].join('\n');
-            document.head.appendChild(s);
-        }
-
         setTimeout(initAllRows, 300);
         setTimeout(loadPendingBar, 500);
 
