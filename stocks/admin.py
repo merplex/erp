@@ -858,6 +858,20 @@ class SalesDeliveryLogInline(UnfoldTabularInline):
         if self._lock_reason(obj): return False
         return super().has_delete_permission(request, obj)
 
+    def get_barcode_display(self, obj):
+        return obj.barcode_obj.code if obj and obj.barcode_obj else '-'
+    get_barcode_display.short_description = 'บาร์โค้ด'
+
+    def get_fields(self, request, obj=None):
+        if self._lock_reason(obj):
+            return ('get_barcode_display', 'shipping_no', 'quantity_shipped', 'user', 'notes', 'shipped_date')
+        return ('barcode_code', 'shipping_no', 'quantity_shipped', 'user', 'notes', 'shipped_date')
+
+    def get_readonly_fields(self, request, obj=None):
+        if self._lock_reason(obj):
+            return ('get_barcode_display', 'shipping_no', 'quantity_shipped', 'user', 'notes', 'shipped_date')
+        return ('user',)
+
 class ProductionLogInline(UnfoldTabularInline):
     model = ProductionLog
     extra = 1

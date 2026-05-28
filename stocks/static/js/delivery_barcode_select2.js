@@ -127,14 +127,25 @@
         });
     }
 
-    // หา delivery row ที่อยู่เหนือ row นี้ขึ้นไป (ข้าม non-form rows)
+    // หา delivery row ที่อยู่เหนือ row นี้ขึ้นไป
+    // รองรับทั้ง: rows ใน tbody เดียวกัน และ Unfold ที่แยก tbody ต่อ row
     function getPrevDeliveryRow(row) {
+        // ลองหาใน sibling ของ row เดียวกันก่อน
         var prev = row.previousElementSibling;
         while (prev) {
             if (prev.querySelector('input[name*="delivery_logs-"][name$="-shipping_no"]')) {
                 return prev;
             }
             prev = prev.previousElementSibling;
+        }
+        // fallback: Unfold แยก tbody ต่อ row — ดู parent siblings
+        var parent = row.parentElement;
+        if (!parent) return null;
+        var prevParent = parent.previousElementSibling;
+        while (prevParent) {
+            var found = prevParent.querySelector('input[name*="delivery_logs-"][name$="-shipping_no"]');
+            if (found) return found.closest('tr');
+            prevParent = prevParent.previousElementSibling;
         }
         return null;
     }
@@ -168,6 +179,11 @@
         autoFillShippingNo(row);
 
         var barcodeTimer = null;
+
+        // focus → auto-fill shipping_no อีกครั้ง (กรณี setup ก่อนที่ row ก่อนจะมีค่า)
+        $barcodeInput.on('focus', function () {
+            autoFillShippingNo(row);
+        });
 
         // ออกจากกล่อง barcode → validate + ลอง save (ถ้ามี qty แล้ว)
         $barcodeInput.on('blur', function () {
