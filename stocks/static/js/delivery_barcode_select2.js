@@ -372,19 +372,30 @@
     }
 
     document.addEventListener('DOMContentLoaded', function () {
-        // ลดความกว้างช่องวันที่/เวลา ~20-25%
-        if (!document.getElementById('dl-date-style')) {
-            var s = document.createElement('style');
-            s.id = 'dl-date-style';
-            s.textContent = [
-                'input[name*="delivery_logs-"][name$="-shipped_date_0"] { width: 110px !important; }',
-                'input[name*="delivery_logs-"][name$="-shipped_date_1"] { width: 78px !important; }',
-            ].join('\n');
-            document.head.appendChild(s);
+        // ลดความกว้างช่อง วันที่/เวลา — ต้องลด wrapper div (ที่ครอบ input+icon) ด้วย
+        function shrinkDateFields() {
+            [
+                { suffix: '-shipped_date_0', wrapW: '118px', inpW: '100%' },
+                { suffix: '-shipped_date_1', wrapW: '90px',  inpW: '100%' },
+            ].forEach(function (cfg) {
+                document.querySelectorAll(
+                    'input[name*="delivery_logs-"][name$="' + cfg.suffix + '"]'
+                ).forEach(function (inp) {
+                    inp.style.setProperty('width', cfg.inpW, 'important');
+                    inp.style.setProperty('min-width', '0', 'important');
+                    var wrap = inp.parentElement;
+                    if (!wrap || wrap.tagName === 'TD' || wrap.tagName === 'TH') return;
+                    wrap.style.setProperty('width', cfg.wrapW, 'important');
+                    wrap.style.setProperty('max-width', cfg.wrapW, 'important');
+                    wrap.style.setProperty('min-width', '0', 'important');
+                    wrap.style.setProperty('flex', '0 0 ' + cfg.wrapW, 'important');
+                });
+            });
         }
 
         setTimeout(initAllRows, 300);
         setTimeout(loadPendingBar, 500);
+        setTimeout(shrinkDateFields, 500);
 
         // MutationObserver: จับ row ที่เพิ่มมาแบบ dynamic ได้แน่นอน ไม่ต้องพึ่ง formset:added
         var observer = new MutationObserver(function (mutations) {
@@ -393,11 +404,11 @@
                     if (node.nodeType !== 1) return; // element nodes only
                     if (node.tagName === 'TR') {
                         // row ถูก insert โดยตรง
-                        setTimeout(function () { setupRow(node); }, 50);
+                        setTimeout(function () { setupRow(node); shrinkDateFields(); }, 50);
                     } else {
                         // node อื่น (เช่น tbody) ที่มี TR ข้างใน
                         node.querySelectorAll('tr').forEach(function (tr) {
-                            setTimeout(function () { setupRow(tr); }, 50);
+                            setTimeout(function () { setupRow(tr); shrinkDateFields(); }, 50);
                         });
                     }
                 });
