@@ -372,18 +372,23 @@
     }
 
     document.addEventListener('DOMContentLoaded', function () {
-        // ลดความกว้างช่อง วันที่/เวลา — ลด max-width ของ wrapper (ที่ครอบ input+icon)
+        // ลดความกว้างช่อง วันที่/เวลา — ต้องลด wrapper div (ที่ครอบ input+icon) ด้วย
         function shrinkDateFields() {
             [
-                { suffix: '-shipped_date_0', maxW: '130px' },
-                { suffix: '-shipped_date_1', maxW: '110px' },
+                { suffix: '-shipped_date_0', wrapW: '118px', inpW: '100%' },
+                { suffix: '-shipped_date_1', wrapW: '90px',  inpW: '100%' },
             ].forEach(function (cfg) {
                 document.querySelectorAll(
                     'input[name*="delivery_logs-"][name$="' + cfg.suffix + '"]'
                 ).forEach(function (inp) {
+                    inp.style.setProperty('width', cfg.inpW, 'important');
+                    inp.style.setProperty('min-width', '0', 'important');
                     var wrap = inp.parentElement;
                     if (!wrap || wrap.tagName === 'TD' || wrap.tagName === 'TH') return;
-                    wrap.style.setProperty('max-width', cfg.maxW, 'important');
+                    wrap.style.setProperty('width', cfg.wrapW, 'important');
+                    wrap.style.setProperty('max-width', cfg.wrapW, 'important');
+                    wrap.style.setProperty('min-width', '0', 'important');
+                    wrap.style.setProperty('flex', '0 0 ' + cfg.wrapW, 'important');
                 });
             });
         }
