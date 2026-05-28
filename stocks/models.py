@@ -786,7 +786,7 @@ class SalesDeliveryLog(models.Model):
     barcode_obj = models.ForeignKey('ProductBarcode', null=True, blank=True, on_delete=models.SET_NULL, verbose_name="บาร์โค้ด/แพ็คเกจ")
     product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้าที่ส่ง")
     quantity_shipped = models.PositiveIntegerField(verbose_name="จำนวน")
-    shipping_no = models.CharField(max_length=100, blank=True, verbose_name="เลขใบขนส่ง/Invoice ของเรา")
+    shipping_no = models.CharField(max_length=100, blank=True, verbose_name="เลขใบขนส่ง/MB Invoice")
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     shipped_date = models.DateTimeField(
         default=timezone.now, db_index=True,

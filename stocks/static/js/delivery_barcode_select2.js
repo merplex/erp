@@ -127,6 +127,30 @@
         });
     }
 
+    // หา delivery row ที่อยู่เหนือ row นี้ขึ้นไป (ข้าม non-form rows)
+    function getPrevDeliveryRow(row) {
+        var prev = row.previousElementSibling;
+        while (prev) {
+            if (prev.querySelector('input[name*="delivery_logs-"][name$="-shipping_no"]')) {
+                return prev;
+            }
+            prev = prev.previousElementSibling;
+        }
+        return null;
+    }
+
+    // copy shipping_no จาก row ก่อนหน้า ถ้า row ปัจจุบันยังว่าง
+    function autoFillShippingNo(row) {
+        if (!window.django) return;
+        var $ = django.jQuery;
+        var $snInput = $(row).find('input[name*="delivery_logs-"][name$="-shipping_no"]');
+        if (!$snInput.length || $snInput.val().trim()) return; // มีค่าแล้ว ไม่ copy
+        var prevRow = getPrevDeliveryRow(row);
+        if (!prevRow) return;
+        var prevVal = $(prevRow).find('input[name*="delivery_logs-"][name$="-shipping_no"]').val().trim();
+        if (prevVal) $snInput.val(prevVal);
+    }
+
     function setupRow(row) {
         if (!row || !window.django) return;
         var $ = django.jQuery;
@@ -140,6 +164,9 @@
 
         $row.data('barcode-setup', true);
 
+        // auto-fill shipping_no ทันทีที่ row ถูก setup (ถ้า row ก่อนมีค่าแล้ว)
+        autoFillShippingNo(row);
+
         var barcodeTimer = null;
 
         // ออกจากกล่อง barcode → validate + ลอง save (ถ้ามี qty แล้ว)
@@ -150,8 +177,9 @@
             });
         });
 
-        // พิมพ์ใน barcode → validate หลัง 600ms
+        // พิมพ์ใน barcode → validate หลัง 600ms + auto-fill shipping_no
         $barcodeInput.on('input', function () {
+            autoFillShippingNo(row);
             clearTimeout(barcodeTimer);
             barcodeTimer = setTimeout(function () {
                 checkBarcode($barcodeInput, null);
