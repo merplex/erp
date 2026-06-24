@@ -2152,18 +2152,35 @@ class IncomeReportAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin)
     search_fields = ('so_number', 'customer__company_name')
     actions = [settle_and_close_orders, settle_income_special, 'calculate_income_totals', 'export_to_excel']
 
-    @admin.display(description="ค้างรับ") 
+    def get_queryset(self, request):
+        from django.db.models import Sum, F, ExpressionWrapper, DecimalField as DField, Q
+        return super().get_queryset(request).select_related('customer').annotate(
+            _total_items_price=Sum(
+                ExpressionWrapper(F('items__quantity_ordered') * F('items__sale_price'), output_field=DField())
+            ),
+            _total_paid=Sum('payments__amount', filter=Q(payments__amount__gt=0)),
+        )
+
+    @admin.display(description="ค้างรับ")
     def get_balance_due_display(self, obj):
-        # 1. ดึงตัวเลขมา
-        balance = getattr(obj, 'balance_due', 0) or 0
-        
-        # 2. เช็คสี
+        subtotal = getattr(obj, '_total_items_price', None)
+        if subtotal is None:
+            subtotal = getattr(obj, 'total_items_price', 0) or 0
+        else:
+            subtotal = subtotal or 0
+
+        paid = getattr(obj, '_total_paid', None)
+        if paid is None:
+            paid = self.get_revenue_only_paid(obj)
+        else:
+            paid = paid or 0
+
+        vat_p = obj.vat_percent or 0
+        grand_total = subtotal + (subtotal * vat_p / 100)
+        balance = grand_total - paid
+
         color = "red" if balance > 0 else "green"
-        
-        # 3. จัดการคอมม่าและทศนิยมให้เสร็จเป็น String ก่อน 🎯
         formatted_balance = f"{float(balance):,.2f}"
-        
-        # 4. ส่ง String ที่จัดรูปแล้วเข้าไปในหัวข้อ {} เฉยๆ
         return format_html('<b style="color:{};">{}</b>', color, formatted_balance)
     get_balance_due_display.short_description = "ค้างรับ"
 
@@ -2280,7 +2297,11 @@ class IncomeReportAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin)
     get_vat_amount_display.short_description = "ภาษีมูลค่าเพิ่ม (VAT)"
 
     def get_grand_total_display(self, obj):
-        subtotal = getattr(obj, 'total_items_price', 0)
+        subtotal = getattr(obj, '_total_items_price', None)
+        if subtotal is None:
+            subtotal = getattr(obj, 'total_items_price', 0) or 0
+        else:
+            subtotal = subtotal or 0
         vat_p = obj.vat_percent or 0
         total = subtotal + ((subtotal * vat_p) / 100)
         formatted_total = f"{total:,.2f}"
@@ -2757,6 +2778,11 @@ class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     search_fields = ('sales_order__so_number', 'product__name', 'product__barcodes__code') 
     ordering = ('-shipped_date', 'sales_order__so_number')
 
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related(
+            'sales_order', 'sales_order__customer', 'product'
+        )
+
     # --- ให้การค้นหา ใช้ รูปแบบ และ หรือ ได้ ---
     def get_search_results(self, request, queryset, search_term):
         # ถ้าคนหาใช้เครื่องหมาย | ให้แยกคำแล้วใช้ Logic OR
@@ -2831,18 +2857,16 @@ class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     def changelist_view(self, request, extra_context=None):
         cl = self.get_changelist_instance(request)
         qs = cl.get_queryset(request)
-        
-        sum_vat = sum_dc = sum_rebate = Decimal('0') # ใช้ Decimal ป้องกัน Error
-        for obj in qs:
-            item = obj.sales_order.items.filter(product=obj.product).first()
-            if item:
-                rev = item.sale_price * obj.quantity_shipped
-                sum_vat += rev
-                from .models import CustomerProductContract
-                c = CustomerProductContract.objects.filter(customer=obj.sales_order.customer, product=obj.product).first()
-                if c:
-                    sum_dc += (rev * c.dc_percent) / Decimal('100')
-                    sum_rebate += (rev * c.rebate_percent) / Decimal('100')
+
+        from django.db.models import Sum
+        totals = qs.aggregate(
+            sum_vat=Sum('shipment_value'),
+            sum_dc=Sum('dc_amount'),
+            sum_rebate=Sum('rebate_amount'),
+        )
+        sum_vat = totals['sum_vat'] or Decimal('0')
+        sum_dc = totals['sum_dc'] or Decimal('0')
+        sum_rebate = totals['sum_rebate'] or Decimal('0')
 
         if qs.exists():
             msg = f"📊 สรุปยอดช่วงที่เลือก: ยอดรวม ฿{sum_vat:,.2f} | DC ฿{sum_dc:,.2f} | Rebate ฿{sum_rebate:,.2f}"
@@ -2856,49 +2880,21 @@ class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     get_revenue_inc_vat.short_description = "incl.VAT"
 
     def get_revenue_no_vat(self, obj):
-        item = obj.sales_order.items.filter(product=obj.product).first()
-        if item:
-            # 🎯 ไม่ต้องหาร vat_divisor แล้วครับ เพราะราคา item.sale_price คือราคา Non-VAT อยู่แล้ว
-            no_vat = item.sale_price * obj.quantity_shipped
-            return f"{no_vat:,.2f}"
-        return "0.00"
+        return f"{obj.shipment_value:,.2f}"
     get_revenue_no_vat.short_description = "excl.VAT"
 
     def get_dc_value(self, obj):
-        from .models import CustomerProductContract
-        contract = CustomerProductContract.objects.filter(
-            customer=obj.sales_order.customer, 
-            product=obj.product
-        ).first()
-        
-        if contract:
-            item = obj.sales_order.items.filter(product=obj.product).first()
-            revenue = (item.sale_price * obj.quantity_shipped) if item else Decimal('0')
-            dc_amt = (revenue * contract.dc_percent) / Decimal('100')
-            
-            # ✅ แก้ตรงนี้: ฟอร์แมตตัวเลขข้างนอกก่อนส่งเข้า format_html
-            formatted_amt = f"{dc_amt:,.2f}"
-            return format_html('{}% (<b>฿{}</b>)', contract.dc_percent, formatted_amt)
-        return "-"
+        dc_amt = obj.dc_amount or Decimal('0')
+        if not dc_amt:
+            return "-"
+        return format_html('<b>฿{}</b>', f"{dc_amt:,.2f}")
     get_dc_value.short_description = "ยอดDC"
 
-    # 🎯 4. ยอด Rebate (แก้ไขจุดที่ทำให้เกิด ValueError)
     def get_rebate_value(self, obj):
-        from .models import CustomerProductContract
-        contract = CustomerProductContract.objects.filter(
-            customer=obj.sales_order.customer, 
-            product=obj.product
-        ).first()
-        
-        if contract:
-            item = obj.sales_order.items.filter(product=obj.product).first()
-            revenue = (item.sale_price * obj.quantity_shipped) if item else Decimal('0')
-            reb_amt = (revenue * contract.rebate_percent) / Decimal('100')
-            
-            # ✅ แก้ตรงนี้เช่นกันครับ
-            formatted_amt = f"{reb_amt:,.2f}"
-            return format_html('{}% (<b>฿{}</b>)', contract.rebate_percent, formatted_amt)
-        return "-"
+        reb_amt = obj.rebate_amount or Decimal('0')
+        if not reb_amt:
+            return "-"
+        return format_html('<b>฿{}</b>', f"{reb_amt:,.2f}")
     get_rebate_value.short_description = "ยอดRebate"
 
     # 🎯 5. ยอด ที่ยืนยันทั้งหมด จะถูกบันทึกย้อนไปใน salesorder และ incomereport
