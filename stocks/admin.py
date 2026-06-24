@@ -50,7 +50,7 @@ from django.contrib.contenttypes.models import ContentType
 from datetime import timedelta
 from django.utils import timezone
 from decimal import Decimal
-from rangefilter.filters import DateRangeFilter as DjangoDateRangeFilter
+from unfold.contrib.filters.admin import RangeDateFilter as DjangoDateRangeFilter
 import re
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
