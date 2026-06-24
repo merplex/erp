@@ -147,6 +147,14 @@ select {
     vertical-align: middle !important;
 }
 
+/* ── Filter sidebar: scroll เมื่อ filter เยอะเกิน viewport ── */
+#changelist-filter {
+    overflow-y: auto !important;
+    max-height: calc(100vh - 60px) !important;
+    position: sticky !important;
+    top: 0 !important;
+}
+
 /* ── ปุ่ม Save (primary) — ทั้ง regular form และ popup ── */
 button[name="_save"] {
     background-color: rgb(2 132 199) !important;
