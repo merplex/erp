@@ -1270,7 +1270,7 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin
 @admin.register(SalesOrder)
 class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
     list_display = ('so_number', 'customer', 'order_date', 'status', 'vat_percent','get_diff')
-    list_filter = ('status', 'order_date', 'customer')
+    list_filter = ('status', ('order_date', DjangoDateRangeFilter), 'customer')
     search_fields = ('so_number', 'po_no_customer', 'customer__company_name',
         'items__product__barcodes__code')
     inlines = [SalesItemInline, SalesDeliveryLogInline, SalesPaymentInline]
