@@ -162,6 +162,9 @@ UNFOLD = {
     "STYLES": [
         lambda request: static("css/admin_custom.css"),
     ],
+    "SCRIPTS": [
+        lambda request: static("js/date_range_picker.js"),
+    ],
     "SITE_TITLE": "Meebun ERP",
     "SITE_HEADER": "Meebun ERP",
     "SITE_SYMBOL": "inventory_2",   # Google Material icon
