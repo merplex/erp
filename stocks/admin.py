@@ -1174,7 +1174,7 @@ class BOMAdmin(DocumentLockMixin,admin.ModelAdmin):
 @admin.register(PurchaseOrder)
 class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
     list_display = ('po_number', 'supplier', 'order_date', 'status', 'get_diff')
-    list_filter = ('status', 'order_date', 'supplier')
+    list_filter = ('status', ('order_date', DjangoDateRangeFilter), 'supplier')
     search_fields = ('po_number', 'invoice_no_supplier', 'items__product__name',
     'items__product__barcodes__code', 'supplier__company_name')
     inlines = [PurchaseItemInline, PurchaseReceiptLogInline]
