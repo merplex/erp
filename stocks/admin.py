@@ -25,6 +25,10 @@ admin.site.site_title = "Meebun ERP Admin"
 
 # 3. เปลี่ยนชื่อหัวข้อหลักในหน้าแรก (Index Title)
 admin.site.index_title = "ยินดีต้อนรับสู่ระบบจัดการข้อมูล"
+
+# ตั้งค่า global สำหรับทุกหน้า
+admin.ModelAdmin.list_per_page = 200
+admin.ModelAdmin.show_full_result_count = False
 from django.contrib import messages
 
 from django.contrib.admin.widgets import AdminDateWidget
@@ -310,7 +314,7 @@ class PurchasePaymentInline(UnfoldTabularInline):
     verbose_name = "💰 บันทึกการจ่ายเงิน"
     verbose_name_plural = "💰 ประวัติการจ่ายเงิน (Payments)"
     fields = ('amount', 'notes', 'payment_date', 'user')
-    readonly_fields = ('payment_date', 'user')
+    readonly_fields = ('user',)
 
 
 class SalesPaymentInline(UnfoldTabularInline):
@@ -1252,11 +1256,14 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin
             obj.created_by = request.user
         super().save_model(request, obj, form, change)
 
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('supplier').prefetch_related('items', 'receipt_logs')
+
     def get_diff(self, obj):
         ordered = sum(i.quantity_ordered for i in obj.items.all())
         received = sum(l.quantity_received for l in obj.receipt_logs.all())
         return color_diff(received - ordered)
-    
+
     class Media:
         js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js')
 
@@ -3028,6 +3035,28 @@ class InternationalPurchaseTrackingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             f"<tbody><tr>{cells}</tr></tbody></table>"
         )
     display_tracking_table.short_description = "📅 Timeline การส่งมอบ"
+
+    def save_formset(self, request, form, formset, change):
+        formset.save()
+        obj = formset.instance
+        if formset.model == PurchasePaymentLog:
+            from django.db.models import Sum
+            paid = PurchasePaymentLog.objects.filter(purchase_order=obj).aggregate(Sum('amount'))['amount__sum'] or 0
+            total = obj.grand_total
+            update_fields = ['payment_status']
+
+            if paid <= 0:
+                obj.payment_status = 'Unpaid'
+            elif paid < total:
+                obj.payment_status = 'Partial'
+            else:
+                obj.payment_status = 'Paid'
+                latest = PurchasePaymentLog.objects.filter(purchase_order=obj).order_by('-payment_date').first()
+                if latest:
+                    obj.paid_date = latest.payment_date
+                    update_fields.append('paid_date')
+
+            obj.save(update_fields=update_fields)
 
     # ✅ 5. Actions: ขยับสถานะ Milestone แบบรวดเร็ว (ครบชุด)
     actions = ['set_paid', 'set_loaded', 'set_departed', 'set_arrived', 'set_received', 'set_closed', 'export_to_excel']

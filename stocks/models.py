@@ -449,7 +449,7 @@ class PurchaseItem(models.Model):
 class PurchasePaymentLog(models.Model):
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='payment_logs')
     amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="ยอดที่จ่าย")
-    payment_date = models.DateTimeField(auto_now_add=True, verbose_name="วันที่จ่าย")
+    payment_date = models.DateField(default=datetime.date.today, verbose_name="วันที่จ่าย")
     notes = models.CharField(max_length=200, blank=True, verbose_name="หมายเหตุ/เลขที่สลิป")
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
 
