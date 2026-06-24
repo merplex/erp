@@ -2112,30 +2112,36 @@ class FinanceReportAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin
         return format_html('<b style="color:{};">{}</b>', color, text)
     
 
+    def get_queryset(self, request):
+        from django.db.models import Sum, F, ExpressionWrapper, DecimalField as DField
+        return super().get_queryset(request).select_related('supplier').annotate(
+            _total_items_price=Sum(
+                ExpressionWrapper(F('items__quantity_ordered') * F('items__unit_price'), output_field=DField())
+            ),
+            _total_paid=Sum('payment_logs__amount'),
+        )
+
     # --- List Display Functions (หน้ารวม) ---
-    def get_grand_total_list(self, obj): 
-        return f"{obj.grand_total:,.2f}"
+    def get_grand_total_list(self, obj):
+        subtotal = getattr(obj, '_total_items_price', None) or 0
+        vat_p = obj.vat_percent or 0
+        total = subtotal + (subtotal * vat_p / 100)
+        return f"{total:,.2f}"
     get_grand_total_list.short_description = "💰 ยอดสุทธิ"
 
     def get_balance_due_list(self, obj):
-        # 1. คำนวณหา Grand Total ที่แท้จริง (รวม VAT แล้ว)
-        subtotal = getattr(obj, 'total_items_price', 0) or 0
-        vat_p = getattr(obj, 'vat_percent', 0) or 0
+        subtotal = getattr(obj, '_total_items_price', None) or 0
+        vat_p = obj.vat_percent or 0
         grand_total = subtotal + (subtotal * vat_p / 100)
-        # 2. หักยอดที่จ่ายมาแล้ว
-        paid = getattr(obj, 'total_paid', 0) or 0
+        paid = getattr(obj, '_total_paid', None) or 0
         bal = grand_total - paid
-        # 3. Logic การโชว์สีแบบเดิมที่เปรมต้องการ
-        if bal <= 0: 
-            # ถ้าจ่ายครบหรือจ่ายเกิน ให้โชว์ 0.00 สีเขียว
+        if bal <= 0:
             return format_html('<span style="color:green; font-weight:bold;">{}</span>', "0.00")
-        # ถ้ายังค้างชำระ ให้โชว์ยอดค้างเป็นสีแดง (ติดลบตามสไตล์เปรม)
         return format_html('<span style="color:red; font-weight:bold;">-{}</span>', f"{bal:,.2f}")
-    
     get_balance_due_list.short_description = "ค้างจ่าย"
-    
+
     class Media:
-        js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
+        js = ('js/admin_sum_selected.js',)
 
 # 2. หน้า Admin ของ Income Report
 @admin.register(IncomeReport)
