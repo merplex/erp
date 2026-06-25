@@ -917,7 +917,7 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
     list_filter = ('category','is_product', 'tags', 'has_bom', 'suppliers')
     search_fields = ('name', 'barcodes__code','tags__name')
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
-    readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at', 'auto_cost', 'buy_price')
+    readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at', 'auto_cost', 'buy_price', 'sale_price')
     actions = ['export_to_excel', 'auto_fill_cost_price']
     fieldsets = (
         (None, {
