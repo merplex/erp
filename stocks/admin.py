@@ -965,11 +965,16 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
             if new_auto_cost != obj.auto_cost or new_buy != obj.buy_price:
                 changed = True
 
-            # ราคาขายต่ำสุด = ต้นทุนที่ใช้จริง + 15% (ทุกครั้ง)
+            # sale_price = max(buy_price×1.15, contract_price_ต่ำสุด)
             if new_buy > 0:
                 min_sale = (new_buy * Decimal('1.15')).quantize(Decimal('0.01'))
-                if new_sale <= min_sale:
-                    new_sale = min_sale
+                lowest_contract = CustomerProductContract.objects.filter(
+                    product=obj, contract_price__gt=0
+                ).order_by('contract_price').first()
+                contract_price = lowest_contract.contract_price if lowest_contract else Decimal('0')
+                computed_sale = max(min_sale, contract_price)
+                if computed_sale != new_sale:
+                    new_sale = computed_sale
                     changed = True
 
             if changed:
@@ -1136,12 +1141,17 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
             src = "กำหนดเอง" if manual > 0 else "อัตโนมัติ"
             auto_filled.append(f"ต้นทุนที่ใช้จริง ({src}) = {new_buy:,.2f}")
 
-        # --- ราคาขายต่ำสุด = ต้นทุนที่ใช้จริง + 15% (ทุกครั้งที่บันทึก) ---
+        # --- sale_price = max(buy_price×1.15, contract_price_ต่ำสุด) ทุกครั้งที่บันทึก ---
         if new_buy > 0:
             min_sale = (new_buy * Decimal('1.15')).quantize(Decimal('0.01'))
-            if new_sale <= min_sale:
-                new_sale = min_sale
-                auto_filled.append(f"ราคาขาย (ต่ำสุด) = {new_sale:,.2f}")
+            lowest_contract = CustomerProductContract.objects.filter(
+                product=obj, contract_price__gt=0
+            ).order_by('contract_price').first()
+            contract_price = lowest_contract.contract_price if lowest_contract else Decimal('0')
+            computed_sale = max(min_sale, contract_price)
+            if computed_sale != new_sale:
+                new_sale = computed_sale
+                auto_filled.append(f"ราคาขาย = {new_sale:,.2f}")
 
         Product.objects.filter(pk=obj.pk).update(
             auto_cost=new_auto_cost,
