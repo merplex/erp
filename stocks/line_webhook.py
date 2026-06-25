@@ -364,8 +364,8 @@ def _handle_check_list(reply_token, check_type, access_token):
         reply_message(reply_token, [{'type': 'text', 'text': f'✅ {title}\nไม่มีรายการที่ต้องแก้ไข'}], access_token)
         return
 
-    # โหลดสูงสุด 300 รายการ แบ่ง 12 bubble × 25 (LINE carousel max)
-    PER_BUBBLE = 25
+    # LINE carousel max 50KB → ~10 รายการ/bubble × 12 bubble = 120 รายการ
+    PER_BUBBLE = 10
     MAX_BUBBLES = 12
     products = list(qs.select_related('category').order_by('name')[:PER_BUBBLE * MAX_BUBBLES])
 
