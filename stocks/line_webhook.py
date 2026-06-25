@@ -374,13 +374,10 @@ def _handle_check_list(reply_token, check_type, access_token):
     def _make_bubble(chunk, page_label):
         rows = []
         for p in chunk:
-            cat = p.category.name[:8] if p.category else '-'
+            cat = p.category.name[:10] if p.category else '-'
             rows.append({
-                'type': 'box', 'layout': 'horizontal', 'margin': 'xs',
-                'contents': [
-                    {'type': 'text', 'text': p.name[:26], 'size': 'xs', 'flex': 7, 'wrap': True, 'color': '#333333'},
-                    {'type': 'text', 'text': cat, 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#888888'},
-                ],
+                'type': 'text', 'text': f'{p.name[:28]}  •  {cat}',
+                'size': 'xs', 'color': '#333333', 'margin': 'xs', 'wrap': True,
             })
         return {
             'type': 'bubble', 'size': 'mega',
@@ -394,10 +391,7 @@ def _handle_check_list(reply_token, check_type, access_token):
             'body': {
                 'type': 'box', 'layout': 'vertical', 'paddingAll': '12px',
                 'contents': [
-                    {'type': 'box', 'layout': 'horizontal', 'contents': [
-                        {'type': 'text', 'text': 'ชื่อสินค้า', 'size': 'xxs', 'flex': 7, 'color': '#aaaaaa'},
-                        {'type': 'text', 'text': 'กลุ่ม', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#aaaaaa'},
-                    ]},
+                    {'type': 'text', 'text': 'ชื่อสินค้า  •  หมวด', 'size': 'xxs', 'color': '#aaaaaa'},
                     {'type': 'separator', 'margin': 'sm'},
                     *rows,
                 ],
