@@ -580,17 +580,25 @@ def _build_report_bubbles(report_title, header_color, products, forecast, with_s
 
     grand_curr = grand_cost = grand_sale = 0
 
-    # col header แบบย่อ: Tag | ชิ้น | ต้นทุน฿ | ขาย฿
-    hdr_cols = [
-        {'type': 'text', 'text': 'Tag / กลุ่ม', 'size': 'xxs', 'flex': 5, 'color': '#aaaaaa'},
-        {'type': 'text', 'text': 'ชิ้น', 'size': 'xxs', 'flex': 2, 'align': 'center', 'color': '#aaaaaa'},
-        {'type': 'text', 'text': 'ต้นทุน฿', 'size': 'xxs', 'flex': 4, 'align': 'center', 'color': '#aaaaaa'},
+    # helper: box wrapper ที่ centering ด้วย justifyContent (แทน align ที่ไม่แน่นอนใน LINE)
+    def _cbox(text, flex, color, size='xxs', bold=False):
+        t = {'type': 'text', 'text': text, 'size': size, 'color': color}
+        if bold:
+            t['weight'] = 'bold'
+        return {'type': 'box', 'layout': 'horizontal', 'flex': flex,
+                'justifyContent': 'center', 'contents': [t]}
+
+    # col header
+    hdr_contents = [
+        {'type': 'text', 'text': 'Tag / กลุ่ม', 'size': 'xxs', 'flex': 5, 'color': '#888888'},
+        _cbox('ชิ้น', 3, '#888888'),
+        _cbox('ต้นทุน฿', 4, '#888888'),
     ]
     if with_sale:
-        hdr_cols.append({'type': 'text', 'text': 'ขาย฿', 'size': 'xxs', 'flex': 4, 'align': 'center', 'color': '#aaaaaa'})
+        hdr_contents.append(_cbox('ขาย฿', 4, '#888888'))
 
     body_rows = [
-        {'type': 'box', 'layout': 'horizontal', 'margin': 'sm', 'contents': hdr_cols},
+        {'type': 'box', 'layout': 'horizontal', 'margin': 'sm', 'contents': hdr_contents},
         {'type': 'separator', 'margin': 'sm'},
     ]
 
@@ -604,31 +612,33 @@ def _build_report_bubbles(report_title, header_color, products, forecast, with_s
             t_sale += fd.get('sale_value', 0.0)
         grand_curr += t_curr; grand_cost += t_cost; grand_sale += t_sale
 
-        row_cols = [
-            {'type': 'text', 'text': f'{tag_name} ({len(tprods)})', 'size': 'xxs', 'flex': 5, 'color': '#333333', 'weight': 'bold'},
-            {'type': 'text', 'text': _fmt(t_curr), 'size': 'xxs', 'flex': 2, 'align': 'center', 'color': '#555555'},
-            {'type': 'text', 'text': _fmt(t_cost), 'size': 'xxs', 'flex': 4, 'align': 'center', 'color': '#FF8C00'},
+        row_contents = [
+            {'type': 'text', 'text': f'{tag_name} ({len(tprods)})', 'size': 'xxs', 'flex': 5,
+             'color': '#333333', 'weight': 'bold'},
+            _cbox(_fmt(t_curr), 3, '#555555'),
+            _cbox(_fmt(t_cost), 4, '#FF8C00'),
         ]
         if with_sale:
-            row_cols.append({'type': 'text', 'text': _fmt(t_sale), 'size': 'xxs', 'flex': 4, 'align': 'center', 'color': '#28a745'})
-        row_cols.append({'type': 'text', 'text': '›', 'size': 'sm', 'flex': 1, 'align': 'center', 'color': '#aaaaaa'})
+            row_contents.append(_cbox(_fmt(t_sale), 4, '#28a745'))
+        row_contents.append(_cbox('›', 1, '#cccccc', size='sm'))
 
         row_box = {'type': 'box', 'layout': 'horizontal', 'margin': 'xs',
-                   'paddingAll': '4px', 'contents': row_cols}
+                   'paddingAll': '4px', 'contents': row_contents}
         if webview_url:
             row_box['action'] = {'type': 'uri', 'label': tag_name, 'uri': webview_url}
         body_rows.append(row_box)
 
     # grand total
     body_rows.append({'type': 'separator', 'margin': 'md'})
-    gt_cols = [
-        {'type': 'text', 'text': f'รวม ({len(products)} รายการ)', 'size': 'xs', 'flex': 5, 'color': '#1a1a2e', 'weight': 'bold'},
-        {'type': 'text', 'text': _fmt(grand_curr), 'size': 'xs', 'flex': 2, 'align': 'center', 'weight': 'bold', 'color': '#1a1a2e'},
-        {'type': 'text', 'text': _fmt(grand_cost), 'size': 'xs', 'flex': 4, 'align': 'center', 'weight': 'bold', 'color': '#FF8C00'},
+    gt_contents = [
+        {'type': 'text', 'text': f'รวม ({len(products)})', 'size': 'xs', 'flex': 5,
+         'color': '#1a1a2e', 'weight': 'bold'},
+        _cbox(_fmt(grand_curr), 3, '#1a1a2e', size='xs', bold=True),
+        _cbox(_fmt(grand_cost), 4, '#FF8C00', size='xs', bold=True),
     ]
     if with_sale:
-        gt_cols.append({'type': 'text', 'text': _fmt(grand_sale), 'size': 'xs', 'flex': 4, 'align': 'center', 'weight': 'bold', 'color': '#28a745'})
-    body_rows.append({'type': 'box', 'layout': 'horizontal', 'margin': 'sm', 'contents': gt_cols})
+        gt_contents.append(_cbox(_fmt(grand_sale), 4, '#28a745', size='xs', bold=True))
+    body_rows.append({'type': 'box', 'layout': 'horizontal', 'margin': 'sm', 'contents': gt_contents})
 
     bubble = {
         'type': 'bubble', 'size': 'mega',
