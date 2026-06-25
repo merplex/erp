@@ -37,7 +37,8 @@ from django.utils.html import format_html
 from django.core.exceptions import ValidationError
 from django.forms import TextInput
 from django.db import models # เพิ่มเพื่อรองรับ formfield_overrides
-from django.db.models import Subquery, OuterRef, Q, Sum, F, DecimalField, ExpressionWrapper, Case, When
+from django.db.models import Subquery, OuterRef, Q, Sum, F, DecimalField, ExpressionWrapper, Case, When, IntegerField, Value
+from django.db.models.functions import Coalesce, Greatest
 from django import forms # ✅ เพิ่มบรรทัดนี้ครับ ทำระบบ tag checkbox
 from django.utils.safestring import mark_safe # ✅ ต้องมีบรรทัดนี้ครับ
 # เพิ่มที่บรรทัดบนสุดของไฟล์ครับ
@@ -1675,146 +1676,87 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
 
     list_select_related = ('category',)
 
-    # 🎯 1. แผนรับ (PO): สั่ง - รับจริง (รวม Draft)
-    def get_pending_in(self, obj):
-        from .models import PurchaseItem
-        
-        # รายชื่อสถานะที่ถือว่า "ของยังมาไม่ครบ"
-        active_statuses = [
-            'Draft', 'Pending', 'Confirmed', 'Ordered', 
-            'Paid', 'Loaded', 'Departed', 'Arrived', 
-            'Received', 'Partially Received'
-        ]
+    _ACTIVE_PO = ['Draft', 'Pending', 'Confirmed', 'Ordered', 'Paid', 'Loaded', 'Departed', 'Arrived', 'Received', 'Partially Received']
+    _ACTIVE_SO = ['Draft', 'Confirmed', 'Shipped']
+    _ACTIVE_PD = ['Draft', 'Started', 'Finished']
 
-        items = PurchaseItem.objects.filter(
-            product=obj,
-            purchase_order__status__in=active_statuses
+    def get_queryset(self, request):
+        from .models import PurchaseItem, SalesItem, ProductionOrder, ProductionMaterialUsage
+        qs = super().get_queryset(request)
+
+        pending_in_sq = PurchaseItem.objects.filter(
+            product=OuterRef('pk'),
+            purchase_order__status__in=self._ACTIVE_PO,
+        ).values('product').annotate(
+            t=Sum(Greatest(F('quantity_ordered') - F('quantity_received'), Value(0)))
+        ).values('t')
+
+        pending_out_sq = SalesItem.objects.filter(
+            product=OuterRef('pk'),
+            sales_order__status__in=self._ACTIVE_SO,
+        ).values('product').annotate(
+            t=Sum(Greatest(F('quantity_ordered') - F('quantity_shipped'), Value(0)))
+        ).values('t')
+
+        pending_receipt_sq = ProductionOrder.objects.filter(
+            product=OuterRef('pk'),
+            status__in=self._ACTIVE_PD,
+        ).values('product').annotate(
+            t=Sum(Greatest(F('quantity_planned') - F('quantity_actual'), Value(0)))
+        ).values('t')
+
+        pending_usage_sq = ProductionMaterialUsage.objects.filter(
+            raw_material=OuterRef('pk'),
+            production_order__status__in=self._ACTIVE_PD,
+        ).values('raw_material').annotate(
+            t=Sum(Greatest(F('actual_qty_to_use') - F('used_so_far'), Value(0)))
+        ).values('t')
+
+        return qs.annotate(
+            _pending_in=Coalesce(Subquery(pending_in_sq, output_field=DecimalField()), 0),
+            _pending_out=Coalesce(Subquery(pending_out_sq, output_field=DecimalField()), 0),
+            _pending_receipt=Coalesce(Subquery(pending_receipt_sq, output_field=DecimalField()), 0),
+            _pending_usage=Coalesce(Subquery(pending_usage_sq, output_field=DecimalField()), 0),
         )
-        
-        total_pending = 0
-        for i in items:
-            # ✅ เรียกใช้ชื่อฟิลด์ตรงๆ ตามที่เปรมส่งมา (ไม่ต้องใช้ getattr แล้ว)
-            ordered = i.quantity_ordered or 0  # กันเหนียวเผื่อเป็น None
-            received = i.quantity_received or 0
-            
-            # คำนวณยอดค้างรับ
-            if ordered > received:
-                total_pending += (ordered - received)
-        
-        # ถ้ามีเศษทศนิยม ให้ปัดเป็นจำนวนเต็ม (หรือจะเอาทศนิยมก็ลบ int ออกได้)
-        return int(total_pending) if total_pending > 0 else 0
 
+    def _net(self, obj):
+        p_in = int(obj._pending_in or 0)
+        p_out = int(obj._pending_out or 0)
+        p_receipt = int(obj._pending_receipt or 0)
+        p_usage = int(obj._pending_usage or 0)
+        return obj.stock_quantity + p_in - p_out + (p_receipt - p_usage)
+
+    def get_pending_in(self, obj):
+        return int(obj._pending_in or 0)
     get_pending_in.short_description = "แผนรับ (PO)"
 
-    # 🎯 2. แผนส่ง (SO): สั่ง - ส่งจริง (รวม Draft)
     def get_pending_out(self, obj):
-        from .models import SalesItem # 👈 เรียกใช้ Model ตรงๆ
-        items = SalesItem.objects.filter(
-            product=obj,
-            sales_order__status__in=['Draft', 'Confirmed', 'Shipped']
-        )
-        # คำนวณส่วนต่าง (ค้างส่ง)
-        total = sum((i.quantity_ordered - i.quantity_shipped) for i in items)
-        return total if total > 0 else 0
+        return int(obj._pending_out or 0)
     get_pending_out.short_description = "แผนส่ง (SO)"
 
-    # 3. แก้ไขแผนผลิต (PD): ให้ครอบคลุมทุกสถานะที่ยังผลิตไม่เสร็จ
-    # 3. แก้ไขแผนผลิต (PD): ครอบคลุมทั้งยอด "รอรับ" และยอด "รอใช้ (จอง)"
     def get_pending_prod(self, obj):
-        from .models import ProductionOrder, ProductionMaterialUsage
-        from django.db.models import Sum, F
-        
-        # 🎯 ขาที่ 1: ยอดรอรับ (สำหรับสินค้า C ที่เราผลิตเอง)
-        orders = ProductionOrder.objects.filter(
-            product=obj,
-            status__in=['Draft', 'Started', 'Finished']
-        )
-        # ส่วนต่างที่ยังผลิตไม่ครบ
-        pending_receipt = sum((o.quantity_planned - o.quantity_actual) for o in orders)
-        
-        # 🎯 ขาที่ 2: ยอดรอใช้ (สำหรับสินค้า A, B ที่ถูกจองไปใช้ในใบผลิต)
-        usages = ProductionMaterialUsage.objects.filter(
-            raw_material=obj,
-            production_order__status__in=['Draft', 'Started', 'Finished']
-        )
-        # ส่วนต่างที่จองไว้แต่ยังไม่ได้ตัดสต็อกจริง
-        pending_usage = sum((u.actual_qty_to_use - u.used_so_far) for u in usages)
-        
-        # ผลรวมสุทธิ: (รอรับเข้ามา) - (รอใช้หายไป)
-        # ถ้าเป็น A, B ค่าจะออกมาเป็น "ติดลบ" เช่น -5000 เพื่อโชว์ว่าโดนจอง
-        net_impact = pending_receipt - pending_usage
-        
-        if net_impact == 0: return 0
-        
-        color = "#28a745" if net_impact > 0 else "#dc3545" # เขียวถ้าเพิ่ม แดงถ้าลด
-        return format_html('<span style="color: {};">{}</span>', color, net_impact)
-
+        net = int((obj._pending_receipt or 0) - (obj._pending_usage or 0))
+        if net == 0:
+            return 0
+        color = "#28a745" if net > 0 else "#dc3545"
+        return format_html('<span style="color: {};">{}</span>', color, net)
     get_pending_prod.short_description = "แผนผลิต (PD)"
 
-    # 🎯 แก้ไขสูตรคาดการณ์ (Plan) ให้รองรับเลขติดลบจาก PD
     def get_available(self, obj):
-        # ดึงค่าดิบๆ มาคำนวณ (ต้องแก้ฟังก์ชัน get_pending_prod ให้คืนค่าตัวเลขด้วย หรือแยกดึงค่า)
-        on_hand = obj.stock_quantity
-        p_in = self.get_pending_in(obj)
-        p_out = self.get_pending_out(obj)
-        
-        # ดึงยอดสุทธิจาก PD (เขียนแยกมาเพื่อใช้คำนวณ)
-        p_receipt = sum((o.quantity_planned - o.quantity_actual) for o in obj.productionorder_set.filter(status__in=['Draft', 'Started', 'Finished']))
-        from .models import ProductionMaterialUsage
-        p_usage = sum((u.actual_qty_to_use - u.used_so_far) for u in ProductionMaterialUsage.objects.filter(raw_material=obj, production_order__status__in=['Draft', 'Started', 'Finished']))
-        
-        # สูตร: Stock + PO - SO + (รอรับ - รอใช้)
-        total = on_hand + p_in - p_out + (p_receipt - p_usage)
-        
+        total = self._net(obj)
         color = "red" if total < 0 else "blue"
         return format_html('<b style="color: {};">{}</b>', color, total)
     get_available.short_description = "คาดการณ์ (Plan)"
 
     def get_total_inventory_value(self, obj):
-        from .models import ProductionMaterialUsage
-        
-        # --- ส่วนที่ 1: ดึงเฉพาะตัวเลขดิบๆ มาคำนวณ (ห้ามใช้ฟังก์ชันที่ส่งค่าเป็น HTML) ---
-        on_hand = obj.stock_quantity or 0
-        
-        # แผนรับ (PO) - ดึงเฉพาะยอดค้างรับที่เป็นตัวเลข
-        from .models import PurchaseItem
-        p_in_items = PurchaseItem.objects.filter(
-            product=obj,
-            purchase_order__status__in=['Draft', 'Pending', 'Confirmed', 'Ordered', 'Paid', 'Loaded', 'Departed', 'Arrived', 'Received', 'Partially Received']
-        )
-        p_in = sum(max(0, (i.quantity_ordered or 0) - (i.quantity_received or 0)) for i in p_in_items)
-
-        # แผนส่ง (SO)
-        from .models import SalesItem
-        p_out_items = SalesItem.objects.filter(
-            product=obj,
-            sales_order__status__in=['Draft', 'Confirmed', 'Shipped']
-        )
-        p_out = sum(max(0, (i.quantity_ordered or 0) - (i.quantity_shipped or 0)) for i in p_out_items)
-        
-        # ยอดจาก PD (รอรับ - รอใช้)
-        p_receipt = sum((o.quantity_planned - o.quantity_actual) for o in obj.productionorder_set.filter(status__in=['Draft', 'Started', 'Finished']))
-        p_usage = sum((u.actual_qty_to_use - u.used_so_far) for u in ProductionMaterialUsage.objects.filter(raw_material=obj, production_order__status__in=['Draft', 'Started', 'Finished']))
-        
-        # ยอดคาดการณ์สุทธิ (Available Plan) เป็นตัวเลขแน่นอน
-        available_total = float(on_hand + p_in - p_out + (p_receipt - p_usage))
-        
-        # --- ส่วนที่ 2: คำนวณมูลค่าเงิน ---
-        unit_price = float(obj.buy_price or 0)
-        total_value = available_total * unit_price
-        
-        # --- ส่วนที่ 3: จัดรูปแบบการแสดงผล ---
-        color = "#fd7e14" if total_value < 0 else "#212529" 
-        
-        # 🎯 ใช้ f-string จัดการตัวเลขให้เสร็จก่อน แล้วค่อยส่งเข้า format_html
-        formatted_value = "{:,.2f}".format(total_value)
-        
+        available_total = float(self._net(obj))
+        total_value = available_total * float(obj.buy_price or 0)
+        color = "#fd7e14" if total_value < 0 else "#212529"
         return format_html(
             '<span style="color: {}; font-weight: bold;">{}</span>',
             color,
-            formatted_value
+            "{:,.2f}".format(total_value),
         )
-
     get_total_inventory_value.short_description = "มูลค่ารวม"
 
     class Media:
