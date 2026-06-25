@@ -357,9 +357,10 @@ def _handle_check_list(reply_token, check_type, access_token):
         reply_message(reply_token, [{'type': 'text', 'text': f'✅ {title}\nไม่มีรายการที่ต้องแก้ไข'}], access_token)
         return
 
-    # โหลดสูงสุด 50 รายการ แบ่ง 2 bubble × 25
+    # โหลดสูงสุด 300 รายการ แบ่ง 12 bubble × 25 (LINE carousel max)
     PER_BUBBLE = 25
-    products = list(qs.select_related('category').order_by('name')[:PER_BUBBLE * 2])
+    MAX_BUBBLES = 12
+    products = list(qs.select_related('category').order_by('name')[:PER_BUBBLE * MAX_BUBBLES])
 
     def _make_bubble(chunk, page_label):
         rows = []
@@ -398,10 +399,10 @@ def _handle_check_list(reply_token, check_type, access_token):
     total_pages = len(chunks)
     bubbles = [_make_bubble(chunk, f'({i+1}/{total_pages})' if total_pages > 1 else '') for i, chunk in enumerate(chunks)]
 
-    if total > PER_BUBBLE * 2:
+    if total > PER_BUBBLE * MAX_BUBBLES:
         # เพิ่ม note ที่ bubble สุดท้าย
         bubbles[-1]['body']['contents'].append(
-            {'type': 'text', 'text': f'· · · และอีก {total - PER_BUBBLE*2} รายการ', 'size': 'xxs', 'color': '#aaaaaa', 'margin': 'sm', 'align': 'center'}
+            {'type': 'text', 'text': f'· · · และอีก {total - PER_BUBBLE*MAX_BUBBLES} รายการ', 'size': 'xxs', 'color': '#aaaaaa', 'margin': 'sm', 'align': 'center'}
         )
 
     if len(bubbles) == 1:
