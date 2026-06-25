@@ -344,7 +344,9 @@ def _handle_check_list(reply_token, check_type, access_token):
         subtitle = 'ยังไม่มีต้นทุน'
         header_color = '#3a2a1a'
     elif check_type == 'no_contract':
-        contracted_ids = CustomerProductContract.objects.values_list('product_id', flat=True).distinct()
+        contracted_ids = CustomerProductContract.objects.filter(
+            contract_price__gt=0
+        ).values_list('product_id', flat=True).distinct()
         qs = Product.objects.filter(is_product=True).exclude(pk__in=contracted_ids)
         title = '📄 Non Price Contract'
         subtitle = 'ยังไม่มี Price Contract'
