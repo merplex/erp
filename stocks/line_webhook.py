@@ -246,7 +246,8 @@ def _handle_product_report(reply_token, access_token):
             return
 
         forecast = _get_forecast_data(products)
-        bubbles = _build_report_bubbles('📦 Product Report', '#1a2e3a', products, forecast, with_sale=True)
+        wv_url = _report_webview_url('product') if os.environ.get('BASE_URL') else None
+        bubbles = _build_report_bubbles('📦 Product Report', '#1a2e3a', products, forecast, with_sale=True, webview_url=wv_url)
 
         if not bubbles:
             reply_message(reply_token, [{'type': 'text', 'text': '📦 Product Report\nไม่มีข้อมูล'}], access_token)
@@ -271,7 +272,8 @@ def _handle_package_report(reply_token, access_token):
             return
 
         forecast = _get_forecast_data(products)
-        bubbles = _build_report_bubbles('📋 Package Report', '#2e2a1a', products, forecast, with_sale=False)
+        wv_url = _report_webview_url('package') if os.environ.get('BASE_URL') else None
+        bubbles = _build_report_bubbles('📋 Package Report', '#2e2a1a', products, forecast, with_sale=False, webview_url=wv_url)
 
         if not bubbles:
             reply_message(reply_token, [{'type': 'text', 'text': '📋 Package Report\nไม่มีข้อมูล'}], access_token)
@@ -545,7 +547,7 @@ def _col_header(with_sale=True):
     return {'type': 'box', 'layout': 'horizontal', 'margin': 'sm', 'contents': cols}
 
 
-def _build_report_bubbles(report_title, header_color, products, forecast, with_sale):
+def _build_report_bubbles(report_title, header_color, products, forecast, with_sale, webview_url=None):
     """สร้าง list of bubbles แยกตาม tag (carousel) สูงสุด 12 bubble × 18 รายการ"""
     PER_BUBBLE = 18
     MAX_BUBBLES = 12
@@ -633,7 +635,16 @@ def _build_report_bubbles(report_title, header_color, products, forecast, with_s
                 rows.append({'type': 'box', 'layout': 'horizontal', 'margin': 'xs', 'contents': sub_cols})
 
             bubble_num = len(bubbles) + 1
-            bubbles.append({
+            footer = {
+                'type': 'box', 'layout': 'vertical', 'paddingAll': '8px',
+                'contents': [{
+                    'type': 'button', 'style': 'primary', 'color': header_color, 'height': 'sm',
+                    'action': {'type': 'uri', 'label': '📋 ดูทั้งหมด', 'uri': webview_url} if webview_url else
+                              {'type': 'message', 'label': '📋 ดูทั้งหมด', 'text': 'ดูทั้งหมด'},
+                }],
+            } if webview_url else None
+
+            b = {
                 'type': 'bubble', 'size': 'mega',
                 'header': {
                     'type': 'box', 'layout': 'vertical', 'backgroundColor': header_color, 'paddingAll': '10px',
@@ -646,7 +657,10 @@ def _build_report_bubbles(report_title, header_color, products, forecast, with_s
                     'type': 'box', 'layout': 'vertical', 'paddingAll': '10px', 'spacing': 'none',
                     'contents': [_col_header(with_sale), {'type': 'separator', 'margin': 'sm'}, *rows],
                 },
-            })
+            }
+            if footer:
+                b['footer'] = footer
+            bubbles.append(b)
 
     # bubble สุดท้าย: grand total
     if bubbles and len(bubbles) < MAX_BUBBLES:
@@ -658,7 +672,7 @@ def _build_report_bubbles(report_title, header_color, products, forecast, with_s
         ]
         if with_sale:
             gt_cols.append({'type': 'text', 'text': f'{grand[3]:,.0f}', 'size': 'xs', 'flex': 3, 'align': 'end', 'weight': 'bold', 'color': '#7dff99'})
-        bubbles.append({
+        gt_bubble = {
             'type': 'bubble', 'size': 'mega',
             'body': {
                 'type': 'box', 'layout': 'vertical', 'paddingAll': '10px', 'backgroundColor': header_color,
@@ -670,7 +684,16 @@ def _build_report_bubbles(report_title, header_color, products, forecast, with_s
                     {'type': 'box', 'layout': 'horizontal', 'margin': 'md', 'contents': gt_cols},
                 ],
             },
-        })
+        }
+        if webview_url:
+            gt_bubble['footer'] = {
+                'type': 'box', 'layout': 'vertical', 'paddingAll': '8px',
+                'contents': [{
+                    'type': 'button', 'style': 'secondary', 'height': 'sm',
+                    'action': {'type': 'uri', 'label': '📋 ดูทั้งหมด', 'uri': webview_url},
+                }],
+            }
+        bubbles.append(gt_bubble)
 
     return bubbles
 

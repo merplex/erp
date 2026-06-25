@@ -302,6 +302,7 @@ def unlock_document_view(request):
 def stock_report_webview(request):
     """Webview สำหรับดูรายงานสต๊อกทั้งหมดใน LINE in-app browser"""
     from .models import Product
+    from collections import defaultdict
 
     report_type = request.GET.get('type', 'cost')
     token = request.GET.get('token', '')
@@ -310,6 +311,133 @@ def stock_report_webview(request):
     if not hmac.compare_digest(token, expected):
         return HttpResponse('Unauthorized', status=401)
 
+    # ─── Product / Package report (แยกตาม tag) ───────────────────────────────
+    if report_type in ('product', 'package'):
+        cat_name = 'Product' if report_type == 'product' else 'Packaging'
+        with_sale = report_type == 'product'
+        emoji = '📦' if report_type == 'product' else '📋'
+        title = 'Product Report' if report_type == 'product' else 'Package Report'
+        header_color = '#1a2e3a' if report_type == 'product' else '#2e2a1a'
+
+        products = list(Product.objects.filter(
+            is_product=True, category__name=cat_name
+        ).prefetch_related('tags').order_by('name'))
+
+        # จัดกลุ่มตาม tag
+        tag_groups = defaultdict(list)
+        for p in products:
+            tags = list(p.tags.all())
+            if tags:
+                for tg in tags:
+                    tag_groups[tg.name].append(p)
+            else:
+                tag_groups['Non Tag'].append(p)
+
+        def _tag_sort(k):
+            return (1, k) if k == 'Non Tag' else (0, k)
+
+        th_sale = '<th class="r" style="width:72px">ราคาขาย/ชิ้น</th>' if with_sale else ''
+        th_sale2 = '<th class="r" style="width:64px">มูลค่าขาย ฿</th>' if with_sale else ''
+
+        rows_html = ''
+        grand_cost = grand_sale = grand_stock = 0
+        row_n = 0
+
+        for tag_name in sorted(tag_groups.keys(), key=_tag_sort):
+            tprods = sorted(tag_groups[tag_name], key=lambda p: p.name)
+            t_cost = t_sale = t_stock = 0
+
+            colspan = 6 if with_sale else 5
+            rows_html += (
+                f'<tr><td colspan="{colspan}" class="tag-hd">▸ {tag_name} ({len(tprods)} รายการ)</td></tr>'
+            )
+
+            for p in tprods:
+                row_n += 1
+                stock = int(p.stock_quantity or 0)
+                buy = float(p.buy_price or 0)
+                sale = float(p.sale_price or 0)
+                cost_val = stock * buy
+                sale_val = stock * sale
+                t_stock += stock; t_cost += cost_val; t_sale += sale_val
+                bg = '#fafafa' if row_n % 2 == 0 else '#ffffff'
+                sale_td = f'<td class="r">{sale:,.2f}</td><td class="r b">{sale_val:,.0f}</td>' if with_sale else ''
+                rows_html += (
+                    f'<tr style="background:{bg}">'
+                    f'<td class="n">{row_n}</td>'
+                    f'<td class="nm">{p.name}</td>'
+                    f'<td class="r">{stock:,}</td>'
+                    f'<td class="r">{buy:,.2f}</td>'
+                    f'<td class="r b">{cost_val:,.0f}</td>'
+                    f'{sale_td}'
+                    f'</tr>'
+                )
+
+            grand_stock += t_stock; grand_cost += t_cost; grand_sale += t_sale
+            sale_sub = f'<td class="r sub"></td><td class="r sub b">{t_sale:,.0f}</td>' if with_sale else ''
+            rows_html += (
+                f'<tr class="sub-row">'
+                f'<td class="n sub"></td>'
+                f'<td class="nm sub">รวม {tag_name}</td>'
+                f'<td class="r sub">{t_stock:,}</td>'
+                f'<td class="r sub"></td>'
+                f'<td class="r sub b">{t_cost:,.0f}</td>'
+                f'{sale_sub}'
+                f'</tr>'
+            )
+
+        sale_foot = f'<span>ขาย {grand_sale:,.0f} ฿</span>' if with_sale else ''
+        html = f'''<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>{emoji} {title}</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:12px;background:#f5f5f5;color:#222}}
+.hd{{background:{header_color};color:#fff;padding:10px 14px;position:sticky;top:0;z-index:10}}
+.hd h1{{font-size:15px;font-weight:700}}
+.hd p{{font-size:11px;color:#aaa;margin-top:2px}}
+table{{width:100%;border-collapse:collapse;background:#fff}}
+thead th{{background:#efefef;padding:7px 5px;font-size:10px;color:#777;white-space:nowrap;position:sticky;top:46px;border-bottom:1px solid #ddd}}
+th.l,td.nm{{text-align:left}}
+th.r,td.r{{text-align:right}}
+th.c,td.n{{text-align:center}}
+td{{padding:6px 5px;border-bottom:1px solid #f0f0f0;vertical-align:middle}}
+td.nm{{word-break:break-word;max-width:140px}}
+td.n{{color:#aaa;font-size:11px}}
+td.b{{font-weight:700}}
+.tag-hd{{background:#e8ecf0;font-weight:700;color:#1a2e3a;padding:6px 8px;font-size:11px}}
+.sub-row td{{background:#f0f4f8;font-weight:700;color:#555;border-top:1px solid #ccc;border-bottom:2px solid #bbb}}
+.ft{{background:{header_color};color:#fff;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;position:sticky;bottom:0;flex-wrap:wrap;gap:4px}}
+.ft span{{font-size:11px;color:#ccc}}
+.ft strong{{font-size:13px}}
+</style>
+</head>
+<body>
+<div class="hd"><h1>{emoji} {title}</h1><p>{len(products)} รายการ · เรียงชื่อในแต่ละ Tag</p></div>
+<table>
+<thead><tr>
+<th class="c" style="width:28px">#</th>
+<th class="l">ชื่อสินค้า</th>
+<th class="r" style="width:44px">ชิ้น</th>
+<th class="r" style="width:60px">ทุน/ชิ้น</th>
+<th class="r" style="width:64px">ต้นทุน ฿</th>
+{th_sale}{th_sale2}
+</tr></thead>
+<tbody>{rows_html}</tbody>
+</table>
+<div class="ft">
+<span>ต้นทุน {grand_cost:,.0f} ฿</span>
+{sale_foot}
+<strong>สต๊อก {grand_stock:,} ชิ้น</strong>
+</div>
+</body>
+</html>'''
+        return HttpResponse(html, content_type='text/html; charset=utf-8')
+
+    # ─── Cost / Sale report (เรียงตามมูลค่า) ────────────────────────────────
     if report_type == 'cost':
         products = list(Product.objects.filter(is_product=True))
         products.sort(key=lambda p: float(p.stock_quantity or 0) * float(p.buy_price or 0), reverse=True)
