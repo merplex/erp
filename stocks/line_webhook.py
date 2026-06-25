@@ -551,10 +551,7 @@ def _col_header(with_sale=True):
 
 
 def _build_report_bubbles(report_title, header_color, products, forecast, with_sale, webview_url=None):
-    """สร้าง list of bubbles แยกตาม tag (carousel) สูงสุด 12 bubble × 18 รายการ"""
-    PER_BUBBLE = 18
-    MAX_BUBBLES = 12
-
+    """1 bubble แสดงยอดรวมต่อ tag ทุก tag + ปุ่ม ดูรายละเอียด → webview"""
     tag_groups = defaultdict(list)
     for p in products:
         tags = list(p.tags.all())
@@ -567,138 +564,81 @@ def _build_report_bubbles(report_title, header_color, products, forecast, with_s
     def _sort_key(k):
         return (1, k) if k == 'Non Tag' else (0, k)
 
-    # คำนวณ grand total
-    grand = [0, 0, 0.0, 0.0]
-    for p in products:
-        fd = forecast.get(p.pk, {})
-        grand[0] += p.stock_quantity or 0
-        grand[1] += fd.get('forecast', 0)
-        grand[2] += fd.get('cost_value', 0.0)
-        grand[3] += fd.get('sale_value', 0.0)
+    grand_curr = grand_cost = grand_sale = 0
 
-    bubbles = []
+    # col header แบบย่อ: Tag | ชิ้น | ต้นทุน฿ | ขาย฿
+    hdr_cols = [
+        {'type': 'text', 'text': 'Tag / กลุ่ม', 'size': 'xxs', 'flex': 5, 'color': '#aaaaaa'},
+        {'type': 'text', 'text': 'ชิ้น', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#aaaaaa'},
+        {'type': 'text', 'text': 'ต้นทุน฿', 'size': 'xxs', 'flex': 4, 'align': 'end', 'color': '#aaaaaa'},
+    ]
+    if with_sale:
+        hdr_cols.append({'type': 'text', 'text': 'ขาย฿', 'size': 'xxs', 'flex': 4, 'align': 'end', 'color': '#aaaaaa'})
+
+    body_rows = [
+        {'type': 'box', 'layout': 'horizontal', 'margin': 'sm', 'contents': hdr_cols},
+        {'type': 'separator', 'margin': 'sm'},
+    ]
 
     for tag_name in sorted(tag_groups.keys(), key=_sort_key):
-        tprods = sorted(tag_groups[tag_name], key=lambda p: p.name)
-
-        # คำนวณ subtotal ของ tag นี้
-        t_curr = t_fore = t_cost = t_sale = 0
+        tprods = tag_groups[tag_name]
+        t_curr = t_cost = t_sale = 0
         for p in tprods:
             fd = forecast.get(p.pk, {})
-            t_curr += p.stock_quantity or 0
-            t_fore += fd.get('forecast', 0)
+            t_curr += int(p.stock_quantity or 0)
             t_cost += fd.get('cost_value', 0.0)
             t_sale += fd.get('sale_value', 0.0)
+        grand_curr += t_curr; grand_cost += t_cost; grand_sale += t_sale
 
-        chunks = [tprods[i:i+PER_BUBBLE] for i in range(0, len(tprods), PER_BUBBLE)]
-        total_chunks = len(chunks)
-
-        for ci, chunk in enumerate(chunks):
-            if len(bubbles) >= MAX_BUBBLES:
-                break
-
-            page_label = f' {ci*PER_BUBBLE+1}–{min((ci+1)*PER_BUBBLE, len(tprods))}/{len(tprods)}' if total_chunks > 1 else ''
-            is_last = ci == total_chunks - 1
-
-            rows = []
-            # Tag header
-            rows.append({
-                'type': 'box', 'layout': 'vertical', 'margin': 'sm',
-                'contents': [{'type': 'text', 'text': f'▸ {tag_name}{page_label}', 'size': 'xxs', 'weight': 'bold', 'color': '#444444'}],
-            })
-            rows.append({'type': 'separator', 'margin': 'xs'})
-
-            for p in chunk:
-                fd = forecast.get(p.pk, {})
-                curr = p.stock_quantity or 0
-                fore = fd.get('forecast', 0)
-                cost = fd.get('cost_value', 0.0)
-                sale = fd.get('sale_value', 0.0)
-                cols = [
-                    {'type': 'text', 'text': p.name[:18], 'size': 'xxs', 'flex': 4, 'wrap': True, 'color': '#333333'},
-                    {'type': 'text', 'text': f'{curr:,}', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#555555'},
-                    {'type': 'text', 'text': f'{fore:,}', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#27ACB2'},
-                    {'type': 'text', 'text': f'{cost:,.0f}', 'size': 'xxs', 'flex': 3, 'align': 'end', 'color': '#FF8C00'},
-                ]
-                if with_sale:
-                    cols.append({'type': 'text', 'text': f'{sale:,.0f}', 'size': 'xxs', 'flex': 3, 'align': 'end', 'color': '#28a745'})
-                rows.append({'type': 'box', 'layout': 'horizontal', 'margin': 'xs', 'contents': cols})
-
-            # subtotal เฉพาะ chunk สุดท้ายของ tag
-            if is_last:
-                rows.append({'type': 'separator', 'margin': 'sm'})
-                sub_cols = [
-                    {'type': 'text', 'text': f'รวม {tag_name}', 'size': 'xxs', 'flex': 4, 'color': '#666666', 'weight': 'bold'},
-                    {'type': 'text', 'text': f'{t_curr:,}', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#666666', 'weight': 'bold'},
-                    {'type': 'text', 'text': f'{t_fore:,}', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#666666', 'weight': 'bold'},
-                    {'type': 'text', 'text': f'{t_cost:,.0f}', 'size': 'xxs', 'flex': 3, 'align': 'end', 'color': '#666666', 'weight': 'bold'},
-                ]
-                if with_sale:
-                    sub_cols.append({'type': 'text', 'text': f'{t_sale:,.0f}', 'size': 'xxs', 'flex': 3, 'align': 'end', 'color': '#666666', 'weight': 'bold'})
-                rows.append({'type': 'box', 'layout': 'horizontal', 'margin': 'xs', 'contents': sub_cols})
-
-            bubble_num = len(bubbles) + 1
-            footer = {
-                'type': 'box', 'layout': 'vertical', 'paddingAll': '8px',
-                'contents': [{
-                    'type': 'button', 'style': 'primary', 'color': header_color, 'height': 'sm',
-                    'action': {'type': 'uri', 'label': '📋 ดูทั้งหมด', 'uri': webview_url} if webview_url else
-                              {'type': 'message', 'label': '📋 ดูทั้งหมด', 'text': 'ดูทั้งหมด'},
-                }],
-            } if webview_url else None
-
-            b = {
-                'type': 'bubble', 'size': 'mega',
-                'header': {
-                    'type': 'box', 'layout': 'vertical', 'backgroundColor': header_color, 'paddingAll': '10px',
-                    'contents': [
-                        {'type': 'text', 'text': report_title, 'weight': 'bold', 'color': '#ffffff', 'size': 'sm'},
-                        {'type': 'text', 'text': f'{len(products)} รายการ  •  กล่อง {bubble_num}', 'size': 'xxs', 'color': '#aaaaaa'},
-                    ],
-                },
-                'body': {
-                    'type': 'box', 'layout': 'vertical', 'paddingAll': '10px', 'spacing': 'none',
-                    'contents': [_col_header(with_sale), {'type': 'separator', 'margin': 'sm'}, *rows],
-                },
-            }
-            if footer:
-                b['footer'] = footer
-            bubbles.append(b)
-
-    # bubble สุดท้าย: grand total
-    if bubbles and len(bubbles) < MAX_BUBBLES:
-        gt_cols = [
-            {'type': 'text', 'text': 'รวมทั้งหมด', 'size': 'xs', 'flex': 4, 'color': '#ffffff', 'weight': 'bold'},
-            {'type': 'text', 'text': f'{grand[0]:,}', 'size': 'xs', 'flex': 2, 'align': 'end', 'weight': 'bold', 'color': '#ffffff'},
-            {'type': 'text', 'text': f'{grand[1]:,}', 'size': 'xs', 'flex': 2, 'align': 'end', 'weight': 'bold', 'color': '#7ae7f0'},
-            {'type': 'text', 'text': f'{grand[2]:,.0f}', 'size': 'xs', 'flex': 3, 'align': 'end', 'weight': 'bold', 'color': '#ffcc66'},
+        row_cols = [
+            {'type': 'text', 'text': f'{tag_name} ({len(tprods)})', 'size': 'xxs', 'flex': 5, 'color': '#333333', 'weight': 'bold'},
+            {'type': 'text', 'text': f'{t_curr:,}', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#555555'},
+            {'type': 'text', 'text': f'{t_cost:,.0f}', 'size': 'xxs', 'flex': 4, 'align': 'end', 'color': '#FF8C00'},
         ]
         if with_sale:
-            gt_cols.append({'type': 'text', 'text': f'{grand[3]:,.0f}', 'size': 'xs', 'flex': 3, 'align': 'end', 'weight': 'bold', 'color': '#7dff99'})
-        gt_bubble = {
-            'type': 'bubble', 'size': 'mega',
-            'body': {
-                'type': 'box', 'layout': 'vertical', 'paddingAll': '10px', 'backgroundColor': header_color,
-                'contents': [
-                    {'type': 'text', 'text': report_title, 'weight': 'bold', 'color': '#ffffff', 'size': 'sm', 'margin': 'sm'},
-                    {'type': 'separator', 'margin': 'md'},
-                    _col_header(with_sale),
-                    {'type': 'separator', 'margin': 'sm'},
-                    {'type': 'box', 'layout': 'horizontal', 'margin': 'md', 'contents': gt_cols},
-                ],
-            },
-        }
-        if webview_url:
-            gt_bubble['footer'] = {
-                'type': 'box', 'layout': 'vertical', 'paddingAll': '8px',
-                'contents': [{
-                    'type': 'button', 'style': 'secondary', 'height': 'sm',
-                    'action': {'type': 'uri', 'label': '📋 ดูทั้งหมด', 'uri': webview_url},
-                }],
-            }
-        bubbles.append(gt_bubble)
+            row_cols.append({'type': 'text', 'text': f'{t_sale:,.0f}', 'size': 'xxs', 'flex': 4, 'align': 'end', 'color': '#28a745'})
+        row_cols.append({'type': 'text', 'text': '›', 'size': 'sm', 'flex': 1, 'align': 'end', 'color': '#aaaaaa'})
 
-    return bubbles
+        row_box = {'type': 'box', 'layout': 'horizontal', 'margin': 'xs',
+                   'paddingAll': '4px', 'contents': row_cols}
+        if webview_url:
+            row_box['action'] = {'type': 'uri', 'label': tag_name, 'uri': webview_url}
+        body_rows.append(row_box)
+
+    # grand total
+    body_rows.append({'type': 'separator', 'margin': 'md'})
+    gt_cols = [
+        {'type': 'text', 'text': f'รวม ({len(products)} รายการ)', 'size': 'xs', 'flex': 5, 'color': '#1a1a2e', 'weight': 'bold'},
+        {'type': 'text', 'text': f'{grand_curr:,}', 'size': 'xs', 'flex': 2, 'align': 'end', 'weight': 'bold', 'color': '#1a1a2e'},
+        {'type': 'text', 'text': f'{grand_cost:,.0f}', 'size': 'xs', 'flex': 4, 'align': 'end', 'weight': 'bold', 'color': '#FF8C00'},
+    ]
+    if with_sale:
+        gt_cols.append({'type': 'text', 'text': f'{grand_sale:,.0f}', 'size': 'xs', 'flex': 4, 'align': 'end', 'weight': 'bold', 'color': '#28a745'})
+    body_rows.append({'type': 'box', 'layout': 'horizontal', 'margin': 'sm', 'contents': gt_cols})
+
+    bubble = {
+        'type': 'bubble', 'size': 'mega',
+        'header': {
+            'type': 'box', 'layout': 'vertical', 'backgroundColor': header_color, 'paddingAll': '12px',
+            'contents': [
+                {'type': 'text', 'text': report_title, 'weight': 'bold', 'color': '#ffffff', 'size': 'md'},
+                {'type': 'text', 'text': f'{len(products)} รายการ · แยกตาม Tag', 'size': 'xxs', 'color': '#aaaaaa'},
+            ],
+        },
+        'body': {
+            'type': 'box', 'layout': 'vertical', 'paddingAll': '12px', 'spacing': 'none',
+            'contents': body_rows,
+        },
+    }
+
+    if webview_url:
+        bubble['footer'] = {
+            'type': 'box', 'layout': 'vertical', 'paddingAll': '10px',
+            'contents': [{'type': 'button', 'style': 'primary', 'color': header_color, 'height': 'sm',
+                          'action': {'type': 'uri', 'label': '📋 ดูรายละเอียดทั้งหมด', 'uri': webview_url}}],
+        }
+
+    return [bubble]
 
 
 def _product_bubble(product):
