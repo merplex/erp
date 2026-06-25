@@ -620,7 +620,6 @@ def _build_report_bubbles(report_title, header_color, products, forecast, with_s
         ]
         if with_sale:
             row_contents.append(_cbox(_fmt(t_sale), 4, '#28a745'))
-        row_contents.append(_cbox('›', 1, '#cccccc', size='sm'))
 
         row_box = {'type': 'box', 'layout': 'horizontal', 'margin': 'xs',
                    'paddingAll': '4px', 'contents': row_contents}
