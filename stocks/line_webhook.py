@@ -236,53 +236,67 @@ def _handle_sale_stock(reply_token, access_token):
 # ── Product Report ────────────────────────────────────────────────────────────
 
 def _handle_product_report(reply_token, access_token):
-    products = list(Product.objects.filter(
-        is_product=True, category__name__iexact='product'
-    ).prefetch_related('tags').order_by('name'))
+    try:
+        products = list(Product.objects.filter(
+            is_product=True, category__name='Product'
+        ).prefetch_related('tags').order_by('name'))
 
-    forecast = _get_forecast_data(products)
-    rows, totals = _build_report_rows(products, forecast, with_sale=True)
+        if not products:
+            reply_message(reply_token, [{'type': 'text', 'text': '📦 Product Report\nไม่พบสินค้าใน category "Product"'}], access_token)
+            return
 
-    bubble = {
-        'type': 'bubble', 'size': 'mega',
-        'header': {
-            'type': 'box', 'layout': 'vertical', 'backgroundColor': '#1a2e3a', 'paddingAll': '12px',
-            'contents': [
-                {'type': 'text', 'text': '📦 Product Report', 'weight': 'bold', 'color': '#ffffff'},
-                {'type': 'text', 'text': f'{len(products)} รายการ | แยกตาม Tag', 'size': 'xs', 'color': '#aaaaaa'},
-            ],
-        },
-        'body': {'type': 'box', 'layout': 'vertical', 'paddingAll': '12px', 'spacing': 'none',
-            'contents': [_col_header(with_sale=True), {'type': 'separator', 'margin': 'sm'}, *rows],
-        },
-    }
-    reply_message(reply_token, [{'type': 'flex', 'altText': '📦 Product Report', 'contents': bubble}], access_token)
+        forecast = _get_forecast_data(products)
+        rows, totals = _build_report_rows(products, forecast, with_sale=True)
+
+        bubble = {
+            'type': 'bubble', 'size': 'mega',
+            'header': {
+                'type': 'box', 'layout': 'vertical', 'backgroundColor': '#1a2e3a', 'paddingAll': '12px',
+                'contents': [
+                    {'type': 'text', 'text': '📦 Product Report', 'weight': 'bold', 'color': '#ffffff'},
+                    {'type': 'text', 'text': f'{len(products)} รายการ | แยกตาม Tag', 'size': 'xs', 'color': '#aaaaaa'},
+                ],
+            },
+            'body': {'type': 'box', 'layout': 'vertical', 'paddingAll': '12px', 'spacing': 'none',
+                'contents': [_col_header(with_sale=True), {'type': 'separator', 'margin': 'sm'}, *rows],
+            },
+        }
+        reply_message(reply_token, [{'type': 'flex', 'altText': '📦 Product Report', 'contents': bubble}], access_token)
+    except Exception as e:
+        reply_message(reply_token, [{'type': 'text', 'text': f'📦 Product Report Error:\n{type(e).__name__}: {e}'}], access_token)
 
 
 # ── Package Report ────────────────────────────────────────────────────────────
 
 def _handle_package_report(reply_token, access_token):
-    products = list(Product.objects.filter(
-        category__name__iexact='package'
-    ).prefetch_related('tags').order_by('name'))
+    try:
+        products = list(Product.objects.filter(
+            is_product=True, category__name='Packaging'
+        ).prefetch_related('tags').order_by('name'))
 
-    forecast = _get_forecast_data(products)
-    rows, totals = _build_report_rows(products, forecast, with_sale=False)
+        if not products:
+            reply_message(reply_token, [{'type': 'text', 'text': '📋 Package Report\nไม่พบสินค้าใน category "Packaging"'}], access_token)
+            return
 
-    bubble = {
-        'type': 'bubble', 'size': 'mega',
-        'header': {
-            'type': 'box', 'layout': 'vertical', 'backgroundColor': '#2e2a1a', 'paddingAll': '12px',
-            'contents': [
-                {'type': 'text', 'text': '📋 Package Report', 'weight': 'bold', 'color': '#ffffff'},
-                {'type': 'text', 'text': f'{len(products)} รายการ | แยกตาม Tag', 'size': 'xs', 'color': '#aaaaaa'},
-            ],
-        },
-        'body': {'type': 'box', 'layout': 'vertical', 'paddingAll': '12px', 'spacing': 'none',
-            'contents': [_col_header(with_sale=False), {'type': 'separator', 'margin': 'sm'}, *rows],
-        },
-    }
-    reply_message(reply_token, [{'type': 'flex', 'altText': '📋 Package Report', 'contents': bubble}], access_token)
+        forecast = _get_forecast_data(products)
+        rows, totals = _build_report_rows(products, forecast, with_sale=False)
+
+        bubble = {
+            'type': 'bubble', 'size': 'mega',
+            'header': {
+                'type': 'box', 'layout': 'vertical', 'backgroundColor': '#2e2a1a', 'paddingAll': '12px',
+                'contents': [
+                    {'type': 'text', 'text': '📋 Package Report', 'weight': 'bold', 'color': '#ffffff'},
+                    {'type': 'text', 'text': f'{len(products)} รายการ | แยกตาม Tag', 'size': 'xs', 'color': '#aaaaaa'},
+                ],
+            },
+            'body': {'type': 'box', 'layout': 'vertical', 'paddingAll': '12px', 'spacing': 'none',
+                'contents': [_col_header(with_sale=False), {'type': 'separator', 'margin': 'sm'}, *rows],
+            },
+        }
+        reply_message(reply_token, [{'type': 'flex', 'altText': '📋 Package Report', 'contents': bubble}], access_token)
+    except Exception as e:
+        reply_message(reply_token, [{'type': 'text', 'text': f'📋 Package Report Error:\n{type(e).__name__}: {e}'}], access_token)
 
 
 # ── New Product Menu ──────────────────────────────────────────────────────────
@@ -553,11 +567,11 @@ def _build_report_rows(products, forecast, with_sale=True):
             for tg in tags:
                 tag_groups[tg.name].append(p)
         else:
-            tag_groups['ไม่มีแท็ก'].append(p)
+            tag_groups['Non Tag'].append(p)
 
-    # เรียง tag ตามชื่อ A-Z (ไม่มีแท็กไว้ท้าย)
+    # เรียง tag ตามชื่อ A-Z (Non Tag ไว้ท้าย)
     def _sort_key(k):
-        return (1, k) if k == 'ไม่มีแท็ก' else (0, k)
+        return (1, k) if k == 'Non Tag' else (0, k)
 
     rows = []
     grand = [0, 0, 0.0, 0.0]
