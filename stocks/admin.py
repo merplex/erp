@@ -924,10 +924,10 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
             'fields': ('name', 'category', 'is_product', 'tags', 'has_bom', 'unit', 'stock_quantity', 'production_lead_time', 'delivery_lead_time')
         }),
         ('💰 ต้นทุน & ราคาขาย', {
-            'fields': ('auto_cost', 'manual_buy_price', 'buy_price', 'sale_price'),
+            'fields': (('auto_cost', 'manual_buy_price'), ('buy_price', 'sale_price')),
             'description': (
-                '<b>ต้นทุนอัตโนมัติ</b>: คำนวณจาก Supplier ราคาสูงสุด +15% (อ่านอย่างเดียว อัปเดตเองเมื่อบันทึก)<br>'
-                '<b>ต้นทุนกำหนดเอง</b>: กรอกเพื่อ override — ถ้ามีค่า (>0) ระบบจะใช้ค่านี้แทนอัตโนมัติ<br>'
+                '<b>ต้นทุนอัตโนมัติ</b>: คำนวณจาก Supplier ราคาสูงสุด +15% (อ่านอย่างเดียว อัปเดตเองเมื่อบันทึก) &nbsp;|&nbsp; '
+                '<b>ต้นทุนกำหนดเอง</b>: กรอกเพื่อ override — ถ้ามีค่า (&gt;0) ระบบจะใช้ค่านี้แทนอัตโนมัติ<br>'
                 '<b>ต้นทุนที่ใช้จริง</b>: ค่าที่ระบบนำไปคำนวณทุกที่ (อ่านอย่างเดียว)'
             ),
         }),
