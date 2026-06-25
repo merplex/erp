@@ -580,9 +580,10 @@ def _build_report_bubbles(report_title, header_color, products, forecast, with_s
 
     grand_curr = grand_cost = grand_sale = 0
 
-    # helper: box wrapper ที่ centering ด้วย justifyContent (แทน align ที่ไม่แน่นอนใน LINE)
+    # helper: box wrapper ที่ centering ด้วย justifyContent
+    # flex:0 บน text ทำให้ text shrink ตามขนาด content → justifyContent:center จึงทำงานได้จริง
     def _cbox(text, flex, color, size='xxs', bold=False):
-        t = {'type': 'text', 'text': text, 'size': size, 'color': color}
+        t = {'type': 'text', 'text': text, 'size': size, 'color': color, 'flex': 0}
         if bold:
             t['weight'] = 'bold'
         return {'type': 'box', 'layout': 'horizontal', 'flex': flex,
