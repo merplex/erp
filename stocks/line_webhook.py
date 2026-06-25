@@ -5,7 +5,7 @@ import os
 import requests
 from collections import defaultdict
 from django.db.models import Sum, F, Value, DecimalField, ExpressionWrapper
-from django.db.models.functions import Greatest, Coalesce
+from django.db.models.functions import Greatest, Coalesce  # kept for potential reuse
 
 from .models import Product, ProductCategory
 
@@ -30,10 +30,15 @@ def verify_signature(body: bytes, signature: str, secret: str) -> bool:
 
 
 def reply_message(reply_token, messages, access_token: str):
-    requests.post(REPLY_URL,
+    import logging
+    resp = requests.post(REPLY_URL,
         headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {access_token}'},
         json={'replyToken': reply_token, 'messages': messages},
         timeout=10)
+    if resp.status_code != 200:
+        logging.getLogger('line_webhook').error(
+            'LINE reply failed %s: %s', resp.status_code, resp.text[:300]
+        )
 
 
 def handle_event(event, access_token: str):
@@ -509,15 +514,13 @@ def _get_forecast_data(products):
     ids = [p.pk for p in products]
 
     def _bulk_sum(qs, key, field_a, field_b):
-        dec = DecimalField(max_digits=15, decimal_places=4)
-        zero = Value(0, output_field=dec)
-        diff = ExpressionWrapper(F(field_a) - F(field_b), output_field=dec)
-        return {
-            row[key]: int(row['t'] or 0)
-            for row in qs.values(key).annotate(
-                t=Coalesce(Sum(Greatest(diff, zero), output_field=dec), zero)
-            )
-        }
+        result = {}
+        for row in qs.values(key, field_a, field_b):
+            k = row[key]
+            a = float(row[field_a] or 0)
+            b = float(row[field_b] or 0)
+            result[k] = result.get(k, 0.0) + max(0.0, a - b)
+        return {k: int(round(v)) for k, v in result.items()}
 
     po = _bulk_sum(PurchaseItem.objects.filter(product__in=ids, purchase_order__status__in=_ACTIVE_PO), 'product', 'quantity_ordered', 'quantity_received')
     so = _bulk_sum(SalesItem.objects.filter(product__in=ids, sales_order__status__in=_ACTIVE_SO), 'product', 'quantity_ordered', 'quantity_shipped')
