@@ -11,6 +11,11 @@ from .models import Product, ProductCategory
 
 LINE_OWNER_USER_ID = os.environ.get('LINE_OWNER_USER_ID', '')
 REPLY_URL = 'https://api.line.me/v2/bot/message/reply'
+def _report_webview_url(report_type: str) -> str:
+    from django.conf import settings
+    base_url = os.environ.get('BASE_URL', '').rstrip('/')
+    token = hmac.new(settings.SECRET_KEY.encode(), report_type.encode(), hashlib.sha256).hexdigest()[:20]
+    return f'{base_url}/report/stock/?type={report_type}&token={token}'
 
 _ACTIVE_PO = ['Draft', 'Pending', 'Confirmed', 'Ordered', 'Paid', 'Loaded', 'Departed', 'Arrived', 'Received', 'Partially Received']
 _ACTIVE_SO = ['Draft', 'Confirmed', 'Shipped']
@@ -163,8 +168,8 @@ def _handle_cost_stock(reply_token, access_token):
         'footer': {
             'type': 'box', 'layout': 'vertical', 'paddingAll': '8px',
             'contents': [{'type': 'button', 'style': 'secondary', 'height': 'sm',
-                'action': {'type': 'message', 'label': '📋 ดูทั้งหมด', 'text': 'full:ต้นทุน'}}],
-        } if rest > 0 else None,
+                'action': {'type': 'uri', 'label': '📋 ดูทั้งหมด', 'uri': _report_webview_url('cost')}}],
+        } if rest > 0 and os.environ.get('BASE_URL') else None,
     }
     if bubble['footer'] is None:
         bubble.pop('footer')
@@ -219,8 +224,8 @@ def _handle_sale_stock(reply_token, access_token):
         'footer': {
             'type': 'box', 'layout': 'vertical', 'paddingAll': '8px',
             'contents': [{'type': 'button', 'style': 'secondary', 'height': 'sm',
-                'action': {'type': 'message', 'label': '📋 ดูทั้งหมด', 'text': 'full:มูลค่า'}}],
-        } if rest > 0 else None,
+                'action': {'type': 'uri', 'label': '📋 ดูทั้งหมด', 'uri': _report_webview_url('sale')}}],
+        } if rest > 0 and os.environ.get('BASE_URL') else None,
     }
     if bubble.get('footer') is None:
         bubble.pop('footer', None)
@@ -347,49 +352,64 @@ def _handle_check_list(reply_token, check_type, access_token):
     else:
         return
 
-    products = list(qs.select_related('category').order_by('name')[:30])
     total = qs.count()
-
-    if not products:
+    if total == 0:
         reply_message(reply_token, [{'type': 'text', 'text': f'✅ {title}\nไม่มีรายการที่ต้องแก้ไข'}], access_token)
         return
 
-    rows = []
-    for p in products:
-        cat = p.category.name if p.category else '-'
-        rows.append({
-            'type': 'box', 'layout': 'horizontal', 'margin': 'xs',
-            'contents': [
-                {'type': 'text', 'text': p.name[:24], 'size': 'xs', 'flex': 6, 'wrap': True, 'color': '#333333'},
-                {'type': 'text', 'text': cat[:8], 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#888888'},
-            ],
-        })
+    # โหลดสูงสุด 50 รายการ แบ่ง 2 bubble × 25
+    PER_BUBBLE = 25
+    products = list(qs.select_related('category').order_by('name')[:PER_BUBBLE * 2])
 
-    if total > 30:
-        rows.append({'type': 'text', 'text': f'· · · และอีก {total - 30} รายการ', 'size': 'xxs', 'color': '#aaaaaa', 'margin': 'sm', 'align': 'center'})
+    def _make_bubble(chunk, page_label):
+        rows = []
+        for p in chunk:
+            cat = p.category.name[:8] if p.category else '-'
+            rows.append({
+                'type': 'box', 'layout': 'horizontal', 'margin': 'xs',
+                'contents': [
+                    {'type': 'text', 'text': p.name[:26], 'size': 'xs', 'flex': 7, 'wrap': True, 'color': '#333333'},
+                    {'type': 'text', 'text': cat, 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#888888'},
+                ],
+            })
+        return {
+            'type': 'bubble', 'size': 'mega',
+            'header': {
+                'type': 'box', 'layout': 'vertical', 'backgroundColor': header_color, 'paddingAll': '12px',
+                'contents': [
+                    {'type': 'text', 'text': title, 'weight': 'bold', 'color': '#ffffff'},
+                    {'type': 'text', 'text': f'{subtitle} | {total} รายการ  {page_label}', 'size': 'xs', 'color': '#ffcccc'},
+                ],
+            },
+            'body': {
+                'type': 'box', 'layout': 'vertical', 'paddingAll': '12px',
+                'contents': [
+                    {'type': 'box', 'layout': 'horizontal', 'contents': [
+                        {'type': 'text', 'text': 'ชื่อสินค้า', 'size': 'xxs', 'flex': 7, 'color': '#aaaaaa'},
+                        {'type': 'text', 'text': 'กลุ่ม', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#aaaaaa'},
+                    ]},
+                    {'type': 'separator', 'margin': 'sm'},
+                    *rows,
+                ],
+            },
+        }
 
-    bubble = {
-        'type': 'bubble', 'size': 'mega',
-        'header': {
-            'type': 'box', 'layout': 'vertical', 'backgroundColor': header_color, 'paddingAll': '12px',
-            'contents': [
-                {'type': 'text', 'text': title, 'weight': 'bold', 'color': '#ffffff'},
-                {'type': 'text', 'text': f'{subtitle} | {total} รายการ', 'size': 'xs', 'color': '#ffcccc'},
-            ],
-        },
-        'body': {
-            'type': 'box', 'layout': 'vertical', 'paddingAll': '12px',
-            'contents': [
-                {'type': 'box', 'layout': 'horizontal', 'contents': [
-                    {'type': 'text', 'text': 'ชื่อสินค้า', 'size': 'xxs', 'flex': 6, 'color': '#aaaaaa'},
-                    {'type': 'text', 'text': 'กลุ่ม', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#aaaaaa'},
-                ]},
-                {'type': 'separator', 'margin': 'sm'},
-                *rows,
-            ],
-        },
-    }
-    reply_message(reply_token, [{'type': 'flex', 'altText': f'{title} {total} รายการ', 'contents': bubble}], access_token)
+    chunks = [products[i:i+PER_BUBBLE] for i in range(0, len(products), PER_BUBBLE)]
+    total_pages = len(chunks)
+    bubbles = [_make_bubble(chunk, f'({i+1}/{total_pages})' if total_pages > 1 else '') for i, chunk in enumerate(chunks)]
+
+    if total > PER_BUBBLE * 2:
+        # เพิ่ม note ที่ bubble สุดท้าย
+        bubbles[-1]['body']['contents'].append(
+            {'type': 'text', 'text': f'· · · และอีก {total - PER_BUBBLE*2} รายการ', 'size': 'xxs', 'color': '#aaaaaa', 'margin': 'sm', 'align': 'center'}
+        )
+
+    if len(bubbles) == 1:
+        contents = bubbles[0]
+    else:
+        contents = {'type': 'carousel', 'contents': bubbles}
+
+    reply_message(reply_token, [{'type': 'flex', 'altText': f'{title} {total} รายการ', 'contents': contents}], access_token)
 
 
 # ── Full Report (text) ────────────────────────────────────────────────────────

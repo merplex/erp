@@ -1,10 +1,17 @@
+import hashlib
+import hmac
 import json
 import os
+from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
 from django.http import HttpResponse, JsonResponse
 from django.contrib.admin.views.decorators import staff_member_required
 from .models import DocumentLock
 from . import line_webhook
+
+
+def _report_token(report_type: str) -> str:
+    return hmac.new(settings.SECRET_KEY.encode(), report_type.encode(), hashlib.sha256).hexdigest()[:20]
 
 
 def _webhook_handler(request, secret_env, token_env):
@@ -290,3 +297,94 @@ def unlock_document_view(request):
                 user=request.user
             ).delete()
     return HttpResponse('ok')
+
+
+def stock_report_webview(request):
+    """Webview สำหรับดูรายงานสต๊อกทั้งหมดใน LINE in-app browser"""
+    from .models import Product
+
+    report_type = request.GET.get('type', 'cost')
+    token = request.GET.get('token', '')
+
+    expected = _report_token(report_type)
+    if not hmac.compare_digest(token, expected):
+        return HttpResponse('Unauthorized', status=401)
+
+    if report_type == 'cost':
+        products = list(Product.objects.filter(is_product=True))
+        products.sort(key=lambda p: float(p.stock_quantity or 0) * float(p.buy_price or 0), reverse=True)
+        title = 'ต้นทุนสต๊อก'
+        emoji = '💰'
+        header_color = '#1a3a2e'
+        col_label = 'ต้นทุน/ชิ้น'
+        value_fn = lambda p: (float(p.stock_quantity or 0) * float(p.buy_price or 0), float(p.buy_price or 0))
+        grand_label = 'รวมต้นทุน'
+    else:
+        products = list(Product.objects.filter(is_product=True))
+        products.sort(key=lambda p: float(p.stock_quantity or 0) * float(p.sale_price or 0), reverse=True)
+        title = 'มูลค่าสต๊อก'
+        emoji = '💲'
+        header_color = '#2e1a3a'
+        col_label = 'ราคาขาย/ชิ้น'
+        value_fn = lambda p: (float(p.stock_quantity or 0) * float(p.sale_price or 0), float(p.sale_price or 0))
+        grand_label = 'รวมมูลค่า'
+
+    grand_total = sum(value_fn(p)[0] for p in products)
+
+    rows_html = ''
+    for i, p in enumerate(products, 1):
+        total_val, unit_price = value_fn(p)
+        bg = '#fafafa' if i % 2 == 0 else '#ffffff'
+        rows_html += (
+            f'<tr style="background:{bg}">'
+            f'<td class="n">{i}</td>'
+            f'<td class="nm">{p.name}</td>'
+            f'<td class="r">{int(p.stock_quantity or 0):,}</td>'
+            f'<td class="r">{unit_price:,.2f}</td>'
+            f'<td class="r b">{total_val:,.0f}</td>'
+            f'</tr>'
+        )
+
+    html = f'''<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>{emoji} {title}</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:12px;background:#f5f5f5;color:#222}}
+.hd{{background:{header_color};color:#fff;padding:10px 14px;position:sticky;top:0;z-index:10}}
+.hd h1{{font-size:15px;font-weight:700}}
+.hd p{{font-size:11px;color:#aaa;margin-top:2px}}
+table{{width:100%;border-collapse:collapse;background:#fff}}
+thead th{{background:#efefef;padding:7px 5px;font-size:10px;color:#777;white-space:nowrap;position:sticky;top:46px;border-bottom:1px solid #ddd}}
+th.l,td.nm{{text-align:left}}
+th.r,td.r{{text-align:right}}
+th.c,td.n{{text-align:center}}
+td{{padding:6px 5px;border-bottom:1px solid #f0f0f0;vertical-align:middle}}
+td.nm{{word-break:break-word;max-width:150px}}
+td.n{{color:#aaa;font-size:11px}}
+td.b{{font-weight:700}}
+.ft{{background:{header_color};color:#fff;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;position:sticky;bottom:0}}
+.ft span{{font-size:11px;color:#aaa}}
+.ft strong{{font-size:14px}}
+</style>
+</head>
+<body>
+<div class="hd"><h1>{emoji} {title}</h1><p>{len(products)} รายการ · เรียงตามมูลค่ามากสุด</p></div>
+<table>
+<thead><tr>
+<th class="c" style="width:30px">#</th>
+<th class="l">ชื่อสินค้า</th>
+<th class="r" style="width:48px">ชิ้น</th>
+<th class="r" style="width:64px">{col_label}</th>
+<th class="r" style="width:72px">มูลค่า ฿</th>
+</tr></thead>
+<tbody>{rows_html}</tbody>
+</table>
+<div class="ft"><span>{grand_label}</span><strong>{grand_total:,.0f} ฿</strong></div>
+</body>
+</html>'''
+
+    return HttpResponse(html, content_type='text/html; charset=utf-8')
