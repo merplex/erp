@@ -347,7 +347,9 @@ def _handle_check_list(reply_token, check_type, access_token):
         contracted_ids = CustomerProductContract.objects.filter(
             contract_price__gt=0
         ).values_list('product_id', flat=True).distinct()
-        qs = Product.objects.filter(is_product=True).exclude(pk__in=contracted_ids)
+        qs = Product.objects.filter(
+            is_product=True, category__name='Product'
+        ).exclude(pk__in=contracted_ids)
         title = '📄 Non Price Contract'
         subtitle = 'ยังไม่มี Price Contract'
         header_color = '#1a2a3a'
@@ -364,8 +366,8 @@ def _handle_check_list(reply_token, check_type, access_token):
         reply_message(reply_token, [{'type': 'text', 'text': f'✅ {title}\nไม่มีรายการที่ต้องแก้ไข'}], access_token)
         return
 
-    # LINE carousel max 50KB → ~10 รายการ/bubble × 12 bubble = 120 รายการ
-    PER_BUBBLE = 10
+    # LINE carousel max 50KB → 20 รายการ/bubble × 12 bubble = 240 รายการ
+    PER_BUBBLE = 20
     MAX_BUBBLES = 12
     products = list(qs.select_related('category').order_by('name')[:PER_BUBBLE * MAX_BUBBLES])
 
