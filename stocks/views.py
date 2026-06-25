@@ -323,7 +323,6 @@ def stock_report_webview(request):
             is_product=True, category__name=cat_name
         ).prefetch_related('tags').order_by('name'))
 
-        # จัดกลุ่มตาม tag
         tag_groups = defaultdict(list)
         for p in products:
             tags = list(p.tags.all())
@@ -336,8 +335,8 @@ def stock_report_webview(request):
         def _tag_sort(k):
             return (1, k) if k == 'Non Tag' else (0, k)
 
-        th_sale = '<th class="r" style="width:72px">ราคาขาย/ชิ้น</th>' if with_sale else ''
-        th_sale2 = '<th class="r" style="width:64px">มูลค่าขาย ฿</th>' if with_sale else ''
+        # 3 คอลัมน์: ชื่อสินค้า(จำนวน) | ต้นทุน฿ 2บรรทัด | ขาย฿ 2บรรทัด
+        th_sale = '<th class="r" style="width:90px">ขาย ฿<br><span class="sub-hd">(ขาย/ชิ้น)</span></th>' if with_sale else ''
 
         rows_html = ''
         grand_cost = grand_sale = grand_stock = 0
@@ -347,10 +346,8 @@ def stock_report_webview(request):
             tprods = sorted(tag_groups[tag_name], key=lambda p: p.name)
             t_cost = t_sale = t_stock = 0
 
-            colspan = 6 if with_sale else 5
-            rows_html += (
-                f'<tr><td colspan="{colspan}" class="tag-hd">▸ {tag_name} ({len(tprods)} รายการ)</td></tr>'
-            )
+            colspan = 3 if with_sale else 2
+            rows_html += f'<tr><td colspan="{colspan}" class="tag-hd">▸ {tag_name} ({len(tprods)} รายการ)</td></tr>'
 
             for p in tprods:
                 row_n += 1
@@ -361,27 +358,21 @@ def stock_report_webview(request):
                 sale_val = stock * sale
                 t_stock += stock; t_cost += cost_val; t_sale += sale_val
                 bg = '#fafafa' if row_n % 2 == 0 else '#ffffff'
-                sale_td = f'<td class="r">{sale:,.2f}</td><td class="r b">{sale_val:,.0f}</td>' if with_sale else ''
+                sale_td = f'<td class="r"><span class="val">{sale_val:,.0f}</span><br><span class="sub">({sale:,.2f})</span></td>' if with_sale else ''
                 rows_html += (
                     f'<tr style="background:{bg}">'
-                    f'<td class="n">{row_n}</td>'
-                    f'<td class="nm">{p.name}</td>'
-                    f'<td class="r">{stock:,}</td>'
-                    f'<td class="r">{buy:,.2f}</td>'
-                    f'<td class="r b">{cost_val:,.0f}</td>'
+                    f'<td class="nm">{p.name} <span class="qty">({stock:,})</span></td>'
+                    f'<td class="r"><span class="val">{cost_val:,.0f}</span><br><span class="sub">({buy:,.2f})</span></td>'
                     f'{sale_td}'
                     f'</tr>'
                 )
 
             grand_stock += t_stock; grand_cost += t_cost; grand_sale += t_sale
-            sale_sub = f'<td class="r sub"></td><td class="r sub b">{t_sale:,.0f}</td>' if with_sale else ''
+            sale_sub = f'<td class="r sub-row-td"><span class="val">{t_sale:,.0f}</span></td>' if with_sale else ''
             rows_html += (
                 f'<tr class="sub-row">'
-                f'<td class="n sub"></td>'
-                f'<td class="nm sub">รวม {tag_name}</td>'
-                f'<td class="r sub">{t_stock:,}</td>'
-                f'<td class="r sub"></td>'
-                f'<td class="r sub b">{t_cost:,.0f}</td>'
+                f'<td class="nm">รวม {tag_name} ({t_stock:,} ชิ้น)</td>'
+                f'<td class="r sub-row-td"><span class="val">{t_cost:,.0f}</span></td>'
                 f'{sale_sub}'
                 f'</tr>'
             )
@@ -395,21 +386,24 @@ def stock_report_webview(request):
 <title>{emoji} {title}</title>
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
-body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:12px;background:#f5f5f5;color:#222}}
+body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:13px;background:#f5f5f5;color:#222}}
 .hd{{background:{header_color};color:#fff;padding:10px 14px;position:sticky;top:0;z-index:10}}
 .hd h1{{font-size:15px;font-weight:700}}
 .hd p{{font-size:11px;color:#aaa;margin-top:2px}}
 table{{width:100%;border-collapse:collapse;background:#fff}}
-thead th{{background:#efefef;padding:7px 5px;font-size:10px;color:#777;white-space:nowrap;position:sticky;top:46px;border-bottom:1px solid #ddd}}
+thead th{{background:#efefef;padding:7px 8px;font-size:11px;color:#777;position:sticky;top:46px;border-bottom:1px solid #ddd;line-height:1.4}}
 th.l,td.nm{{text-align:left}}
 th.r,td.r{{text-align:right}}
-th.c,td.n{{text-align:center}}
-td{{padding:6px 5px;border-bottom:1px solid #f0f0f0;vertical-align:middle}}
-td.nm{{word-break:break-word;max-width:140px}}
-td.n{{color:#aaa;font-size:11px}}
-td.b{{font-weight:700}}
-.tag-hd{{background:#e8ecf0;font-weight:700;color:#1a2e3a;padding:6px 8px;font-size:11px}}
-.sub-row td{{background:#f0f4f8;font-weight:700;color:#555;border-top:1px solid #ccc;border-bottom:2px solid #bbb}}
+td{{padding:7px 8px;border-bottom:1px solid #f0f0f0;vertical-align:middle;line-height:1.5}}
+td.nm{{word-break:break-word}}
+.qty{{color:#aaa;font-size:11px}}
+.val{{font-weight:700}}
+.sub{{color:#999;font-size:10px}}
+.sub-hd{{font-size:9px;color:#aaa;font-weight:400}}
+.tag-hd{{background:#e8ecf0;font-weight:700;color:{header_color};padding:7px 8px;font-size:11px}}
+.sub-row td{{background:#f0f4f8;border-top:1px solid #ccc;border-bottom:2px solid #bbb}}
+.sub-row .nm{{font-weight:700;color:#444;font-size:11px}}
+.sub-row-td .val{{color:#444}}
 .ft{{background:{header_color};color:#fff;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;position:sticky;bottom:0;flex-wrap:wrap;gap:4px}}
 .ft span{{font-size:11px;color:#ccc}}
 .ft strong{{font-size:13px}}
@@ -419,12 +413,9 @@ td.b{{font-weight:700}}
 <div class="hd"><h1>{emoji} {title}</h1><p>{len(products)} รายการ · เรียงชื่อในแต่ละ Tag</p></div>
 <table>
 <thead><tr>
-<th class="c" style="width:28px">#</th>
-<th class="l">ชื่อสินค้า</th>
-<th class="r" style="width:44px">ชิ้น</th>
-<th class="r" style="width:60px">ทุน/ชิ้น</th>
-<th class="r" style="width:64px">ต้นทุน ฿</th>
-{th_sale}{th_sale2}
+<th class="l">ชื่อสินค้า (จำนวน)</th>
+<th class="r" style="width:90px">ต้นทุน ฿<br><span class="sub-hd">(ทุน/ชิ้น)</span></th>
+{th_sale}
 </tr></thead>
 <tbody>{rows_html}</tbody>
 </table>
