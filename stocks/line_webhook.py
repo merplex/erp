@@ -5,7 +5,7 @@ import os
 import requests
 from collections import defaultdict
 from django.db.models import Sum, F, Value, DecimalField, ExpressionWrapper
-from django.db.models.functions import Greatest, Coalesce
+from django.db.models.functions import Greatest, Coalesce, Cast
 
 from .models import Product, ProductCategory
 
@@ -522,16 +522,20 @@ def _get_forecast_data(products):
 
     ids = [p.pk for p in products]
 
-    _dec = DecimalField()
-
     def _bulk_sum(qs, key, field_a, field_b):
-        diff = ExpressionWrapper(F(field_a) - F(field_b), output_field=_dec)
+        dec = DecimalField()
         return {
             row[key]: int(row['t'] or 0)
             for row in qs.values(key).annotate(
                 t=Coalesce(
-                    Sum(Greatest(diff, Value(0, output_field=_dec)), output_field=_dec),
-                    Value(0),
+                    Sum(
+                        Greatest(
+                            Cast(F(field_a), output_field=dec) - Cast(F(field_b), output_field=dec),
+                            Value(0, output_field=dec),
+                        ),
+                        output_field=dec,
+                    ),
+                    Value(0, output_field=dec),
                 )
             )
         }
