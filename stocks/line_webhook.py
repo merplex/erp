@@ -538,6 +538,20 @@ def _get_forecast_data(products):
     return result
 
 
+def _fmt(n):
+    """แสดงตัวเลขสูงสุด 4 หลักนัยสำคัญ ใช้ K / M แทน"""
+    n = float(n)
+    if n >= 1_000_000:
+        v = n / 1_000_000
+        s = f'{v:.3f}M' if v < 10 else (f'{v:.2f}M' if v < 100 else f'{v:.1f}M')
+    elif n >= 1_000:
+        v = n / 1_000
+        s = f'{v:.3f}K' if v < 10 else (f'{v:.2f}K' if v < 100 else f'{v:.1f}K')
+    else:
+        s = str(int(round(n)))
+    return s
+
+
 def _col_header(with_sale=True):
     cols = [
         {'type': 'text', 'text': 'สินค้า', 'size': 'xxs', 'flex': 4, 'color': '#aaaaaa'},
@@ -569,11 +583,11 @@ def _build_report_bubbles(report_title, header_color, products, forecast, with_s
     # col header แบบย่อ: Tag | ชิ้น | ต้นทุน฿ | ขาย฿
     hdr_cols = [
         {'type': 'text', 'text': 'Tag / กลุ่ม', 'size': 'xxs', 'flex': 5, 'color': '#aaaaaa'},
-        {'type': 'text', 'text': 'ชิ้น', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#aaaaaa'},
-        {'type': 'text', 'text': 'ต้นทุน฿', 'size': 'xxs', 'flex': 4, 'align': 'end', 'color': '#aaaaaa'},
+        {'type': 'text', 'text': 'ชิ้น', 'size': 'xxs', 'flex': 2, 'align': 'center', 'color': '#aaaaaa'},
+        {'type': 'text', 'text': 'ต้นทุน฿', 'size': 'xxs', 'flex': 4, 'align': 'center', 'color': '#aaaaaa'},
     ]
     if with_sale:
-        hdr_cols.append({'type': 'text', 'text': 'ขาย฿', 'size': 'xxs', 'flex': 4, 'align': 'end', 'color': '#aaaaaa'})
+        hdr_cols.append({'type': 'text', 'text': 'ขาย฿', 'size': 'xxs', 'flex': 4, 'align': 'center', 'color': '#aaaaaa'})
 
     body_rows = [
         {'type': 'box', 'layout': 'horizontal', 'margin': 'sm', 'contents': hdr_cols},
@@ -592,12 +606,12 @@ def _build_report_bubbles(report_title, header_color, products, forecast, with_s
 
         row_cols = [
             {'type': 'text', 'text': f'{tag_name} ({len(tprods)})', 'size': 'xxs', 'flex': 5, 'color': '#333333', 'weight': 'bold'},
-            {'type': 'text', 'text': f'{t_curr:,}', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#555555'},
-            {'type': 'text', 'text': f'{t_cost:,.0f}', 'size': 'xxs', 'flex': 4, 'align': 'end', 'color': '#FF8C00'},
+            {'type': 'text', 'text': _fmt(t_curr), 'size': 'xxs', 'flex': 2, 'align': 'center', 'color': '#555555'},
+            {'type': 'text', 'text': _fmt(t_cost), 'size': 'xxs', 'flex': 4, 'align': 'center', 'color': '#FF8C00'},
         ]
         if with_sale:
-            row_cols.append({'type': 'text', 'text': f'{t_sale:,.0f}', 'size': 'xxs', 'flex': 4, 'align': 'end', 'color': '#28a745'})
-        row_cols.append({'type': 'text', 'text': '›', 'size': 'sm', 'flex': 1, 'align': 'end', 'color': '#aaaaaa'})
+            row_cols.append({'type': 'text', 'text': _fmt(t_sale), 'size': 'xxs', 'flex': 4, 'align': 'center', 'color': '#28a745'})
+        row_cols.append({'type': 'text', 'text': '›', 'size': 'sm', 'flex': 1, 'align': 'center', 'color': '#aaaaaa'})
 
         row_box = {'type': 'box', 'layout': 'horizontal', 'margin': 'xs',
                    'paddingAll': '4px', 'contents': row_cols}
@@ -609,11 +623,11 @@ def _build_report_bubbles(report_title, header_color, products, forecast, with_s
     body_rows.append({'type': 'separator', 'margin': 'md'})
     gt_cols = [
         {'type': 'text', 'text': f'รวม ({len(products)} รายการ)', 'size': 'xs', 'flex': 5, 'color': '#1a1a2e', 'weight': 'bold'},
-        {'type': 'text', 'text': f'{grand_curr:,}', 'size': 'xs', 'flex': 2, 'align': 'end', 'weight': 'bold', 'color': '#1a1a2e'},
-        {'type': 'text', 'text': f'{grand_cost:,.0f}', 'size': 'xs', 'flex': 4, 'align': 'end', 'weight': 'bold', 'color': '#FF8C00'},
+        {'type': 'text', 'text': _fmt(grand_curr), 'size': 'xs', 'flex': 2, 'align': 'center', 'weight': 'bold', 'color': '#1a1a2e'},
+        {'type': 'text', 'text': _fmt(grand_cost), 'size': 'xs', 'flex': 4, 'align': 'center', 'weight': 'bold', 'color': '#FF8C00'},
     ]
     if with_sale:
-        gt_cols.append({'type': 'text', 'text': f'{grand_sale:,.0f}', 'size': 'xs', 'flex': 4, 'align': 'end', 'weight': 'bold', 'color': '#28a745'})
+        gt_cols.append({'type': 'text', 'text': _fmt(grand_sale), 'size': 'xs', 'flex': 4, 'align': 'center', 'weight': 'bold', 'color': '#28a745'})
     body_rows.append({'type': 'box', 'layout': 'horizontal', 'margin': 'sm', 'contents': gt_cols})
 
     bubble = {
