@@ -246,22 +246,14 @@ def _handle_product_report(reply_token, access_token):
             return
 
         forecast = _get_forecast_data(products)
-        rows, totals = _build_report_rows(products, forecast, with_sale=True)
+        bubbles = _build_report_bubbles('📦 Product Report', '#1a2e3a', products, forecast, with_sale=True)
 
-        bubble = {
-            'type': 'bubble', 'size': 'mega',
-            'header': {
-                'type': 'box', 'layout': 'vertical', 'backgroundColor': '#1a2e3a', 'paddingAll': '12px',
-                'contents': [
-                    {'type': 'text', 'text': '📦 Product Report', 'weight': 'bold', 'color': '#ffffff'},
-                    {'type': 'text', 'text': f'{len(products)} รายการ | แยกตาม Tag', 'size': 'xs', 'color': '#aaaaaa'},
-                ],
-            },
-            'body': {'type': 'box', 'layout': 'vertical', 'paddingAll': '12px', 'spacing': 'none',
-                'contents': [_col_header(with_sale=True), {'type': 'separator', 'margin': 'sm'}, *rows],
-            },
-        }
-        reply_message(reply_token, [{'type': 'flex', 'altText': '📦 Product Report', 'contents': bubble}], access_token)
+        if not bubbles:
+            reply_message(reply_token, [{'type': 'text', 'text': '📦 Product Report\nไม่มีข้อมูล'}], access_token)
+            return
+
+        contents = bubbles[0] if len(bubbles) == 1 else {'type': 'carousel', 'contents': bubbles}
+        reply_message(reply_token, [{'type': 'flex', 'altText': f'📦 Product Report ({len(products)} รายการ)', 'contents': contents}], access_token)
     except Exception as e:
         reply_message(reply_token, [{'type': 'text', 'text': f'📦 Product Report Error:\n{type(e).__name__}: {e}'}], access_token)
 
@@ -279,22 +271,14 @@ def _handle_package_report(reply_token, access_token):
             return
 
         forecast = _get_forecast_data(products)
-        rows, totals = _build_report_rows(products, forecast, with_sale=False)
+        bubbles = _build_report_bubbles('📋 Package Report', '#2e2a1a', products, forecast, with_sale=False)
 
-        bubble = {
-            'type': 'bubble', 'size': 'mega',
-            'header': {
-                'type': 'box', 'layout': 'vertical', 'backgroundColor': '#2e2a1a', 'paddingAll': '12px',
-                'contents': [
-                    {'type': 'text', 'text': '📋 Package Report', 'weight': 'bold', 'color': '#ffffff'},
-                    {'type': 'text', 'text': f'{len(products)} รายการ | แยกตาม Tag', 'size': 'xs', 'color': '#aaaaaa'},
-                ],
-            },
-            'body': {'type': 'box', 'layout': 'vertical', 'paddingAll': '12px', 'spacing': 'none',
-                'contents': [_col_header(with_sale=False), {'type': 'separator', 'margin': 'sm'}, *rows],
-            },
-        }
-        reply_message(reply_token, [{'type': 'flex', 'altText': '📋 Package Report', 'contents': bubble}], access_token)
+        if not bubbles:
+            reply_message(reply_token, [{'type': 'text', 'text': '📋 Package Report\nไม่มีข้อมูล'}], access_token)
+            return
+
+        contents = bubbles[0] if len(bubbles) == 1 else {'type': 'carousel', 'contents': bubbles}
+        reply_message(reply_token, [{'type': 'flex', 'altText': f'📋 Package Report ({len(products)} รายการ)', 'contents': contents}], access_token)
     except Exception as e:
         reply_message(reply_token, [{'type': 'text', 'text': f'📋 Package Report Error:\n{type(e).__name__}: {e}'}], access_token)
 
@@ -561,10 +545,13 @@ def _col_header(with_sale=True):
     return {'type': 'box', 'layout': 'horizontal', 'margin': 'sm', 'contents': cols}
 
 
-def _build_report_rows(products, forecast, with_sale=True):
-    """สร้าง rows แบบ tag header + รายสินค้า (เรียงชื่อ) + subtotal ต่อ tag"""
+def _build_report_bubbles(report_title, header_color, products, forecast, with_sale):
+    """สร้าง list of bubbles แยกตาม tag (carousel) สูงสุด 12 bubble × 18 รายการ"""
+    PER_BUBBLE = 18
+    MAX_BUBBLES = 12
+
     tag_groups = defaultdict(list)
-    for p in products:  # products ถูก order_by('name') มาแล้ว
+    for p in products:
         tags = list(p.tags.all())
         if tags:
             for tg in tags:
@@ -572,68 +559,120 @@ def _build_report_rows(products, forecast, with_sale=True):
         else:
             tag_groups['Non Tag'].append(p)
 
-    # เรียง tag ตามชื่อ A-Z (Non Tag ไว้ท้าย)
     def _sort_key(k):
         return (1, k) if k == 'Non Tag' else (0, k)
 
-    rows = []
+    # คำนวณ grand total
     grand = [0, 0, 0.0, 0.0]
+    for p in products:
+        fd = forecast.get(p.pk, {})
+        grand[0] += p.stock_quantity or 0
+        grand[1] += fd.get('forecast', 0)
+        grand[2] += fd.get('cost_value', 0.0)
+        grand[3] += fd.get('sale_value', 0.0)
+
+    bubbles = []
 
     for tag_name in sorted(tag_groups.keys(), key=_sort_key):
         tprods = sorted(tag_groups[tag_name], key=lambda p: p.name)
+
+        # คำนวณ subtotal ของ tag นี้
         t_curr = t_fore = t_cost = t_sale = 0
-
-        # Tag header
-        rows.append({
-            'type': 'box', 'layout': 'vertical', 'margin': 'md',
-            'contents': [{'type': 'text', 'text': f'▸ {tag_name}', 'size': 'xxs', 'weight': 'bold', 'color': '#555555'}],
-        })
-
         for p in tprods:
-            fd = forecast[p.pk]
-            curr = p.stock_quantity or 0
-            fore = fd['forecast']
-            cost = fd['cost_value']
-            sale = fd['sale_value']
-            t_curr += curr; t_fore += fore; t_cost += cost; t_sale += sale
+            fd = forecast.get(p.pk, {})
+            t_curr += p.stock_quantity or 0
+            t_fore += fd.get('forecast', 0)
+            t_cost += fd.get('cost_value', 0.0)
+            t_sale += fd.get('sale_value', 0.0)
 
-            cols = [
-                {'type': 'text', 'text': p.name[:18], 'size': 'xxs', 'flex': 4, 'wrap': True, 'color': '#333333'},
-                {'type': 'text', 'text': f'{curr:,}', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#555555'},
-                {'type': 'text', 'text': f'{fore:,}', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#27ACB2'},
-                {'type': 'text', 'text': f'{cost:,.0f}', 'size': 'xxs', 'flex': 3, 'align': 'end', 'color': '#FF8C00'},
-            ]
-            if with_sale:
-                cols.append({'type': 'text', 'text': f'{sale:,.0f}', 'size': 'xxs', 'flex': 3, 'align': 'end', 'color': '#28a745'})
-            rows.append({'type': 'box', 'layout': 'horizontal', 'margin': 'xs', 'contents': cols})
+        chunks = [tprods[i:i+PER_BUBBLE] for i in range(0, len(tprods), PER_BUBBLE)]
+        total_chunks = len(chunks)
 
-        # Tag subtotal
-        sub_cols = [
-            {'type': 'text', 'text': 'รวม', 'size': 'xxs', 'flex': 4, 'color': '#888888', 'weight': 'bold'},
-            {'type': 'text', 'text': f'{t_curr:,}', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#888888', 'weight': 'bold'},
-            {'type': 'text', 'text': f'{t_fore:,}', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#888888', 'weight': 'bold'},
-            {'type': 'text', 'text': f'{t_cost:,.0f}', 'size': 'xxs', 'flex': 3, 'align': 'end', 'color': '#888888', 'weight': 'bold'},
+        for ci, chunk in enumerate(chunks):
+            if len(bubbles) >= MAX_BUBBLES:
+                break
+
+            page_label = f' {ci*PER_BUBBLE+1}–{min((ci+1)*PER_BUBBLE, len(tprods))}/{len(tprods)}' if total_chunks > 1 else ''
+            is_last = ci == total_chunks - 1
+
+            rows = []
+            # Tag header
+            rows.append({
+                'type': 'box', 'layout': 'vertical', 'margin': 'sm',
+                'contents': [{'type': 'text', 'text': f'▸ {tag_name}{page_label}', 'size': 'xxs', 'weight': 'bold', 'color': '#444444'}],
+            })
+            rows.append({'type': 'separator', 'margin': 'xs'})
+
+            for p in chunk:
+                fd = forecast.get(p.pk, {})
+                curr = p.stock_quantity or 0
+                fore = fd.get('forecast', 0)
+                cost = fd.get('cost_value', 0.0)
+                sale = fd.get('sale_value', 0.0)
+                cols = [
+                    {'type': 'text', 'text': p.name[:18], 'size': 'xxs', 'flex': 4, 'wrap': True, 'color': '#333333'},
+                    {'type': 'text', 'text': f'{curr:,}', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#555555'},
+                    {'type': 'text', 'text': f'{fore:,}', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#27ACB2'},
+                    {'type': 'text', 'text': f'{cost:,.0f}', 'size': 'xxs', 'flex': 3, 'align': 'end', 'color': '#FF8C00'},
+                ]
+                if with_sale:
+                    cols.append({'type': 'text', 'text': f'{sale:,.0f}', 'size': 'xxs', 'flex': 3, 'align': 'end', 'color': '#28a745'})
+                rows.append({'type': 'box', 'layout': 'horizontal', 'margin': 'xs', 'contents': cols})
+
+            # subtotal เฉพาะ chunk สุดท้ายของ tag
+            if is_last:
+                rows.append({'type': 'separator', 'margin': 'sm'})
+                sub_cols = [
+                    {'type': 'text', 'text': f'รวม {tag_name}', 'size': 'xxs', 'flex': 4, 'color': '#666666', 'weight': 'bold'},
+                    {'type': 'text', 'text': f'{t_curr:,}', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#666666', 'weight': 'bold'},
+                    {'type': 'text', 'text': f'{t_fore:,}', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#666666', 'weight': 'bold'},
+                    {'type': 'text', 'text': f'{t_cost:,.0f}', 'size': 'xxs', 'flex': 3, 'align': 'end', 'color': '#666666', 'weight': 'bold'},
+                ]
+                if with_sale:
+                    sub_cols.append({'type': 'text', 'text': f'{t_sale:,.0f}', 'size': 'xxs', 'flex': 3, 'align': 'end', 'color': '#666666', 'weight': 'bold'})
+                rows.append({'type': 'box', 'layout': 'horizontal', 'margin': 'xs', 'contents': sub_cols})
+
+            bubble_num = len(bubbles) + 1
+            bubbles.append({
+                'type': 'bubble', 'size': 'mega',
+                'header': {
+                    'type': 'box', 'layout': 'vertical', 'backgroundColor': header_color, 'paddingAll': '10px',
+                    'contents': [
+                        {'type': 'text', 'text': report_title, 'weight': 'bold', 'color': '#ffffff', 'size': 'sm'},
+                        {'type': 'text', 'text': f'{len(products)} รายการ  •  กล่อง {bubble_num}', 'size': 'xxs', 'color': '#aaaaaa'},
+                    ],
+                },
+                'body': {
+                    'type': 'box', 'layout': 'vertical', 'paddingAll': '10px', 'spacing': 'none',
+                    'contents': [_col_header(with_sale), {'type': 'separator', 'margin': 'sm'}, *rows],
+                },
+            })
+
+    # bubble สุดท้าย: grand total
+    if bubbles and len(bubbles) < MAX_BUBBLES:
+        gt_cols = [
+            {'type': 'text', 'text': 'รวมทั้งหมด', 'size': 'xs', 'flex': 4, 'color': '#ffffff', 'weight': 'bold'},
+            {'type': 'text', 'text': f'{grand[0]:,}', 'size': 'xs', 'flex': 2, 'align': 'end', 'weight': 'bold', 'color': '#ffffff'},
+            {'type': 'text', 'text': f'{grand[1]:,}', 'size': 'xs', 'flex': 2, 'align': 'end', 'weight': 'bold', 'color': '#7ae7f0'},
+            {'type': 'text', 'text': f'{grand[2]:,.0f}', 'size': 'xs', 'flex': 3, 'align': 'end', 'weight': 'bold', 'color': '#ffcc66'},
         ]
         if with_sale:
-            sub_cols.append({'type': 'text', 'text': f'{t_sale:,.0f}', 'size': 'xxs', 'flex': 3, 'align': 'end', 'color': '#888888', 'weight': 'bold'})
-        rows.append({'type': 'box', 'layout': 'horizontal', 'margin': 'xs', 'paddingTop': '4px',
-            'borderWidth': '1px', 'contents': sub_cols})
-        rows.append({'type': 'separator', 'margin': 'sm'})
+            gt_cols.append({'type': 'text', 'text': f'{grand[3]:,.0f}', 'size': 'xs', 'flex': 3, 'align': 'end', 'weight': 'bold', 'color': '#7dff99'})
+        bubbles.append({
+            'type': 'bubble', 'size': 'mega',
+            'body': {
+                'type': 'box', 'layout': 'vertical', 'paddingAll': '10px', 'backgroundColor': header_color,
+                'contents': [
+                    {'type': 'text', 'text': report_title, 'weight': 'bold', 'color': '#ffffff', 'size': 'sm', 'margin': 'sm'},
+                    {'type': 'separator', 'margin': 'md'},
+                    _col_header(with_sale),
+                    {'type': 'separator', 'margin': 'sm'},
+                    {'type': 'box', 'layout': 'horizontal', 'margin': 'md', 'contents': gt_cols},
+                ],
+            },
+        })
 
-        grand[0] += t_curr; grand[1] += t_fore; grand[2] += t_cost; grand[3] += t_sale
-
-    # Grand total
-    gt_cols = [
-        {'type': 'text', 'text': 'รวมทั้งหมด', 'size': 'xs', 'flex': 4, 'color': '#1a1a2e', 'weight': 'bold'},
-        {'type': 'text', 'text': f'{grand[0]:,}', 'size': 'xs', 'flex': 2, 'align': 'end', 'weight': 'bold', 'color': '#1a1a2e'},
-        {'type': 'text', 'text': f'{grand[1]:,}', 'size': 'xs', 'flex': 2, 'align': 'end', 'weight': 'bold', 'color': '#27ACB2'},
-        {'type': 'text', 'text': f'{grand[2]:,.0f}', 'size': 'xs', 'flex': 3, 'align': 'end', 'weight': 'bold', 'color': '#FF8C00'},
-    ]
-    if with_sale:
-        gt_cols.append({'type': 'text', 'text': f'{grand[3]:,.0f}', 'size': 'xs', 'flex': 3, 'align': 'end', 'weight': 'bold', 'color': '#28a745'})
-    rows.append({'type': 'box', 'layout': 'horizontal', 'margin': 'md', 'contents': gt_cols})
-
-    return rows, grand
+    return bubbles
 
 
 def _product_bubble(product):
