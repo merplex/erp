@@ -913,12 +913,29 @@ class ProductBarcodeAdmin(ExportToExcelMixin, UnfoldModelAdmin):
 
 @admin.register(Product)
 class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
-    list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit','get_total_stock_value', 'has_bom', 'created_by')
+    list_display = ('name', 'display_tags', 'get_latest_barcode', 'auto_cost', 'manual_buy_price', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit','get_total_stock_value', 'has_bom', 'created_by')
     list_filter = ('category','is_product', 'tags', 'has_bom', 'suppliers')
     search_fields = ('name', 'barcodes__code','tags__name')
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
-    readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at')
+    readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at', 'auto_cost', 'buy_price')
     actions = ['export_to_excel', 'auto_fill_cost_price']
+    fieldsets = (
+        (None, {
+            'fields': ('name', 'category', 'is_product', 'tags', 'has_bom', 'unit', 'stock_quantity', 'production_lead_time', 'delivery_lead_time')
+        }),
+        ('💰 ต้นทุน & ราคาขาย', {
+            'fields': ('auto_cost', 'manual_buy_price', 'buy_price', 'sale_price'),
+            'description': (
+                '<b>ต้นทุนอัตโนมัติ</b>: คำนวณจาก Supplier ราคาสูงสุด +15% (อ่านอย่างเดียว อัปเดตเองเมื่อบันทึก)<br>'
+                '<b>ต้นทุนกำหนดเอง</b>: กรอกเพื่อ override — ถ้ามีค่า (>0) ระบบจะใช้ค่านี้แทนอัตโนมัติ<br>'
+                '<b>ต้นทุนที่ใช้จริง</b>: ค่าที่ระบบนำไปคำนวณทุกที่ (อ่านอย่างเดียว)'
+            ),
+        }),
+        ('ข้อมูลระบบ', {
+            'classes': ('collapse',),
+            'fields': ('created_by', 'updated_by', 'created_at', 'updated_at')
+        }),
+    )
 
     @admin.action(description="💰 คำนวณต้นทุน/ราคาขายอัตโนมัติ (เฉพาะที่ยังเป็น 0)")
     def auto_fill_cost_price(self, request, queryset):
@@ -931,20 +948,25 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
                 continue
 
             cat_name = obj.category.name.strip().lower()
-            new_buy = obj.buy_price
             new_sale = obj.sale_price
             changed = False
 
-            # Auto-fill buy_price จาก supplier ถูกสุด +15%
-            if new_buy == 0:
-                best_supplier = obj.product_suppliers.filter(
-                    latest_buy_price__gt=0
-                ).order_by('-latest_buy_price').first()
-                if best_supplier:
-                    new_buy = (best_supplier.latest_buy_price * Decimal('1.15')).quantize(Decimal('0.01'))
-                    changed = True
+            # คำนวณ auto_cost = supplier ราคาสูงสุด + 15% (อัปเดตเสมอ)
+            best_supplier = obj.product_suppliers.filter(
+                latest_buy_price__gt=0
+            ).order_by('-latest_buy_price').first()
+            new_auto_cost = Decimal('0')
+            if best_supplier:
+                new_auto_cost = (best_supplier.latest_buy_price * Decimal('1.15')).quantize(Decimal('0.01'))
 
-            # Auto-fill sale_price
+            # effective buy_price = manual ถ้ามี (>0), ไม่งั้นใช้ auto
+            manual = obj.manual_buy_price or Decimal('0')
+            new_buy = manual if manual > 0 else new_auto_cost
+
+            if new_auto_cost != obj.auto_cost or new_buy != obj.buy_price:
+                changed = True
+
+            # Auto-fill sale_price เฉพาะที่ยังเป็น 0
             if new_sale == 0:
                 if cat_name == 'product':
                     contract = CustomerProductContract.objects.filter(
@@ -961,6 +983,7 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
 
             if changed:
                 Product.objects.filter(pk=obj.pk).update(
+                    auto_cost=new_auto_cost,
                     buy_price=new_buy,
                     sale_price=new_sale,
                 )
@@ -1101,18 +1124,26 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
 
         # อ่านค่าล่าสุดจาก DB (หลัง inline ทุกตัว save เสร็จแล้ว)
         obj.refresh_from_db()
-        new_buy = obj.buy_price
         new_sale = obj.sale_price
         auto_filled = []
 
-        # --- Auto-fill buy_price จาก supplier (ถูกสุด) +15% ถ้าเป็น 0 ---
-        if new_buy == 0:
-            best_supplier = obj.product_suppliers.filter(
-                latest_buy_price__gt=0
-            ).order_by('-latest_buy_price').first()
-            if best_supplier:
-                new_buy = (best_supplier.latest_buy_price * Decimal('1.15')).quantize(Decimal('0.01'))
-                auto_filled.append(f"ต้นทุน = {new_buy:,.2f}")
+        # --- คำนวณ auto_cost = supplier ราคาสูงสุด + 15% (อัปเดตเสมอ) ---
+        best_supplier = obj.product_suppliers.filter(
+            latest_buy_price__gt=0
+        ).order_by('-latest_buy_price').first()
+        new_auto_cost = Decimal('0')
+        if best_supplier:
+            new_auto_cost = (best_supplier.latest_buy_price * Decimal('1.15')).quantize(Decimal('0.01'))
+
+        # --- effective buy_price = manual ถ้ามี (>0), ไม่งั้นใช้ auto ---
+        manual = obj.manual_buy_price or Decimal('0')
+        new_buy = manual if manual > 0 else new_auto_cost
+
+        if new_auto_cost != obj.auto_cost:
+            auto_filled.append(f"ต้นทุนอัตโนมัติ = {new_auto_cost:,.2f}")
+        if new_buy != obj.buy_price:
+            src = "กำหนดเอง" if manual > 0 else "อัตโนมัติ"
+            auto_filled.append(f"ต้นทุนที่ใช้จริง ({src}) = {new_buy:,.2f}")
 
         # --- Auto-fill sale_price ถ้าเป็น 0 ---
         if new_sale == 0:
@@ -1133,11 +1164,12 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
                     new_sale = new_buy
                     auto_filled.append(f"ราคาขาย = {new_sale:,.2f}")
 
+        Product.objects.filter(pk=obj.pk).update(
+            auto_cost=new_auto_cost,
+            buy_price=new_buy,
+            sale_price=new_sale,
+        )
         if auto_filled:
-            Product.objects.filter(pk=obj.pk).update(
-                buy_price=new_buy,
-                sale_price=new_sale,
-            )
             self.message_user(
                 request,
                 f"คำนวณอัตโนมัติ ({obj.name}): {', '.join(auto_filled)} บาท",
