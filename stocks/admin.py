@@ -947,7 +947,6 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
                 skipped_count += 1
                 continue
 
-            cat_name = obj.category.name.strip().lower()
             new_sale = obj.sale_price
             changed = False
 
@@ -966,20 +965,12 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
             if new_auto_cost != obj.auto_cost or new_buy != obj.buy_price:
                 changed = True
 
-            # Auto-fill sale_price เฉพาะที่ยังเป็น 0
-            if new_sale == 0:
-                if cat_name == 'product':
-                    contract = CustomerProductContract.objects.filter(
-                        product=obj,
-                        contract_price__gt=0,
-                    ).order_by('-contract_price').first()
-                    if contract:
-                        new_sale = (contract.contract_price * Decimal('1.15')).quantize(Decimal('0.01'))
-                        changed = True
-                else:
-                    if new_buy > 0:
-                        new_sale = new_buy
-                        changed = True
+            # ราคาขายต่ำสุด = ต้นทุนที่ใช้จริง + 15% (ทุกครั้ง)
+            if new_buy > 0:
+                min_sale = (new_buy * Decimal('1.15')).quantize(Decimal('0.01'))
+                if new_sale <= min_sale:
+                    new_sale = min_sale
+                    changed = True
 
             if changed:
                 Product.objects.filter(pk=obj.pk).update(
@@ -1145,24 +1136,12 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
             src = "กำหนดเอง" if manual > 0 else "อัตโนมัติ"
             auto_filled.append(f"ต้นทุนที่ใช้จริง ({src}) = {new_buy:,.2f}")
 
-        # --- Auto-fill sale_price ถ้าเป็น 0 ---
-        if new_sale == 0:
-            cat_name = obj.category.name.strip().lower()
-
-            if cat_name == 'product':
-                # กลุ่ม product: ใช้ราคาจาก customer contract +15% (ถ้าไม่มีปล่อย 0)
-                contract = CustomerProductContract.objects.filter(
-                    product=obj,
-                    contract_price__gt=0,
-                ).order_by('-contract_price').first()
-                if contract:
-                    new_sale = (contract.contract_price * Decimal('1.15')).quantize(Decimal('0.01'))
-                    auto_filled.append(f"ราคาขาย = {new_sale:,.2f}")
-            else:
-                # กลุ่ม package / sample / other: ไม่ขายต่อ ใช้ buy_price เลย
-                if new_buy > 0:
-                    new_sale = new_buy
-                    auto_filled.append(f"ราคาขาย = {new_sale:,.2f}")
+        # --- ราคาขายต่ำสุด = ต้นทุนที่ใช้จริง + 15% (ทุกครั้งที่บันทึก) ---
+        if new_buy > 0:
+            min_sale = (new_buy * Decimal('1.15')).quantize(Decimal('0.01'))
+            if new_sale <= min_sale:
+                new_sale = min_sale
+                auto_filled.append(f"ราคาขาย (ต่ำสุด) = {new_sale:,.2f}")
 
         Product.objects.filter(pk=obj.pk).update(
             auto_cost=new_auto_cost,
