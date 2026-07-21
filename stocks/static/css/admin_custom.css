@@ -36,12 +36,21 @@ input[type="checkbox"][id$="-DELETE"]:checked {
     box-sizing: border-box !important;
 }
 .select2-container .select2-selection--single .select2-selection__rendered {
+    display: flex !important;
+    align-items: center !important;
     flex: 1 !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
     white-space: nowrap !important;
     padding: 0 4px 0 0 !important;
     line-height: normal !important;
+}
+.select2-container .select2-selection--single .select2-selection__clear {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    line-height: normal !important;
+    margin: 0 4px 0 0 !important;
 }
 .select2-container .select2-selection--single .select2-selection__arrow {
     height: 100% !important;
