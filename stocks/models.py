@@ -160,6 +160,51 @@ class Product(models.Model):
         last_entry = self.barcodes.all().last()
         return last_entry.code if last_entry else "-"
 
+    def recalc_cost_and_price(self):
+        """
+        คำนวณ auto_cost (supplier ราคาสูงสุด +15%), buy_price ที่ใช้จริง
+        (manual_buy_price ถ้ามี >0 ไม่งั้นใช้ auto_cost) และ sale_price
+        (max(buy_price*1.15, contract ต่ำสุด)) ใหม่ แล้วบันทึกถ้ามีค่าเปลี่ยน
+        คืนค่า dict {field: new_value} เฉพาะฟิลด์ที่เปลี่ยน (ว่างถ้าไม่เปลี่ยน/ไม่มี category)
+        """
+        if not self.pk or not self.category_id:
+            return {}
+
+        best_supplier = self.product_suppliers.filter(
+            latest_buy_price__gt=0
+        ).order_by('-latest_buy_price').first()
+        new_auto_cost = (
+            (best_supplier.latest_buy_price * Decimal('1.15')).quantize(Decimal('0.01'))
+            if best_supplier else Decimal('0')
+        )
+
+        manual = self.manual_buy_price or Decimal('0')
+        new_buy = manual if manual > 0 else new_auto_cost
+
+        new_sale = self.sale_price
+        if new_buy > 0:
+            min_sale = (new_buy * Decimal('1.15')).quantize(Decimal('0.01'))
+            lowest_contract = CustomerProductContract.objects.filter(
+                product=self, contract_price__gt=0
+            ).order_by('contract_price').first()
+            contract_price = lowest_contract.contract_price if lowest_contract else Decimal('0')
+            new_sale = max(min_sale, contract_price)
+
+        changes = {}
+        if new_auto_cost != self.auto_cost:
+            changes['auto_cost'] = new_auto_cost
+        if new_buy != self.buy_price:
+            changes['buy_price'] = new_buy
+        if new_sale != self.sale_price:
+            changes['sale_price'] = new_sale
+
+        if changes:
+            Product.objects.filter(pk=self.pk).update(**changes)
+            for field, value in changes.items():
+                setattr(self, field, value)
+
+        return changes
+
     class Meta: verbose_name_plural = "A4. รายการสินค้า (Product)"
 
 class ProductBarcode(models.Model):
@@ -206,6 +251,12 @@ class ProductSupplier(models.Model):
     supplier_sku = models.CharField(max_length=100, blank=True, verbose_name="รหัสสินค้าฝั่ง Supplier")
     latest_buy_price = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name="ทุนล่าสุดจากเจ้านี้")
     class Meta: unique_together = ('product', 'supplier')
+
+@receiver(post_save, sender=ProductSupplier)
+@receiver(post_delete, sender=ProductSupplier)
+def recalc_product_cost_on_supplier_change(sender, instance, **kwargs):
+    """เมื่อราคาผู้จำหน่าย (ProductSupplier) ถูกแก้ไข/ลบ ไม่ว่าจากหน้าไหน ให้คำนวณต้นทุนสินค้าที่เกี่ยวข้องใหม่"""
+    instance.product.recalc_cost_and_price()
 
 # 5. สูตรการผลิต (BOM)
 class BOM(models.Model):

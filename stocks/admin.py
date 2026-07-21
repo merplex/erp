@@ -914,7 +914,7 @@ class ProductBarcodeAdmin(ExportToExcelMixin, UnfoldModelAdmin):
 
 @admin.register(Product)
 class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
-    list_display = ('name', 'display_tags', 'get_latest_barcode', 'auto_cost', 'manual_buy_price', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit','get_total_stock_value', 'has_bom', 'created_by')
+    list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit','get_total_stock_value', 'has_bom', 'created_by')
     list_filter = ('category','is_product', 'tags', 'has_bom', 'suppliers')
     search_fields = ('name', 'barcodes__code','tags__name')
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
@@ -938,59 +938,20 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
         }),
     )
 
-    @admin.action(description="💰 คำนวณต้นทุน/ราคาขายอัตโนมัติ (เฉพาะที่ยังเป็น 0)")
+    @admin.action(description="💰 คำนวณต้นทุน/ราคาขายอัตโนมัติ (อัพเดท)")
     def auto_fill_cost_price(self, request, queryset):
         updated_count = 0
         skipped_count = 0
 
         for obj in queryset.select_related('category').prefetch_related('product_suppliers'):
-            if not obj.category:
-                skipped_count += 1
-                continue
-
-            new_sale = obj.sale_price
-            changed = False
-
-            # คำนวณ auto_cost = supplier ราคาสูงสุด + 15% (อัปเดตเสมอ)
-            best_supplier = obj.product_suppliers.filter(
-                latest_buy_price__gt=0
-            ).order_by('-latest_buy_price').first()
-            new_auto_cost = Decimal('0')
-            if best_supplier:
-                new_auto_cost = (best_supplier.latest_buy_price * Decimal('1.15')).quantize(Decimal('0.01'))
-
-            # effective buy_price = manual ถ้ามี (>0), ไม่งั้นใช้ auto
-            manual = obj.manual_buy_price or Decimal('0')
-            new_buy = manual if manual > 0 else new_auto_cost
-
-            if new_auto_cost != obj.auto_cost or new_buy != obj.buy_price:
-                changed = True
-
-            # sale_price = max(buy_price×1.15, contract_price_ต่ำสุด)
-            if new_buy > 0:
-                min_sale = (new_buy * Decimal('1.15')).quantize(Decimal('0.01'))
-                lowest_contract = CustomerProductContract.objects.filter(
-                    product=obj, contract_price__gt=0
-                ).order_by('contract_price').first()
-                contract_price = lowest_contract.contract_price if lowest_contract else Decimal('0')
-                computed_sale = max(min_sale, contract_price)
-                if computed_sale != new_sale:
-                    new_sale = computed_sale
-                    changed = True
-
-            if changed:
-                Product.objects.filter(pk=obj.pk).update(
-                    auto_cost=new_auto_cost,
-                    buy_price=new_buy,
-                    sale_price=new_sale,
-                )
+            if obj.recalc_cost_and_price():
                 updated_count += 1
             else:
                 skipped_count += 1
 
         self.message_user(
             request,
-            f"คำนวณอัตโนมัติเสร็จ: อัปเดต {updated_count} รายการ, ข้าม {skipped_count} รายการ (ราคาไม่เป็น 0 หรือไม่มีข้อมูล supplier/contract)",
+            f"คำนวณอัตโนมัติเสร็จ: อัปเดต {updated_count} รายการ, ข้าม {skipped_count} รายการ (ค่าที่คำนวณได้เท่ากับค่าเดิม หรือไม่มี category)",
             messages.SUCCESS,
         )
 
@@ -1119,46 +1080,20 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
         if not obj.pk or not obj.category:
             return
 
-        # อ่านค่าล่าสุดจาก DB (หลัง inline ทุกตัว save เสร็จแล้ว)
+        # อ่านค่าล่าสุดจาก DB (หลัง inline ทุกตัว save เสร็จแล้ว — เผื่อ signal ของ ProductSupplier คำนวณไปแล้วรอบนึง)
         obj.refresh_from_db()
-        new_sale = obj.sale_price
-        auto_filled = []
-
-        # --- คำนวณ auto_cost = supplier ราคาสูงสุด + 15% (อัปเดตเสมอ) ---
-        best_supplier = obj.product_suppliers.filter(
-            latest_buy_price__gt=0
-        ).order_by('-latest_buy_price').first()
-        new_auto_cost = Decimal('0')
-        if best_supplier:
-            new_auto_cost = (best_supplier.latest_buy_price * Decimal('1.15')).quantize(Decimal('0.01'))
-
-        # --- effective buy_price = manual ถ้ามี (>0), ไม่งั้นใช้ auto ---
         manual = obj.manual_buy_price or Decimal('0')
-        new_buy = manual if manual > 0 else new_auto_cost
+        changes = obj.recalc_cost_and_price()
 
-        if new_auto_cost != obj.auto_cost:
-            auto_filled.append(f"ต้นทุนอัตโนมัติ = {new_auto_cost:,.2f}")
-        if new_buy != obj.buy_price:
+        auto_filled = []
+        if 'auto_cost' in changes:
+            auto_filled.append(f"ต้นทุนอัตโนมัติ = {changes['auto_cost']:,.2f}")
+        if 'buy_price' in changes:
             src = "กำหนดเอง" if manual > 0 else "อัตโนมัติ"
-            auto_filled.append(f"ต้นทุนที่ใช้จริง ({src}) = {new_buy:,.2f}")
+            auto_filled.append(f"ต้นทุนที่ใช้จริง ({src}) = {changes['buy_price']:,.2f}")
+        if 'sale_price' in changes:
+            auto_filled.append(f"ราคาขาย = {changes['sale_price']:,.2f}")
 
-        # --- sale_price = max(buy_price×1.15, contract_price_ต่ำสุด) ทุกครั้งที่บันทึก ---
-        if new_buy > 0:
-            min_sale = (new_buy * Decimal('1.15')).quantize(Decimal('0.01'))
-            lowest_contract = CustomerProductContract.objects.filter(
-                product=obj, contract_price__gt=0
-            ).order_by('contract_price').first()
-            contract_price = lowest_contract.contract_price if lowest_contract else Decimal('0')
-            computed_sale = max(min_sale, contract_price)
-            if computed_sale != new_sale:
-                new_sale = computed_sale
-                auto_filled.append(f"ราคาขาย = {new_sale:,.2f}")
-
-        Product.objects.filter(pk=obj.pk).update(
-            auto_cost=new_auto_cost,
-            buy_price=new_buy,
-            sale_price=new_sale,
-        )
         if auto_filled:
             self.message_user(
                 request,
