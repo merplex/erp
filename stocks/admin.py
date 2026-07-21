@@ -699,7 +699,7 @@ class PurchaseReceiptLogInline(UnfoldTabularInline):
 
 class SalesItemInline(UnfoldTabularInline):
     model = SalesItem
-    autocomplete_fields = ['barcode_obj', 'product']
+    autocomplete_fields = ['barcode_obj', 'product', 'bom']
     extra = 1
 
     def _is_locked(self, so):
@@ -838,7 +838,7 @@ class SalesDeliveryLogInline(UnfoldTabularInline):
     }
 
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related('barcode_obj')
+        return super().get_queryset(request).select_related('barcode_obj', 'user')
 
     def get_formset(self, request, obj=None, **kwargs):
         """Inject so_id เข้า form class เพื่อ validate barcode ใน SO"""
