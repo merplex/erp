@@ -177,20 +177,23 @@ a.addlink {
     display: inline-flex !important;
     align-items: center !important;
     justify-content: center !important;
-    border-radius: 50% !important;
-    width: 38px !important;
-    height: 38px !important;
+    border-radius: 6px !important;
+    width: auto !important;
+    height: 36px !important;
+    padding: 0 16px !important;
     overflow: hidden !important;
+    white-space: nowrap !important;
 }
 a.addlink:hover {
     background-color: #218838 !important;
     border-color: #218838 !important;
 }
 a.addlink::after {
-    content: "+";
+    content: "+ Add";
     position: absolute;
     color: #fff;
-    font-size: 22px;
+    font-size: 14px;
     font-weight: 700;
     line-height: 1;
+    white-space: nowrap;
 }
