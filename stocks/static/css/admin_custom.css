@@ -164,3 +164,33 @@ button[name="_save"] {
 button[name="_save"]:hover {
     background-color: rgb(3 105 161) !important;
 }
+
+/* ── ปุ่ม "+ Add" (addlink) บนหน้า changelist ────────────────────────
+   บังคับ style เองแบบเดิม (วงกลม/พื้นหลังเขียว + เครื่องหมาย + สีขาว)
+   เพราะ CSS ของ unfold เวอร์ชันปัจจุบันไม่มี rule รองรับ class ที่มันสร้างเอง
+   (bg-primary-600 ฯลฯ) ทำให้ปุ่มโปร่งใส/มองไม่เห็น ── */
+a.addlink {
+    background-color: #28a745 !important;
+    border-color: #28a745 !important;
+    color: transparent !important;
+    position: relative !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    border-radius: 50% !important;
+    width: 38px !important;
+    height: 38px !important;
+    overflow: hidden !important;
+}
+a.addlink:hover {
+    background-color: #218838 !important;
+    border-color: #218838 !important;
+}
+a.addlink::after {
+    content: "+";
+    position: absolute;
+    color: #fff;
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1;
+}
