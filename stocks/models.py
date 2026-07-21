@@ -1144,6 +1144,17 @@ class CustomerProductContract(models.Model):
     def __str__(self):
         return f"{self.customer.company_name} - {self.product.name}"
 
+    def clean(self):
+        super().clean()
+        if not self.barcode_id and not self.product_id:
+            raise ValidationError({'barcode': 'กรุณาเลือกบาร์โค้ดเพื่อระบุสินค้า'})
+
+    def save(self, *args, **kwargs):
+        # product field เป็น readonly ในหน้า admin (ไม่ได้ส่งมากับฟอร์ม) ต้อง derive จาก barcode เองตรงนี้
+        if self.barcode_id:
+            self.product_id = self.barcode.product_id
+        super().save(*args, **kwargs)
+
     def display_product_tags(self):
     # เช็คว่ามีสินค้า และสินค้ามีกลุ่ม (tags) หรือไม่
         if self.product and hasattr(self.product, 'tags'):
