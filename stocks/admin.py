@@ -1053,7 +1053,9 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
 
     def get_queryset(self, request):
         queryset = super().get_queryset(request)
-        queryset = queryset.annotate(
+        queryset = queryset.select_related('created_by').prefetch_related(
+            'tags', 'barcodes', 'bom_formulas__ingredients__material'
+        ).annotate(
             _total_stock_value=ExpressionWrapper(
                 F('stock_quantity') * F('sale_price'),
                 output_field=DecimalField()

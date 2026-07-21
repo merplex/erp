@@ -157,8 +157,9 @@ class Product(models.Model):
     @property
     def latest_barcode(self):
         # ดึงบาร์โค้ดตัวล่าสุด (ลำดับสุดท้ายที่เพิ่มเข้าไป)
-        last_entry = self.barcodes.all().last()
-        return last_entry.code if last_entry else "-"
+        # ใช้ list() แทน .last() เพื่อให้ใช้ prefetch cache ได้ (ไม่งั้น .last() จะ clone queryset ใหม่แล้วยิง query ซ้ำ)
+        barcodes = list(self.barcodes.all())
+        return barcodes[-1].code if barcodes else "-"
 
     def recalc_cost_and_price(self):
         """
@@ -1173,6 +1174,12 @@ class CustomerProductContract(models.Model):
     class Meta:
         verbose_name_plural = "T2. ราคาสัญญา&DC/Rebate"
         unique_together = ('customer', 'barcode')
+
+@receiver(post_save, sender=CustomerProductContract)
+@receiver(post_delete, sender=CustomerProductContract)
+def recalc_product_price_on_contract_change(sender, instance, **kwargs):
+    """เมื่อราคาสัญญา (CustomerProductContract) ถูกแก้ไข/ลบ ให้คำนวณ sale_price ของสินค้าที่เกี่ยวข้องใหม่"""
+    instance.product.recalc_cost_and_price()
 
 # --- T2.2 ระบบปรับปรุงสต็อก (Stock Adjustment) ---
 class StockAdjustment(models.Model):
