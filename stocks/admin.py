@@ -1713,10 +1713,10 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         ).values('t')
 
         return qs.annotate(
-            _pending_in=Coalesce(Subquery(pending_in_sq, output_field=DecimalField()), 0),
-            _pending_out=Coalesce(Subquery(pending_out_sq, output_field=DecimalField()), 0),
-            _pending_receipt=Coalesce(Subquery(pending_receipt_sq, output_field=DecimalField()), 0),
-            _pending_usage=Coalesce(Subquery(pending_usage_sq, output_field=DecimalField()), 0),
+            _pending_in=Coalesce(Subquery(pending_in_sq, output_field=DecimalField()), Value(0), output_field=DecimalField()),
+            _pending_out=Coalesce(Subquery(pending_out_sq, output_field=DecimalField()), Value(0), output_field=DecimalField()),
+            _pending_receipt=Coalesce(Subquery(pending_receipt_sq, output_field=DecimalField()), Value(0), output_field=DecimalField()),
+            _pending_usage=Coalesce(Subquery(pending_usage_sq, output_field=DecimalField()), Value(0), output_field=DecimalField()),
         )
 
     def _net(self, obj):
