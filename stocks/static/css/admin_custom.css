@@ -175,15 +175,16 @@ a.addlink {
     background-color: #28a745 !important;
     border-color: #28a745 !important;
     color: transparent !important;
+    font-family: inherit !important;
     position: relative !important;
     display: inline-flex !important;
     align-items: center !important;
     justify-content: center !important;
     border-radius: 6px !important;
     width: auto !important;
-    height: 38px !important;
-    min-width: 100px !important;
-    padding: 0 24px !important;
+    height: 44px !important;
+    min-width: 120px !important;
+    padding: 0 28px !important;
     overflow: hidden !important;
     white-space: nowrap !important;
     box-sizing: border-box !important;
@@ -196,8 +197,9 @@ a.addlink::after {
     content: "+ Add";
     position: absolute;
     color: #fff;
-    font-size: 14px;
-    font-weight: 700;
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 500;
     line-height: 1;
     white-space: nowrap;
 }
