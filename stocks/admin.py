@@ -196,12 +196,21 @@ class DocumentLockMixin:
         if obj and change:
             content_type = ContentType.objects.get_for_model(self.model)
             script = (
-                f'<script>window.addEventListener("beforeunload",function(){{'
+                f'<script>'
+                f'function _sendUnlockDoc(){{'
                 f'var fd=new FormData();'
                 f'fd.append("content_type_id","{content_type.pk}");'
                 f'fd.append("object_id","{obj.pk}");'
                 f'navigator.sendBeacon("/admin/unlock-doc/",fd);'
-                f'}});</script>'
+                f'}}'
+                # beforeunload ใช้ไม่ได้เสมอไป (มือถือ/LINE in-app browser/bfcache มักไม่ยิง)
+                # เลยเสริม pagehide กับ visibilitychange ไว้ด้วยกันไม่ให้ lock ค้าง
+                f'window.addEventListener("beforeunload",_sendUnlockDoc);'
+                f'window.addEventListener("pagehide",_sendUnlockDoc);'
+                f'document.addEventListener("visibilitychange",function(){{'
+                f'if(document.visibilityState==="hidden")_sendUnlockDoc();'
+                f'}});'
+                f'</script>'
             )
             response.render()
             response.content = response.content.replace(b'</body>', script.encode() + b'</body>', 1)
