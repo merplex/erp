@@ -905,7 +905,7 @@ def color_diff(diff):
 # --- Admin Registrations ---
 
 @admin.register(Supplier)
-class SupplierAdmin(DocumentLockMixin,admin.ModelAdmin):
+class SupplierAdmin(DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('company_name', 'contact_person', 'type')
     inlines = [SupplierProductInline]
 
@@ -922,7 +922,7 @@ class ProductBarcodeAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         return super().get_queryset(request).select_related('product')
 
 @admin.register(Product)
-class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
+class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit','get_total_stock_value', 'has_bom', 'created_by')
     list_filter = ('category','is_product', 'tags', 'has_bom', 'suppliers')
     search_fields = ('name', 'barcodes__code','tags__name')
@@ -1116,7 +1116,7 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
         js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
 
 @admin.register(BOM)
-class BOMAdmin(DocumentLockMixin,admin.ModelAdmin):
+class BOMAdmin(DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('name', 'product', 'total_cost_display', 'sale_price', 'unit', 'production_time', 'created_by')
     list_filter = ('product__category',)
     autocomplete_fields = ['product']
@@ -1140,7 +1140,7 @@ class BOMAdmin(DocumentLockMixin,admin.ModelAdmin):
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 @admin.register(PurchaseOrder)
-class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
+class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('po_number', 'supplier', 'order_date', 'status', 'get_diff')
     list_filter = ('status', ('order_date', DjangoDateRangeFilter), 'supplier')
     search_fields = ('po_number', 'invoice_no_supplier', 'items__product__name',
@@ -1236,7 +1236,7 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin
         js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js')
 
 @admin.register(SalesOrder)
-class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
+class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('so_number', 'customer', 'order_date', 'status', 'vat_percent','get_diff')
     list_filter = ('status', ('order_date', DjangoDateRangeFilter), 'customer')
     search_fields = ('so_number', 'po_no_customer', 'customer__company_name',
@@ -1474,7 +1474,7 @@ class ProductionMaterialUsageInline(UnfoldTabularInline):
     verbose_name = "ส่วนประกอบ/Package ตามสูตร"
 
 @admin.register(ProductionOrder)
-class ProductionOrderAdmin(DocumentLockMixin,admin.ModelAdmin):
+class ProductionOrderAdmin(DocumentLockMixin, UnfoldModelAdmin):
     fields = ['product', 'bom', 'quantity_planned', 'quantity_actual', 'created_by','status', 'notes']
     list_display = ('pd_number', 'product', 'quantity_planned', 'quantity_actual', 'get_diff', 'status')
     list_filter = ('status', 'order_date', 'product')
@@ -1889,7 +1889,7 @@ def settle_and_close_orders(modeladmin, request, queryset):
     return HttpResponse(Template(html_template).render(RequestContext(request, context)))
 
 @admin.register(FinanceReport)
-class FinanceReportAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
+class FinanceReportAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     # หน้ารวม: ดูง่ายๆ ว่าใบไหนค้างจ่าย
     search_fields = ('po_number', 'supplier__company_name')
     actions = [settle_and_close_orders, settle_purchase_special, 'calculate_finance_totals', 'export_to_excel']
@@ -2054,7 +2054,7 @@ class FinanceReportAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin
 
 # 2. หน้า Admin ของ Income Report
 @admin.register(IncomeReport)
-class IncomeReportAdmin(ExportToExcelMixin, DocumentLockMixin, admin.ModelAdmin):
+class IncomeReportAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     # ✅ ปรับ list_display ให้เอาตัวที่มีสีมาโชว์เลย จะได้ดูง่ายๆ
     list_display = ('so_number', 'get_po_no_customer', 'get_customer_truncated', 'get_grand_total_display', 'get_balance_due_display', 'payment_status')
     list_filter = (('order_date', DjangoDateRangeFilter),'payment_status', 'status', 'customer' )
@@ -2387,14 +2387,14 @@ class CustomerProductContractInline(UnfoldTabularInline):
         js = ('js/contract_barcode_autofill.js',)
 
 @admin.register(Customer)
-class CustomerAdmin(DocumentLockMixin, admin.ModelAdmin):
+class CustomerAdmin(DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('company_name', 'contact_person', 'phone')
     search_fields = ('company_name', 'contact_person', 'phone')
     inlines = [CustomerProductContractInline]
 
 # --- 3. ส่วนหน้าจัดการสัญญาโดยเฉพาะ (T2. ราคาสัญญา&DC/Rebate) ---
 @admin.register(CustomerProductContract)
-class CustomerProductContractAdmin(DocumentLockMixin, admin.ModelAdmin):
+class CustomerProductContractAdmin(DocumentLockMixin, UnfoldModelAdmin):
     list_display = ['customer', 'barcode_display', 'product', 'contract_price', 'dc_percent', 'rebate_percent', 'display_product_tags']
     readonly_fields = ['display_product_tags', 'product', 'barcode_unit_detail']
     # ไม่ใช้ list_editable → ไม่มี spinner, คอลัมน์แคบลง
