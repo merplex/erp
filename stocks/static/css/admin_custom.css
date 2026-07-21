@@ -147,13 +147,6 @@ select {
     vertical-align: middle !important;
 }
 
-/* ── Filter sidebar: scroll เมื่อ filter เยอะเกิน viewport ── */
-#changelist-filter {
-    overflow-y: auto !important;
-    max-height: calc(100vh - 60px) !important;
-    position: sticky !important;
-    top: 0 !important;
-}
 
 /* ── ปุ่ม Save (primary) — ทั้ง regular form และ popup ── */
 button[name="_save"] {
@@ -179,10 +172,12 @@ a.addlink {
     justify-content: center !important;
     border-radius: 6px !important;
     width: auto !important;
-    height: 36px !important;
-    padding: 0 16px !important;
+    height: 38px !important;
+    min-width: 100px !important;
+    padding: 0 24px !important;
     overflow: hidden !important;
     white-space: nowrap !important;
+    box-sizing: border-box !important;
 }
 a.addlink:hover {
     background-color: #218838 !important;
