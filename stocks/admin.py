@@ -2342,6 +2342,11 @@ class CustomerProductContractInline(UnfoldTabularInline):
     fields = ['barcode', 'product', 'barcode_unit_info', 'contract_price', 'dc_percent', 'rebate_percent']
     readonly_fields = ['product', 'barcode_unit_info']
     validate_min = False
+    # 🎯 บังคับ step ให้ตรงกับ decimal_places=2 ของ field (ไม่งั้น widget default ของ Unfold
+    # เติมทศนิยมเกิน เช่น พิมพ์ 9.13 กลายเป็น 9.130 แล้วชน validation "ทศนิยมไม่เกิน 2 ตำแหน่ง")
+    formfield_overrides = {
+        models.DecimalField: {'widget': forms.NumberInput(attrs={'step': '0.01'})},
+    }
 
     def get_formset(self, request, obj=None, **kwargs):
         formset = super().get_formset(request, obj, **kwargs)
@@ -2400,6 +2405,9 @@ class CustomerProductContractAdmin(DocumentLockMixin, UnfoldModelAdmin):
     # ไม่ใช้ list_editable → ไม่มี spinner, คอลัมน์แคบลง
     list_filter = ['customer', 'product__tags']
     fields = ['customer', 'barcode', 'product', 'barcode_unit_detail', 'display_product_tags', 'contract_price', 'dc_percent', 'rebate_percent']
+    formfield_overrides = {
+        models.DecimalField: {'widget': forms.NumberInput(attrs={'step': '0.01'})},
+    }
 
     search_fields = [
         'customer__company_name',
