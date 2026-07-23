@@ -850,36 +850,45 @@ class SalesDeliveryLog(models.Model):
         # auto-derive product from barcode
         if self.barcode_obj_id and not self.product_id:
             self.product = self.barcode_obj.product
-        if is_new:
-            # factor = จำนวนชิ้นต่อหน่วยบาร์โค้ด (เช่น โหล=12, ชิ้น=1)
-            factor = getattr(self.barcode_obj, 'conversion_factor', 1) or 1
-            qty_pieces = self.quantity_shipped * factor  # แปลงเป็นชิ้นเพื่อตัดสต็อก
 
-            # --- 🚀 [LOGIC เดิมของเปรม] ---
-            # 1. สมองกล: ลดสต็อกจริง (เป็นชิ้น)
+        # factor = จำนวนชิ้นต่อหน่วยบาร์โค้ด (เช่น โหล=12, ชิ้น=1)
+        factor = getattr(self.barcode_obj, 'conversion_factor', 1) or 1
+
+        # ผลต่างจำนวนที่ส่ง — รองรับทั้งสร้างแถวใหม่และแก้ไขแถวเดิม (ก่อนหน้านี้ทำงานแค่ตอนสร้างใหม่
+        # ทำให้แก้จำนวนในแถวเดิมแล้วสต็อก/ยอดสะสม/สถานะใบไม่อัพเดทตาม)
+        if is_new:
+            diff = self.quantity_shipped
+        else:
+            old_qty = SalesDeliveryLog.objects.values_list('quantity_shipped', flat=True).get(pk=self.pk)
+            diff = self.quantity_shipped - old_qty
+
+        # --- 🚀 [LOGIC เดิมของเปรม] ---
+        # 1. สมองกล: ปรับสต็อกจริงตามผลต่าง (เป็นชิ้น)
+        if diff != 0:
+            qty_pieces = diff * factor
             self.product.stock_quantity -= qty_pieces
             self.product.save()
 
-            # 2. สมองกล: สะสมยอดส่งในใบ SO
-            # quantity_shipped ใน SalesItem เป็น "หน่วยบาร์โค้ด" (ไม่ใช่ชิ้น)
-            # เพราะ sale_price = ราคาต่อหน่วยบาร์โค้ด → revenue = sale_price × quantity_shipped ถูกต้อง
-            qs = SalesItem.objects.filter(sales_order=self.sales_order, product=self.product)
-            if self.barcode_obj_id:
-                item = qs.filter(barcode_obj=self.barcode_obj).first() or qs.first()
-            else:
-                item = qs.first()
-            item.quantity_shipped += self.quantity_shipped  # หน่วยบาร์โค้ด
+        # 2. สมองกล: สะสมยอดส่งในใบ SO ตามผลต่าง
+        # quantity_shipped ใน SalesItem เป็น "หน่วยบาร์โค้ด" (ไม่ใช่ชิ้น)
+        # เพราะ sale_price = ราคาต่อหน่วยบาร์โค้ด → revenue = sale_price × quantity_shipped ถูกต้อง
+        qs = SalesItem.objects.filter(sales_order=self.sales_order, product=self.product)
+        if self.barcode_obj_id:
+            item = qs.filter(barcode_obj=self.barcode_obj).first() or qs.first()
+        else:
+            item = qs.first()
+        if item and diff != 0:
+            item.quantity_shipped += diff  # หน่วยบาร์โค้ด
             item.save()
+        # --- 🛑 [จบ LOGIC เดิม] ---
 
-            # --- 🛑 [จบ LOGIC เดิม] ---
-
-
-            # --- 2. [ส่วนที่เรเพิ่มให้: คำนวณเงินแยกถัง] ---
+        # --- 2. [คำนวณเงินแยกถัง — คำนวณใหม่ทุกครั้งให้ตรงกับ quantity_shipped ปัจจุบันเสมอ] ---
+        if item:
             # sale_price คือราคาต่อหน่วยบาร์โค้ด (โหล/ชิ้น) × จำนวนที่ส่ง (หน่วยบาร์โค้ด)
             self.shipment_value = item.sale_price * self.quantity_shipped
 
             # ดึงข้อมูล DC/Rebate จากสัญญา (Price List) มาคำนวณแยกเก็บเป็น "บาท"
-            from .models import CustomerProductContract 
+            from .models import CustomerProductContract
             contract = CustomerProductContract.objects.filter(
                 customer=self.sales_order.customer,
                 product=self.product
@@ -893,34 +902,33 @@ class SalesDeliveryLog(models.Model):
                 self.dc_amount = 0
                 self.rebate_amount = 0
 
-            # --- 3. [คำนวณวันจ่ายเงินตามรอบบัญชี] ---
-            if self.sales_order.customer:
-                close_day = self.sales_order.customer.account_close_day
-                term = self.sales_order.customer.payment_term
-                ref_date = datetime.date.today()
+        # --- 3. [คำนวณวันจ่ายเงินตามรอบบัญชี — เฉพาะตอนสร้างแถวใหม่ครั้งแรกเท่านั้น] ---
+        if is_new and self.sales_order.customer:
+            close_day = self.sales_order.customer.account_close_day
+            term = self.sales_order.customer.payment_term
+            ref_date = datetime.date.today()
 
+            try:
+                current_closing = ref_date.replace(day=close_day)
+            except ValueError:
+                next_month = ref_date.replace(day=28) + datetime.timedelta(days=4)
+                current_closing = next_month - datetime.timedelta(days=next_month.day)
+
+            if ref_date > current_closing:
+                first_of_next = (current_closing.replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
                 try:
-                    current_closing = ref_date.replace(day=close_day)
+                    base_date = first_of_next.replace(day=close_day)
                 except ValueError:
-                    next_month = ref_date.replace(day=28) + datetime.timedelta(days=4)
-                    current_closing = next_month - datetime.timedelta(days=next_month.day)
+                    next_next = first_of_next.replace(day=28) + datetime.timedelta(days=4)
+                    base_date = next_next - datetime.timedelta(days=next_next.day)
+            else:
+                base_date = current_closing
 
-                if ref_date > current_closing:
-                    first_of_next = (current_closing.replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
-                    try:
-                        base_date = first_of_next.replace(day=close_day)
-                    except ValueError:
-                        next_next = first_of_next.replace(day=28) + datetime.timedelta(days=4)
-                        base_date = next_next - datetime.timedelta(days=next_next.day)
-                else:
-                    base_date = current_closing
-
-                self.payment_due_date = base_date + datetime.timedelta(days=term)
+            self.payment_due_date = base_date + datetime.timedelta(days=term)
 
         # บันทึกลงฐานข้อมูลจริง
         super().save(*args, **kwargs)
-        if is_new:
-            self.sales_order.update_status()
+        self.sales_order.update_status()
 
     @property
     def total_with_vat(self):
