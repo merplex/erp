@@ -601,12 +601,6 @@ class SalesOrder(models.Model):
         super().save(*args, **kwargs)
 
     class Meta: verbose_name_plural = "B2. ใบสั่งขาย (Sales)"
-    def delete(self, *args, **kwargs):
-        if self.status == 'Draft':
-            super().delete(*args, **kwargs) # ถ้าเป็น Draft ลบทิ้งจริงๆ ได้
-        else:
-            self.status = 'Cancelled' # ถ้าสถานะอื่น เปลี่ยนเป็น 'ยกเลิก' แทน
-            self.save()
 
     # ✅ เพิ่มสถานะการเงิน
     payment_status = models.CharField(
