@@ -52,11 +52,9 @@ def handle_event(event, access_token: str):
         reply_message(reply_token, [{'type': 'text', 'text': f'Your User ID:\n{user_id}'}], access_token)
         return
     if user_id not in LINE_OWNER_USER_IDS:
-        import logging
-        # log ไว้เผื่อจะเพิ่มคนใหม่ทีหลัง — เช็ค user_id จาก log แล้วเอาไปเติมใน env var ได้เลย ไม่ต้องเคลียร์ค่าทิ้ง
-        logging.getLogger('line_webhook').warning(
-            'LINE user not in allowlist, ignored: %s (text=%r)', user_id, text
-        )
+        # print ไว้เผื่อจะเพิ่มคนใหม่ทีหลัง — เช็ค user_id จาก Railway logs แล้วเอาไปเติมใน env var ได้เลย
+        # (ใช้ print แทน logging เพราะไม่มี LOGGING config ใน settings.py, logging.warning() เลยไม่โผล่ใน log จริง)
+        print(f'🔒 LINE user not in allowlist, ignored: {user_id} (text={text!r})', flush=True)
         return
 
     t = text.lower()
@@ -80,6 +78,10 @@ def handle_event(event, access_token: str):
         _handle_check_list(reply_token, 'no_contract', access_token)
     elif t in ['no sale price']:
         _handle_check_list(reply_token, 'no_sale', access_token)
+    elif t in ['no dc']:
+        _handle_check_list(reply_token, 'no_dc', access_token)
+    elif t in ['no rebate']:
+        _handle_check_list(reply_token, 'no_rebate', access_token)
     elif t.startswith('full:'):
         _handle_full_report(reply_token, t[5:].strip(), access_token)
     elif text.startswith('กลุ่ม:'):
@@ -329,6 +331,8 @@ def _handle_new_product_menu(reply_token, access_token):
                 _btn('💸', 'No Cost', 'ยังไม่มีต้นทุน (buy_price = 0)', 'no cost'),
                 _btn('📄', 'Non Price Contract', 'ยังไม่มี Price Contract', 'non price contract'),
                 _btn('🏷️', 'No Sale Price', 'ยังไม่มีราคาขาย', 'no sale price'),
+                _btn('🏷️', 'No DC', 'ยังไม่มี DC ในสัญญา (เฉพาะ category Product)', 'no dc'),
+                _btn('💰', 'No Rebate', 'ยังไม่มี Rebate ในสัญญา (เฉพาะ category Product)', 'no rebate'),
             ],
         },
     }
@@ -363,6 +367,26 @@ def _handle_check_list(reply_token, check_type, access_token):
         title = '🏷️ No Sale Price'
         subtitle = 'ยังไม่มีราคาขาย'
         header_color = '#3a1a2a'
+    elif check_type == 'no_dc':
+        dc_ids = CustomerProductContract.objects.filter(
+            dc_percent__gt=0
+        ).values_list('product_id', flat=True).distinct()
+        qs = Product.objects.filter(
+            is_product=True, category__name='Product'
+        ).exclude(pk__in=dc_ids)
+        title = '🏷️ No DC'
+        subtitle = 'ยังไม่มี DC ในสัญญา'
+        header_color = '#2a1a3a'
+    elif check_type == 'no_rebate':
+        rebate_ids = CustomerProductContract.objects.filter(
+            rebate_percent__gt=0
+        ).values_list('product_id', flat=True).distinct()
+        qs = Product.objects.filter(
+            is_product=True, category__name='Product'
+        ).exclude(pk__in=rebate_ids)
+        title = '💰 No Rebate'
+        subtitle = 'ยังไม่มี Rebate ในสัญญา'
+        header_color = '#3a1a1a'
     else:
         return
 
