@@ -449,14 +449,6 @@ class PurchaseOrder(models.Model):
 
         super().save(*args, **kwargs)
 
-    def delete(self, *args, **kwargs):
-        # ✅ ป้องกันการลบข้อมูลจริงถ้ารับของไปแล้ว
-        if self.receipt_logs.exists():
-            self.status = 'Cancelled'
-            self.save()
-        else:
-            super().delete(*args, **kwargs)
-
 class PurchaseItem(models.Model):
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
