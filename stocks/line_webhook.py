@@ -605,7 +605,11 @@ def _build_report_bubbles(report_title, header_color, products, forecast, with_s
     def _sort_key(k):
         return (1, k) if k == 'Non Tag' else (0, k)
 
-    grand_curr = grand_cost = grand_sale = 0
+    # ยอดรวมคำนวณจาก products ตรงๆ (ตัดซ้ำ) ห้ามบวกจาก tag_groups เพราะสินค้าตัวเดียวมีได้หลาย tag
+    # จะถูกนับซ้ำถ้าบวกทีละกลุ่ม
+    grand_curr = sum(int(p.stock_quantity or 0) for p in products)
+    grand_cost = sum(forecast.get(p.pk, {}).get('cost_value', 0.0) for p in products)
+    grand_sale = sum(forecast.get(p.pk, {}).get('sale_value', 0.0) for p in products)
 
     # helper: box wrapper ที่ centering ด้วย justifyContent
     # flex:0 บน text ทำให้ text shrink ตามขนาด content → justifyContent:center จึงทำงานได้จริง
@@ -638,7 +642,6 @@ def _build_report_bubbles(report_title, header_color, products, forecast, with_s
             t_curr += int(p.stock_quantity or 0)
             t_cost += fd.get('cost_value', 0.0)
             t_sale += fd.get('sale_value', 0.0)
-        grand_curr += t_curr; grand_cost += t_cost; grand_sale += t_sale
 
         row_contents = [
             {'type': 'text', 'text': f'{tag_name} ({len(tprods)})', 'size': 'xxs', 'flex': 5,
