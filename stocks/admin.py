@@ -1464,7 +1464,7 @@ class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
                 return False # ล็อคเฉพาะตอนกด "เสร็จงาน/ปิดงาน" เท่านั้น
         return super().has_change_permission(request, obj)
     class Media:
-        js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js', 'js/delivery_barcode_select2.js')
+        js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js', 'js/delivery_barcode_select2.js', 'js/sales_item_barcode_autofill.js')
 
 class ProductionMaterialUsageInline(UnfoldTabularInline):
     model = ProductionMaterialUsage
