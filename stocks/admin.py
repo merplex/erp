@@ -201,6 +201,10 @@ class DocumentLockMixin:
                 f'var fd=new FormData();'
                 f'fd.append("content_type_id","{content_type.pk}");'
                 f'fd.append("object_id","{obj.pk}");'
+                # แนบ CSRF token ไปด้วยเสมอ (ไม่พึ่ง @csrf_exempt อย่างเดียว เผื่อ middleware ไม่ยกเว้นให้จริง)
+                f'var _m=document.cookie.match(/csrftoken=([^;]+)/);'
+                f'var _csrf=_m?_m[1]:(document.querySelector("[name=csrfmiddlewaretoken]")||{{}}).value;'
+                f'if(_csrf)fd.append("csrfmiddlewaretoken",_csrf);'
                 f'navigator.sendBeacon("/admin/unlock-doc/",fd);'
                 f'}}'
                 # beforeunload ใช้ไม่ได้เสมอไป (มือถือ/LINE in-app browser/bfcache มักไม่ยิง)
