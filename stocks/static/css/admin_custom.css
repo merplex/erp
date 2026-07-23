@@ -193,6 +193,10 @@ a.addlink:hover {
     background-color: #218838 !important;
     border-color: #218838 !important;
 }
+/* ซ่อนไอคอนเดิมของ unfold ข้างใน (มี class text-white ของตัวเอง ไม่รับ color:transparent จาก parent) */
+a.addlink .material-symbols-outlined {
+    display: none !important;
+}
 a.addlink::after {
     content: "+ Add";
     position: absolute;

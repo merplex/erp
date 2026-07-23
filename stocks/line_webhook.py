@@ -9,7 +9,7 @@ from django.db.models.functions import Greatest, Coalesce  # kept for potential 
 
 from .models import Product, ProductCategory
 
-LINE_OWNER_USER_ID = os.environ.get('LINE_OWNER_USER_ID', '')
+LINE_OWNER_USER_IDS = [uid.strip() for uid in os.environ.get('LINE_OWNER_USER_ID', '').split(',') if uid.strip()]
 REPLY_URL = 'https://api.line.me/v2/bot/message/reply'
 def _report_webview_url(report_type: str) -> str:
     from django.conf import settings
@@ -48,10 +48,15 @@ def handle_event(event, access_token: str):
     reply_token = event['replyToken']
     text = event['message']['text'].strip()
 
-    if not LINE_OWNER_USER_ID:
+    if not LINE_OWNER_USER_IDS:
         reply_message(reply_token, [{'type': 'text', 'text': f'Your User ID:\n{user_id}'}], access_token)
         return
-    if user_id != LINE_OWNER_USER_ID:
+    if user_id not in LINE_OWNER_USER_IDS:
+        import logging
+        # log ไว้เผื่อจะเพิ่มคนใหม่ทีหลัง — เช็ค user_id จาก log แล้วเอาไปเติมใน env var ได้เลย ไม่ต้องเคลียร์ค่าทิ้ง
+        logging.getLogger('line_webhook').warning(
+            'LINE user not in allowlist, ignored: %s (text=%r)', user_id, text
+        )
         return
 
     t = text.lower()
