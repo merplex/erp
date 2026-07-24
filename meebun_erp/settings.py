@@ -23,7 +23,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-jtp%$=4w-=*kjvxs!4(nj$+coum#3t-h-7^vfa2k)i#2mefju#"
+# อ่านจาก env var SECRET_KEY ก่อน (ตั้งค่าจริงแยกต่อ Railway project ได้)
+# ถ้าไม่มี (เช่นรันในเครื่อง dev) ใช้ค่า fallback นี้แทน
+SECRET_KEY = os.environ.get(
+    "SECRET_KEY",
+    "django-insecure-jtp%$=4w-=*kjvxs!4(nj$+coum#3t-h-7^vfa2k)i#2mefju#",
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
