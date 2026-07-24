@@ -1155,6 +1155,45 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin
 
     actions = ['mark_as_completed', 'export_to_excel']
 
+    def get_urls(self):
+        custom_urls = [
+            path('<int:object_id>/print/', self.admin_site.admin_view(self.print_view), name='stocks_purchaseorder_print'),
+            path('<int:object_id>/print-receipt/', self.admin_site.admin_view(self.print_receipt_view), name='stocks_purchaseorder_print_receipt'),
+        ]
+        return custom_urls + super().get_urls()
+
+    def print_view(self, request, object_id):
+        from django.core.exceptions import PermissionDenied
+        from django.http import Http404
+        if not self.has_view_or_change_permission(request):
+            raise PermissionDenied
+        obj = self.get_object(request, object_id)
+        if obj is None:
+            raise Http404("ไม่พบใบสั่งซื้อนี้")
+        context = {
+            **self.admin_site.each_context(request),
+            'obj': obj,
+            'items': obj.items.all().order_by('id').select_related('product'),
+            'title': f"ใบสั่งซื้อ {obj.po_number}",
+        }
+        return TemplateResponse(request, 'admin/purchase_order_print.html', context)
+
+    def print_receipt_view(self, request, object_id):
+        from django.core.exceptions import PermissionDenied
+        from django.http import Http404
+        if not self.has_view_or_change_permission(request):
+            raise PermissionDenied
+        obj = self.get_object(request, object_id)
+        if obj is None:
+            raise Http404("ไม่พบใบสั่งซื้อนี้")
+        context = {
+            **self.admin_site.each_context(request),
+            'obj': obj,
+            'receipts': obj.receipt_logs.all().order_by('received_date', 'id').select_related('product'),
+            'title': f"ใบรับสินค้า {obj.po_number}",
+        }
+        return TemplateResponse(request, 'admin/purchase_receipt_print.html', context)
+
     @admin.action(description="✅ เปลี่ยนสถานะเป็น: เสร็จงาน/ปิดงาน")
     def mark_as_completed(self, request, queryset):
         queryset.update(status='Completed')
@@ -1206,9 +1245,33 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin
                     });
                 </script>
             """
+            # ปุ่มพิมพ์: แปะเข้าแถบหัวข้อ (h2) ของแต่ละ inline group โดยตรง (โครงสร้างเดียวกับที่ยืนยัน
+            # แล้วจาก SalesOrderAdmin) มี fallback ไป submit-row ถ้าหา header ไม่เจอ
+            print_po_url = reverse('admin:stocks_purchaseorder_print', args=[obj.pk])
+            print_receipt_url = reverse('admin:stocks_purchaseorder_print_receipt', args=[obj.pk])
+            print_btn_script = f"""
+                <script>
+                    django.jQuery(document).ready(function() {{
+                        function addPrintBtn(headingText, url, bg, fullLabel) {{
+                            var $header = django.jQuery('h2[id$="-heading"]:contains("' + headingText + '")').first();
+                            if ($header.length) {{
+                                var link = '<a href="' + url + '" target="_blank" class="ml-auto" style="display:inline-block; background:' + bg + '; color:white; height:26px; line-height:26px; border-radius:4px; border:none; cursor:pointer; padding:0 14px; font-weight:bold; font-size:13px; text-decoration:none;">🖨️ พิมพ์</a>';
+                                $header.append(link);
+                            }} else {{
+                                var fallback = django.jQuery('#submit-row .flex-col-reverse');
+                                if (!fallback.length) {{ fallback = django.jQuery('#submit-row'); }}
+                                var link = '<a href="' + url + '" target="_blank" style="display:inline-block; background:' + bg + '; color:white; height:35px; line-height:35px; margin-right:10px; border-radius:4px; border:none; cursor:pointer; padding:0 20px; font-weight:bold; text-decoration:none;">🖨️ ' + fullLabel + '</a>';
+                                fallback.prepend(link);
+                            }}
+                        }}
+                        addPrintBtn('Purchase items', '{print_po_url}', '#17a2b8', 'พิมพ์ใบสั่งซื้อ');
+                        addPrintBtn('Purchase receipt logs', '{print_receipt_url}', '#6f42c1', 'พิมพ์ใบรับสินค้า');
+                    }});
+                </script>
+            """
             response.render()
             response.content = response.content.replace(
-                b'</body>', (smart_script + complete_btn_script).encode('utf-8') + b'</body>', 1
+                b'</body>', (smart_script + complete_btn_script + print_btn_script).encode('utf-8') + b'</body>', 1
             )
         return response
 

@@ -1,0 +1,59 @@
+{% extends "admin/print_base.html" %}
+
+{% block page_title %}ใบสั่งซื้อ {{ obj.po_number }}{% endblock %}
+{% block doc_title %}ใบสั่งซื้อ{% endblock %}
+{% block doc_number %}{{ obj.po_number }}{% endblock %}
+
+{% block signatures %}
+<div><div class="line">ผู้จัดทำ</div></div>
+<div><div class="line">ผู้อนุมัติ</div></div>
+<div><div class="line">ผู้จำหน่าย (รับทราบ)</div></div>
+{% endblock %}
+
+{% block doc_body %}
+<div class="info-grid">
+    <div><span class="label">ผู้จำหน่าย:</span> {{ obj.supplier.company_name }}</div>
+    <div><span class="label">วันที่สั่งซื้อ:</span> {{ obj.order_date }}</div>
+    <div><span class="label">ที่อยู่:</span> {{ obj.supplier.address|default:"-" }}</div>
+    <div><span class="label">เบอร์โทร:</span> {{ obj.supplier.phone|default:"-" }}</div>
+    <div><span class="label">เลข Invoice ผู้ขาย:</span> {{ obj.invoice_no_supplier|default:"-" }}</div>
+    <div><span class="label">สถานะ:</span> <span class="status-badge">{{ obj.get_status_display }}</span></div>
+    <div><span class="label">สถานะการเงิน:</span> {{ obj.get_payment_status_display }}</div>
+    <div><span class="label">ผู้สร้างเอกสาร:</span> {{ obj.created_by.get_full_name|default:obj.created_by.username|default:"-" }}</div>
+</div>
+
+<h3>รายการสินค้า</h3>
+<table class="line-items">
+    <thead>
+        <tr>
+            <th>#</th>
+            <th>สินค้า</th>
+            <th class="num">จำนวนที่สั่งซื้อ</th>
+            <th class="num">ราคา/หน่วย</th>
+            <th class="num">ราคารวม</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for item in items %}
+        <tr>
+            <td>{{ forloop.counter }}</td>
+            <td>{{ item.product.name }}</td>
+            <td class="num">{{ item.quantity_ordered }}</td>
+            <td class="num">{{ item.unit_price|floatformat:2 }}</td>
+            <td class="num">{{ item.total_price|floatformat:2 }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="5" style="text-align:center; color:#999;">ไม่มีรายการสินค้า</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<div class="info-grid" style="grid-template-columns: 1fr; text-align:right; margin-bottom:24px;">
+    <div><span class="label">ราคารวม (ก่อน VAT):</span> {{ obj.total_items_price|floatformat:2 }} บาท</div>
+    <div><span class="label">VAT ({{ obj.vat_percent }}%):</span> {{ obj.vat_amount|floatformat:2 }} บาท</div>
+    <div><span class="label">ยอดรวมสุทธิ:</span> <strong>{{ obj.grand_total|floatformat:2 }} บาท</strong></div>
+</div>
+
+<h3>หมายเหตุ</h3>
+<div class="notes-box">{{ obj.notes|default:"-" }}</div>
+{% endblock %}

@@ -1,0 +1,48 @@
+{% extends "admin/print_base.html" %}
+
+{% block page_title %}ใบรับสินค้า {{ obj.po_number }}{% endblock %}
+{% block doc_title %}ใบรับสินค้า{% endblock %}
+{% block doc_number %}{{ obj.po_number }}{% endblock %}
+
+{% block signatures %}
+<div><div class="line">ผู้รับสินค้า</div></div>
+<div><div class="line">ผู้ตรวจสอบ</div></div>
+<div><div class="line">ผู้ส่งของ (Supplier)</div></div>
+{% endblock %}
+
+{% block doc_body %}
+<div class="info-grid">
+    <div><span class="label">ผู้จำหน่าย:</span> {{ obj.supplier.company_name }}</div>
+    <div><span class="label">อ้างอิงใบสั่งซื้อ:</span> {{ obj.po_number }}</div>
+    <div><span class="label">ที่อยู่:</span> {{ obj.supplier.address|default:"-" }}</div>
+    <div><span class="label">เบอร์โทร:</span> {{ obj.supplier.phone|default:"-" }}</div>
+</div>
+
+<h3>รายการรับสินค้าทั้งหมด</h3>
+<table class="line-items">
+    <thead>
+        <tr>
+            <th>#</th>
+            <th>วันที่รับ</th>
+            <th>สินค้า</th>
+            <th class="num">จำนวนที่รับ</th>
+            <th>เลข Invoice/ใบส่งของ</th>
+            <th>หมายเหตุ</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for r in receipts %}
+        <tr>
+            <td>{{ forloop.counter }}</td>
+            <td>{{ r.received_date|date:"d/m/Y H:i" }}</td>
+            <td>{{ r.product.name }}</td>
+            <td class="num">{{ r.quantity_received }}</td>
+            <td>{{ r.supplier_invoice|default:"-" }}</td>
+            <td>{{ r.notes|default:"-" }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="6" style="text-align:center; color:#999;">ยังไม่มีการรับสินค้า</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
