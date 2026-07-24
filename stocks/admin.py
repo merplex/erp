@@ -1481,7 +1481,7 @@ class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
 class ProductionMaterialUsageInline(UnfoldTabularInline):
     model = ProductionMaterialUsage
     extra = 0
-    fields = ['raw_material', 'get_projected_stock', 'planned_qty', 'actual_qty_to_use', 'used_so_far']
+    fields = ['raw_material', 'get_projected_stock', 'planned_qty', 'actual_qty_to_use', 'used_so_far', 'auto_produce']
     readonly_fields = ['planned_qty', 'used_so_far', 'get_projected_stock'] # สองฟิลด์นี้ให้ระบบคำนวณเอง
     verbose_name = "ส่วนประกอบ/Package ตามสูตร"
 
@@ -1623,6 +1623,36 @@ class ProductionOrderAdmin(DocumentLockMixin, UnfoldModelAdmin):
         return color_diff(actual - planned)
     get_diff.short_description = "สถานะผลิต"
 
+    def create_child_production_order(self, usage, user):
+        """สร้างใบสั่งผลิตต่อเนื่องสำหรับวัตถุดิบที่มี BOM ของตัวเอง (cascade จากใบสั่งผลิตนี้)"""
+        import math
+        material = usage.raw_material
+        if not material.has_bom:
+            return "NOT_MANUFACTURED"
+        if not BOM.objects.filter(product=material).exists():
+            return "NO_BOM_FORMULA"
+        qty = usage.actual_qty_to_use
+        if qty <= 0:
+            return "ZERO_QTY"
+        try:
+            # ต่อท้ายหมายเหตุเดิมของใบแม่ (เช่น "Auto PD จาก SO: ...") ไม่ทับของเดิม
+            # เพื่อให้ไล่ที่มาย้อนกลับได้จากใบลูกใบเดียว เว้นแต่ผู้ใช้ลบหมายเหตุเดิมออกเองก่อน save
+            parent = usage.production_order
+            ref_line = f"Auto PD จาก PD: {parent.pd_number}"
+            notes = f"{parent.notes}\n{ref_line}" if parent.notes else ref_line
+            new_pd = ProductionOrder(
+                product=material,
+                quantity_planned=math.ceil(qty),
+                status='Draft',
+                order_date=datetime.date.today(),
+                created_by=user,
+                notes=notes
+            )
+            new_pd.save()
+            return new_pd
+        except Exception:
+            return "SAVE_ERROR"
+
     def save_formset(self, request, form, formset, change):
         from .models import ProductionLog, ProductionMaterialUsage
         from django.db.models import Sum
@@ -1635,12 +1665,26 @@ class ProductionOrderAdmin(DocumentLockMixin, UnfoldModelAdmin):
 
         # ✅ 2. บันทึก/แก้ไข รายการที่เหลือ
         instances = formset.save(commit=False)
+        cascade_success = 0
+        cascade_fail = []
         for instance in instances:
             # ถ้าเป็น Log และยังไม่มีคนบันทึก ให้ใส่ชื่อ user คนปัจจุบัน
             if isinstance(instance, ProductionLog):
                 if not instance.user_id:
                     instance.user = request.user
             instance.save()
+
+            # ติ๊ก "ผลิตทันที (Auto PD)" ในรายการวัตถุดิบ -> สร้างใบสั่งผลิตต่อเนื่องให้วัตถุดิบตัวนี้
+            if isinstance(instance, ProductionMaterialUsage) and instance.auto_produce and not instance.is_produced:
+                result = self.create_child_production_order(instance, request.user)
+                if isinstance(result, ProductionOrder):
+                    instance.is_produced = True
+                    instance.save()
+                    cascade_success += 1
+                else:
+                    instance.auto_produce = False
+                    instance.save()
+                    cascade_fail.append(f"{instance.raw_material.name} ({result})")
         formset.save_m2m()
 
         # ✅ 3. เฉพาะกรณีเป็นตาราง ProductionLog ให้คำนวณยอดสะสมใหม่
@@ -1649,6 +1693,11 @@ class ProductionOrderAdmin(DocumentLockMixin, UnfoldModelAdmin):
             total_finished = obj.production_logs.aggregate(s=Sum('quantity_finished'))['s'] or 0
             obj.quantity_actual = total_finished
             obj.save()
+
+        if cascade_success:
+            self.message_user(request, f"✅ สร้างใบสั่งผลิตต่อเนื่องสำเร็จ {cascade_success} รายการ", messages.SUCCESS)
+        if cascade_fail:
+            self.message_user(request, "⚠️ ข้ามรายการที่สร้างใบสั่งผลิตต่อเนื่องไม่ได้ (ไม่มี BOM/ไม่ใช่สินค้าผลิตเอง): " + ", ".join(cascade_fail), messages.WARNING)
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         # 🎯 ดึง obj (ข้อมูลใบผลิตนี้) ออกมาจาก kwargs (Django จะใส่มาให้เอง)

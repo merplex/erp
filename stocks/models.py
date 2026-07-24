@@ -1263,6 +1263,8 @@ class ProductionMaterialUsage(models.Model):
     planned_qty = models.DecimalField(max_digits=12, decimal_places=4, default=0, verbose_name="จำนวนตามสูตร (Total)")
     actual_qty_to_use = models.DecimalField(max_digits=12, decimal_places=4, verbose_name="จำนวนที่ต้องใช้จริง (ปรับแต่งได้)")
     used_so_far = models.DecimalField(max_digits=12, decimal_places=4, default=0, verbose_name="ตัดสต็อกไปแล้ว")
+    auto_produce = models.BooleanField(default=False, verbose_name="ผลิตทันที (Auto PD)")
+    is_produced = models.BooleanField(default=False, editable=False)
 
     @property
     def pending_use(self):
