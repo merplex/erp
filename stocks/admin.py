@@ -1178,17 +1178,6 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin
             if reasons:
                 messages.warning(request,
                     f"🔒 เอกสารนี้ถูกล็อค ({', '.join(reasons)}) — ไม่สามารถเพิ่ม/แก้ไข/ลบรายการรับของได้")
-        script = mark_safe("""
-            <script>
-                django.jQuery(document).ready(function() {
-                    var target = django.jQuery('#submit-row .flex-col-reverse');
-                    if (!target.length) { target = django.jQuery('#submit-row'); }
-                    var btn = '<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
-                    target.prepend(btn);
-                });
-            </script>
-        """)
-        context['title'] = mark_safe(f"{context['title']} {script}")
         response = super().render_change_form(request, context, add, change, form_url, obj)
         if obj and change:
             items = PurchaseItem.objects.filter(purchase_order=obj).order_by('id').select_related('product')
@@ -1205,8 +1194,22 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin
                                     'select_field': 'product', 'qty_field': 'quantity_received',
                                     'items': items_data}).replace('</', '<\\/')
             smart_script = f'<script>window.SMART_INLINE_DATA={safe_json};</script>'
+            # ⚠️ ต้องฉีดปุ่ม "เสร็จงาน" เข้า response.content ก่อน </body> โดยตรง (แบบเดียวกับ smart_script
+            # ด้านบน) ห้ามฝังผ่าน context['title'] เพราะ Unfold ไม่การันตีว่า {{ title }} จะถูก echo ใน body
+            complete_btn_script = """
+                <script>
+                    django.jQuery(document).ready(function() {
+                        var target = django.jQuery('#submit-row .flex-col-reverse');
+                        if (!target.length) { target = django.jQuery('#submit-row'); }
+                        var btn = '<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
+                        target.prepend(btn);
+                    });
+                </script>
+            """
             response.render()
-            response.content = response.content.replace(b'</body>', smart_script.encode() + b'</body>', 1)
+            response.content = response.content.replace(
+                b'</body>', (smart_script + complete_btn_script).encode('utf-8') + b'</body>', 1
+            )
         return response
 
     # ✅ แก้ไขตรงนี้: เพื่อให้บันทึก PurchaseReceiptLog ได้
@@ -1280,17 +1283,6 @@ class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
             if reasons:
                 messages.warning(request,
                     f"🔒 เอกสารนี้ถูกล็อค ({', '.join(reasons)}) — ไม่สามารถเพิ่ม/แก้ไข/ลบรายการส่งของได้")
-        script = mark_safe("""
-            <script>
-                django.jQuery(document).ready(function() {
-                    var target = django.jQuery('#submit-row .flex-col-reverse');
-                    if (!target.length) { target = django.jQuery('#submit-row'); }
-                    var btn = '<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #218838; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
-                    target.prepend(btn);
-                });
-            </script>
-        """)
-        context['title'] = mark_safe(f"{context['title']} {script}")
         response = super().render_change_form(request, context, add, change, form_url, obj)
         if obj and change:
             items = SalesItem.objects.filter(sales_order=obj).order_by('id').select_related('product', 'barcode_obj')
@@ -1308,10 +1300,22 @@ class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
                                     'select_field': 'barcode_obj', 'qty_field': 'quantity_shipped',
                                     'items': items_data}).replace('</', '<\\/')
             smart_script = f'<script>window.SMART_INLINE_DATA={safe_json};</script>'
+            complete_btn_script = """
+                <script>
+                    django.jQuery(document).ready(function() {
+                        var target = django.jQuery('#submit-row .flex-col-reverse');
+                        if (!target.length) { target = django.jQuery('#submit-row'); }
+                        var btn = '<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #218838; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
+                        target.prepend(btn);
+                    });
+                </script>
+            """
             response.render()
-            response.content = response.content.replace(b'</body>', smart_script.encode() + b'</body>', 1)
+            response.content = response.content.replace(
+                b'</body>', (smart_script + complete_btn_script).encode('utf-8') + b'</body>', 1
+            )
         return response
-    
+
     def save_model(self, request, obj, form, change):
         if not change:
             obj.created_by = request.user
@@ -1537,33 +1541,27 @@ class ProductionOrderAdmin(DocumentLockMixin, UnfoldModelAdmin):
         return TemplateResponse(request, 'admin/production_order_print.html', context)
 
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
-        # หมายเหตุ: Unfold render แถวปุ่ม Save เป็น id="submit-row" (ไม่ใช่ class เหมือน Django admin เดิม)
-        # ต้อง target ที่ '#submit-row .flex-col-reverse' (container ปุ่มจริง) ไม่ใช่ '.submit-row'
-        script = mark_safe("""
-            <script>
-                django.jQuery(document).ready(function() {
-                    var target = django.jQuery('#submit-row .flex-col-reverse');
-                    if (!target.length) { target = django.jQuery('#submit-row'); }
-                    var btn = '<input type="submit" value="ปิดงานผลิต (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
-                    target.prepend(btn);
-                });
-            </script>
-        """)
-        context['title'] = mark_safe(f"{context['title']} {script}")
+        # ⚠️ ห้ามฝัง <script> ผ่าน context['title'] เพราะ Unfold (Tailwind theme) ไม่ได้การันตีว่า
+        # {{ title }} จะถูก echo ออกมาใน body เหมือน Django admin เดิม (title ไปโผล่แค่ <title> บาง view)
+        # ใช้วิธีเดียวกับ DocumentLockMixin คือฉีดสคริปต์เข้า response.content ก่อน </body> โดยตรง แน่นอนกว่า
+        response = super().render_change_form(request, context, add, change, form_url, obj)
         if obj and change:
             print_url = reverse('admin:stocks_productionorder_print', args=[obj.pk])
-            print_script = mark_safe(f"""
+            script = f"""
                 <script>
                     django.jQuery(document).ready(function() {{
                         var target = django.jQuery('#submit-row .flex-col-reverse');
                         if (!target.length) {{ target = django.jQuery('#submit-row'); }}
-                        var btn = '<a href="{print_url}" target="_blank" style="display:inline-block; background:#17a2b8; color:white; height:35px; line-height:35px; margin-right:10px; border-radius:4px; border:none; cursor:pointer; padding:0 20px; font-weight:bold; text-decoration:none;">🖨️ พิมพ์ใบสั่งผลิต</a>';
-                        target.prepend(btn);
+                        var completeBtn = '<input type="submit" value="ปิดงานผลิต (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
+                        var printBtn = '<a href="{print_url}" target="_blank" style="display:inline-block; background:#17a2b8; color:white; height:35px; line-height:35px; margin-right:10px; border-radius:4px; border:none; cursor:pointer; padding:0 20px; font-weight:bold; text-decoration:none;">🖨️ พิมพ์ใบสั่งผลิต</a>';
+                        target.prepend(completeBtn);
+                        target.prepend(printBtn);
                     }});
                 </script>
-            """)
-            context['title'] = mark_safe(f"{context['title']} {print_script}")
-        return super().render_change_form(request, context, add, change, form_url, obj)
+            """
+            response.render()
+            response.content = response.content.replace(b'</body>', script.encode('utf-8') + b'</body>', 1)
+        return response
 
 
     def save_model(self, request, obj, form, change):
