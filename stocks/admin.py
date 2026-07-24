@@ -1181,8 +1181,10 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin
         script = mark_safe("""
             <script>
                 django.jQuery(document).ready(function() {
+                    var target = django.jQuery('#submit-row .flex-col-reverse');
+                    if (!target.length) { target = django.jQuery('#submit-row'); }
                     var btn = '<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
-                    django.jQuery('.submit-row').prepend(btn);
+                    target.prepend(btn);
                 });
             </script>
         """)
@@ -1281,8 +1283,10 @@ class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
         script = mark_safe("""
             <script>
                 django.jQuery(document).ready(function() {
+                    var target = django.jQuery('#submit-row .flex-col-reverse');
+                    if (!target.length) { target = django.jQuery('#submit-row'); }
                     var btn = '<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #218838; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
-                    django.jQuery('.submit-row').prepend(btn);
+                    target.prepend(btn);
                 });
             </script>
         """)
@@ -1533,11 +1537,15 @@ class ProductionOrderAdmin(DocumentLockMixin, UnfoldModelAdmin):
         return TemplateResponse(request, 'admin/production_order_print.html', context)
 
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
+        # หมายเหตุ: Unfold render แถวปุ่ม Save เป็น id="submit-row" (ไม่ใช่ class เหมือน Django admin เดิม)
+        # ต้อง target ที่ '#submit-row .flex-col-reverse' (container ปุ่มจริง) ไม่ใช่ '.submit-row'
         script = mark_safe("""
             <script>
                 django.jQuery(document).ready(function() {
+                    var target = django.jQuery('#submit-row .flex-col-reverse');
+                    if (!target.length) { target = django.jQuery('#submit-row'); }
                     var btn = '<input type="submit" value="ปิดงานผลิต (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
-                    django.jQuery('.submit-row').prepend(btn);
+                    target.prepend(btn);
                 });
             </script>
         """)
@@ -1547,8 +1555,10 @@ class ProductionOrderAdmin(DocumentLockMixin, UnfoldModelAdmin):
             print_script = mark_safe(f"""
                 <script>
                     django.jQuery(document).ready(function() {{
+                        var target = django.jQuery('#submit-row .flex-col-reverse');
+                        if (!target.length) {{ target = django.jQuery('#submit-row'); }}
                         var btn = '<a href="{print_url}" target="_blank" style="display:inline-block; background:#17a2b8; color:white; height:35px; line-height:35px; margin-right:10px; border-radius:4px; border:none; cursor:pointer; padding:0 20px; font-weight:bold; text-decoration:none;">🖨️ พิมพ์ใบสั่งผลิต</a>';
-                        django.jQuery('.submit-row').prepend(btn);
+                        target.prepend(btn);
                     }});
                 </script>
             """)
