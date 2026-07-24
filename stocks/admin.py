@@ -1481,9 +1481,40 @@ class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
 class ProductionMaterialUsageInline(UnfoldTabularInline):
     model = ProductionMaterialUsage
     extra = 0
-    fields = ['raw_material', 'planned_qty', 'actual_qty_to_use', 'used_so_far']
-    readonly_fields = ['planned_qty', 'used_so_far'] # สองฟิลด์นี้ให้ระบบคำนวณเอง
+    fields = ['raw_material', 'planned_qty', 'actual_qty_to_use', 'used_so_far', 'get_projected_stock']
+    readonly_fields = ['planned_qty', 'used_so_far', 'get_projected_stock'] # สองฟิลด์นี้ให้ระบบคำนวณเอง
     verbose_name = "ส่วนประกอบ/Package ตามสูตร"
+
+    # ใช้สูตรเดียวกับ StockPlanningAdmin.get_available ("คาดการณ์ (Plan)")
+    _ACTIVE_PO = ['Draft', 'Pending', 'Confirmed', 'Ordered', 'Paid', 'Loaded', 'Departed', 'Arrived', 'Received', 'Partially Received']
+    _ACTIVE_SO = ['Draft', 'Confirmed', 'Shipped']
+    _ACTIVE_PD = ['Draft', 'Started', 'Finished']
+
+    def get_projected_stock(self, obj):
+        # TEST BUILD: try/except กันไว้ก่อน เผื่อ query มีปัญหา จะได้เห็น error message
+        # แทนที่จะทำให้ทั้งหน้า 500 — ไว้ debug แล้วค่อยเอา try/except ออก
+        try:
+            if not obj or not obj.raw_material_id:
+                return "-"
+            material = obj.raw_material
+            p_in = PurchaseItem.objects.filter(
+                product=material, purchase_order__status__in=self._ACTIVE_PO
+            ).aggregate(t=Sum(Greatest(F('quantity_ordered') - F('quantity_received'), Value(0))))['t'] or 0
+            p_out = SalesItem.objects.filter(
+                product=material, sales_order__status__in=self._ACTIVE_SO
+            ).aggregate(t=Sum(Greatest(F('quantity_ordered') - F('quantity_shipped'), Value(0))))['t'] or 0
+            p_receipt = ProductionOrder.objects.filter(
+                product=material, status__in=self._ACTIVE_PD
+            ).aggregate(t=Sum(Greatest(F('quantity_planned') - F('quantity_actual'), Value(0))))['t'] or 0
+            p_usage = ProductionMaterialUsage.objects.filter(
+                raw_material=material, production_order__status__in=self._ACTIVE_PD
+            ).aggregate(t=Sum(Greatest(F('actual_qty_to_use') - F('used_so_far'), Value(0))))['t'] or 0
+            net = material.stock_quantity + int(p_in) - int(p_out) + (int(p_receipt) - int(p_usage))
+            color = "#dc3545" if net < 0 else "#0d6efd"
+            return format_html('<b style="color: {};">{}</b> {}', color, net, material.unit)
+        except Exception as e:
+            return format_html('<span style="color:red;">ERR: {}</span>', str(e))
+    get_projected_stock.short_description = "ยอดสต็อกคาดการณ์"
 
 @admin.register(ProductionOrder)
 class ProductionOrderAdmin(DocumentLockMixin, UnfoldModelAdmin):
