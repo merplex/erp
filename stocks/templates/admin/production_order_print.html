@@ -141,7 +141,6 @@
             <div><span class="label">ผลิตได้สะสม:</span> {{ obj.quantity_actual }} {{ obj.product.unit }}</div>
             <div><span class="label">สูตรที่ใช้ (BOM):</span> {{ obj.bom|default:"-" }}</div>
             <div><span class="label">ผู้สร้างเอกสาร:</span> {{ obj.created_by.get_full_name|default:obj.created_by.username|default:"-" }}</div>
-            <div><span class="label">หมายเหตุ:</span> {{ obj.notes|default:"-" }}</div>
         </div>
 
         <h3>รายการวัตถุดิบ/Package ที่ต้องใช้</h3>
