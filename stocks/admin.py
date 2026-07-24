@@ -46,7 +46,7 @@ from django.http import HttpResponseRedirect
 from django.template import Template, RequestContext 
 from django.http import HttpResponse, HttpResponseRedirect
 from django.template.response import TemplateResponse
-from django.urls import reverse # ✅ 3บรรทัดนี้ สำหรับระบบล็อคเอกสาร
+from django.urls import reverse, path # ✅ 3บรรทัดนี้ สำหรับระบบล็อคเอกสาร
 from django.contrib.contenttypes.models import ContentType
 from datetime import timedelta
 from django.utils import timezone
@@ -1510,6 +1510,28 @@ class ProductionOrderAdmin(DocumentLockMixin, UnfoldModelAdmin):
             return HttpResponseRedirect(".")
         return super().response_change(request, obj)
 
+    def get_urls(self):
+        custom_urls = [
+            path('<int:object_id>/print/', self.admin_site.admin_view(self.print_view), name='stocks_productionorder_print'),
+        ]
+        return custom_urls + super().get_urls()
+
+    def print_view(self, request, object_id):
+        from django.core.exceptions import PermissionDenied
+        if not self.has_view_or_change_permission(request):
+            raise PermissionDenied
+        obj = self.get_object(request, object_id)
+        if obj is None:
+            from django.http import Http404
+            raise Http404("ไม่พบใบสั่งผลิตนี้")
+        context = {
+            **self.admin_site.each_context(request),
+            'obj': obj,
+            'materials': obj.material_usages.select_related('raw_material').all(),
+            'title': f"ใบสั่งผลิต {obj.pd_number}",
+        }
+        return TemplateResponse(request, 'admin/production_order_print.html', context)
+
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
         script = mark_safe("""
             <script>
@@ -1520,6 +1542,17 @@ class ProductionOrderAdmin(DocumentLockMixin, UnfoldModelAdmin):
             </script>
         """)
         context['title'] = mark_safe(f"{context['title']} {script}")
+        if obj and change:
+            print_url = reverse('admin:stocks_productionorder_print', args=[obj.pk])
+            print_script = mark_safe(f"""
+                <script>
+                    django.jQuery(document).ready(function() {{
+                        var btn = '<a href="{print_url}" target="_blank" style="display:inline-block; background:#17a2b8; color:white; height:35px; line-height:35px; margin-right:10px; border-radius:4px; border:none; cursor:pointer; padding:0 20px; font-weight:bold; text-decoration:none;">🖨️ พิมพ์ใบสั่งผลิต</a>';
+                        django.jQuery('.submit-row').prepend(btn);
+                    }});
+                </script>
+            """)
+            context['title'] = mark_safe(f"{context['title']} {print_script}")
         return super().render_change_form(request, context, add, change, form_url, obj)
 
 
