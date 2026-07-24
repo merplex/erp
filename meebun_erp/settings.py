@@ -26,7 +26,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = "django-insecure-jtp%$=4w-=*kjvxs!4(nj$+coum#3t-h-7^vfa2k)i#2mefju#"
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', '.railway.app']
 # 1. ยืนยันว่าโดเมนของ Railway นี้เราเชื่อถือ (ต้องใส่ https:// ด้วยนะคะ)
