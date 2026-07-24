@@ -233,3 +233,13 @@ a.filter-open-button:hover {
 a.filter-open-button .material-symbols-outlined {
     display: none !important;
 }
+
+/* ── ตัวเลือก filter ที่กำลังเลือกอยู่ (active) — เดิมแค่ตัวหนา+สีจางๆ ดูไม่ชัด
+   เพิ่มพื้นหลังฟ้าอ่อน + ตัวอักษรฟ้าเข้มให้เห็นชัดเจนว่า filter ไหนถูกเลือกอยู่ ── */
+li.font-semibold.text-primary-600 {
+    background-color: rgba(2, 132, 199, 0.12) !important;
+}
+li.font-semibold.text-primary-600 a {
+    color: rgb(2 132 199) !important;
+    font-weight: 700 !important;
+}
