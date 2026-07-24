@@ -1,0 +1,50 @@
+{% extends "admin/print_base.html" %}
+
+{% block page_title %}ใบส่งสินค้า {{ obj.so_number }}{% endblock %}
+{% block doc_title %}ใบส่งสินค้า{% endblock %}
+{% block doc_number %}{{ obj.so_number }}{% endblock %}
+
+{% block signatures %}
+<div><div class="line">ผู้ส่งของ</div></div>
+<div><div class="line">ผู้ตรวจสอบ</div></div>
+<div><div class="line">ผู้รับของ</div></div>
+{% endblock %}
+
+{% block doc_body %}
+<div class="info-grid">
+    <div><span class="label">ลูกค้า:</span> {{ obj.customer.company_name }}</div>
+    <div><span class="label">อ้างอิงใบสั่งขาย:</span> {{ obj.so_number }}</div>
+    <div><span class="label">ที่อยู่จัดส่ง:</span> {{ obj.customer.address|default:"-" }}</div>
+    <div><span class="label">เบอร์โทร:</span> {{ obj.customer.phone|default:"-" }}</div>
+</div>
+
+<h3>รายการส่งสินค้าทั้งหมด</h3>
+<table class="line-items">
+    <thead>
+        <tr>
+            <th>#</th>
+            <th>วันที่ส่งของ</th>
+            <th>บาร์โค้ด</th>
+            <th>สินค้า</th>
+            <th class="num">จำนวน</th>
+            <th>เลขใบขนส่ง/MB Invoice</th>
+            <th>หมายเหตุ</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for d in deliveries %}
+        <tr>
+            <td>{{ forloop.counter }}</td>
+            <td>{{ d.shipped_date|date:"d/m/Y H:i" }}</td>
+            <td>{{ d.barcode_obj.code|default:"-" }}</td>
+            <td>{{ d.product.name }}</td>
+            <td class="num">{{ d.quantity_shipped }}</td>
+            <td>{{ d.shipping_no|default:"-" }}</td>
+            <td>{{ d.notes|default:"-" }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="7" style="text-align:center; color:#999;">ยังไม่มีการส่งสินค้า</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

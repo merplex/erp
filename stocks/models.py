@@ -558,11 +558,12 @@ class SalesOrder(models.Model):
         return sum(item.total_price for item in self.items.all())
 
     @property
+    def vat_amount(self):
+        return (self.total_items_price * self.vat_percent) / 100
+
+    @property
     def grand_total(self):
-        # สมมติ VAT 7% (ถ้าเปรมมีฟิลด์ vat_percent ให้เปลี่ยนเลข 7 เป็น self.vat_percent นะครับ)
-        subtotal = self.total_items_price
-        vat = (subtotal * self.vat_percent) / 100 
-        return subtotal + vat
+        return self.total_items_price + self.vat_amount
 
     @property
     def balance_due(self):
@@ -1131,7 +1132,7 @@ class CustomerProductContract(models.Model):
     barcode = models.ForeignKey('ProductBarcode', null=True, blank=True, on_delete=models.SET_NULL, verbose_name="บาร์โค้ด")
     product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้า")
     product_tag_link = models.ForeignKey(ProductTag, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="กลุ่มสินค้า (Tag)")
-    contract_price = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="ราคาสัญญา")
+    contract_price = models.DecimalField(max_digits=10, decimal_places=4, verbose_name="ราคาสัญญา")
     dc_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0, verbose_name="ค่า DC (%)")
     rebate_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0, verbose_name="Rebate (%)")
 

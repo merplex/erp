@@ -1258,6 +1258,45 @@ class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     def get_queryset(self, request):
         return super().get_queryset(request).select_related('customer').prefetch_related('items', 'delivery_logs')
 
+    def get_urls(self):
+        custom_urls = [
+            path('<int:object_id>/print/', self.admin_site.admin_view(self.print_view), name='stocks_salesorder_print'),
+            path('<int:object_id>/print-delivery/', self.admin_site.admin_view(self.print_delivery_view), name='stocks_salesorder_print_delivery'),
+        ]
+        return custom_urls + super().get_urls()
+
+    def print_view(self, request, object_id):
+        from django.core.exceptions import PermissionDenied
+        from django.http import Http404
+        if not self.has_view_or_change_permission(request):
+            raise PermissionDenied
+        obj = self.get_object(request, object_id)
+        if obj is None:
+            raise Http404("ไม่พบใบสั่งขายนี้")
+        context = {
+            **self.admin_site.each_context(request),
+            'obj': obj,
+            'items': obj.items.all().order_by('id').select_related('product', 'barcode_obj'),
+            'title': f"ใบสั่งขาย {obj.so_number}",
+        }
+        return TemplateResponse(request, 'admin/sales_order_print.html', context)
+
+    def print_delivery_view(self, request, object_id):
+        from django.core.exceptions import PermissionDenied
+        from django.http import Http404
+        if not self.has_view_or_change_permission(request):
+            raise PermissionDenied
+        obj = self.get_object(request, object_id)
+        if obj is None:
+            raise Http404("ไม่พบใบสั่งขายนี้")
+        context = {
+            **self.admin_site.each_context(request),
+            'obj': obj,
+            'deliveries': obj.delivery_logs.all().order_by('shipped_date', 'id').select_related('product', 'barcode_obj'),
+            'title': f"ใบส่งสินค้า {obj.so_number}",
+        }
+        return TemplateResponse(request, 'admin/sales_delivery_print.html', context)
+
     @admin.action(description="✅ เปลี่ยนสถานะเป็น: เสร็จงาน/ปิดงาน")
     def mark_as_completed(self, request, queryset):
         queryset.update(status='Completed')
@@ -1310,9 +1349,23 @@ class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
                     });
                 </script>
             """
+            print_so_url = reverse('admin:stocks_salesorder_print', args=[obj.pk])
+            print_delivery_url = reverse('admin:stocks_salesorder_print_delivery', args=[obj.pk])
+            print_btn_script = f"""
+                <script>
+                    django.jQuery(document).ready(function() {{
+                        var target = django.jQuery('#submit-row .flex-col-reverse');
+                        if (!target.length) {{ target = django.jQuery('#submit-row'); }}
+                        var printSO = '<a href="{print_so_url}" target="_blank" style="display:inline-block; background:#17a2b8; color:white; height:35px; line-height:35px; margin-right:10px; border-radius:4px; border:none; cursor:pointer; padding:0 20px; font-weight:bold; text-decoration:none;">🖨️ พิมพ์ใบสั่งขาย</a>';
+                        var printDelivery = '<a href="{print_delivery_url}" target="_blank" style="display:inline-block; background:#6f42c1; color:white; height:35px; line-height:35px; margin-right:10px; border-radius:4px; border:none; cursor:pointer; padding:0 20px; font-weight:bold; text-decoration:none;">🖨️ พิมพ์ใบส่งสินค้า</a>';
+                        target.prepend(printSO);
+                        target.prepend(printDelivery);
+                    }});
+                </script>
+            """
             response.render()
             response.content = response.content.replace(
-                b'</body>', (smart_script + complete_btn_script).encode('utf-8') + b'</body>', 1
+                b'</body>', (smart_script + complete_btn_script + print_btn_script).encode('utf-8') + b'</body>', 1
             )
         return response
 
@@ -2468,11 +2521,16 @@ class CustomerProductContractInline(UnfoldTabularInline):
     fields = ['barcode', 'product', 'barcode_unit_info', 'contract_price', 'dc_percent', 'rebate_percent']
     readonly_fields = ['product', 'barcode_unit_info']
     validate_min = False
-    # 🎯 บังคับ step ให้ตรงกับ decimal_places=2 ของ field (ไม่งั้น widget default ของ Unfold
-    # เติมทศนิยมเกิน เช่น พิมพ์ 9.13 กลายเป็น 9.130 แล้วชน validation "ทศนิยมไม่เกิน 2 ตำแหน่ง")
-    formfield_overrides = {
-        models.DecimalField: {'widget': forms.NumberInput(attrs={'step': '0.01'})},
-    }
+
+    # 🎯 บังคับ step ให้ตรงกับ decimal_places ของแต่ละ field (ไม่งั้น widget default ของ Unfold
+    # เติมทศนิยมเกิน เช่น พิมพ์ 9.13 กลายเป็น 9.130 แล้วชน validation "ทศนิยมไม่เกิน N ตำแหน่ง")
+    # contract_price รับ 4 ตำแหน่ง ส่วนเปอร์เซ็นต์ยังคง 2 ตำแหน่งเหมือนเดิม
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        if db_field.name == 'contract_price':
+            kwargs['widget'] = forms.NumberInput(attrs={'step': '0.0001'})
+        elif isinstance(db_field, models.DecimalField):
+            kwargs['widget'] = forms.NumberInput(attrs={'step': '0.01'})
+        return super().formfield_for_dbfield(db_field, request, **kwargs)
 
     def get_formset(self, request, obj=None, **kwargs):
         formset = super().get_formset(request, obj, **kwargs)
@@ -2531,9 +2589,14 @@ class CustomerProductContractAdmin(DocumentLockMixin, UnfoldModelAdmin):
     # ไม่ใช้ list_editable → ไม่มี spinner, คอลัมน์แคบลง
     list_filter = ['customer', 'product__tags']
     fields = ['customer', 'barcode', 'product', 'barcode_unit_detail', 'display_product_tags', 'contract_price', 'dc_percent', 'rebate_percent']
-    formfield_overrides = {
-        models.DecimalField: {'widget': forms.NumberInput(attrs={'step': '0.01'})},
-    }
+
+    # contract_price รับทศนิยม 4 ตำแหน่ง ส่วนเปอร์เซ็นต์ยังคง 2 ตำแหน่งเหมือนเดิม
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        if db_field.name == 'contract_price':
+            kwargs['widget'] = forms.NumberInput(attrs={'step': '0.0001'})
+        elif isinstance(db_field, models.DecimalField):
+            kwargs['widget'] = forms.NumberInput(attrs={'step': '0.01'})
+        return super().formfield_for_dbfield(db_field, request, **kwargs)
 
     search_fields = [
         'customer__company_name',
