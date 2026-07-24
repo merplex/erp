@@ -207,3 +207,29 @@ a.addlink::after {
     line-height: 1;
     white-space: nowrap;
 }
+
+/* ── ปุ่ม "Filters" บนหน้า changelist ──────────────────────────────
+   ปัญหาเดียวกับ addlink — bg-primary-600/text-white ไม่มี CSS รองรับ
+   ทำให้ปุ่มโปร่งใส/มองไม่เห็น (แต่ยังกดได้ปกติ เพราะ element ยังอยู่จริง) ── */
+a.filter-open-button {
+    background-color: rgb(2 132 199) !important;
+    border-color: rgb(2 132 199) !important;
+    color: #fff !important;
+    font-family: inherit !important;
+    font-size: 15px !important;
+    font-weight: 500 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    height: 44px !important;
+    padding: 0 20px !important;
+    border-radius: 6px !important;
+    box-sizing: border-box !important;
+}
+a.filter-open-button:hover {
+    background-color: rgb(3 105 161) !important;
+    border-color: rgb(3 105 161) !important;
+}
+a.filter-open-button .material-symbols-outlined {
+    display: none !important;
+}
