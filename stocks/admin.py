@@ -1349,17 +1349,28 @@ class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
                     });
                 </script>
             """
+            # ปุ่มพิมพ์: แปะเข้าแถบหัวข้อ (h2) ของแต่ละ inline group โดยตรง (ตรวจสอบโครงสร้างจริงของ
+            # Unfold แล้วว่า h2 มี id="<formset-prefix>-heading" และข้อความในนั้นคือ verbose_name_plural
+            # ล้วนๆ) ถ้าหา header ไม่เจอ (เผื่อ Unfold เปลี่ยนโครงสร้างในอนาคต) ให้ fallback ไป submit-row
             print_so_url = reverse('admin:stocks_salesorder_print', args=[obj.pk])
             print_delivery_url = reverse('admin:stocks_salesorder_print_delivery', args=[obj.pk])
             print_btn_script = f"""
                 <script>
                     django.jQuery(document).ready(function() {{
-                        var target = django.jQuery('#submit-row .flex-col-reverse');
-                        if (!target.length) {{ target = django.jQuery('#submit-row'); }}
-                        var printSO = '<a href="{print_so_url}" target="_blank" style="display:inline-block; background:#17a2b8; color:white; height:35px; line-height:35px; margin-right:10px; border-radius:4px; border:none; cursor:pointer; padding:0 20px; font-weight:bold; text-decoration:none;">🖨️ พิมพ์ใบสั่งขาย</a>';
-                        var printDelivery = '<a href="{print_delivery_url}" target="_blank" style="display:inline-block; background:#6f42c1; color:white; height:35px; line-height:35px; margin-right:10px; border-radius:4px; border:none; cursor:pointer; padding:0 20px; font-weight:bold; text-decoration:none;">🖨️ พิมพ์ใบส่งสินค้า</a>';
-                        target.prepend(printSO);
-                        target.prepend(printDelivery);
+                        function addPrintBtn(headingText, url, bg, fullLabel) {{
+                            var $header = django.jQuery('h2[id$="-heading"]:contains("' + headingText + '")').first();
+                            if ($header.length) {{
+                                var link = '<a href="' + url + '" target="_blank" class="ml-auto" style="display:inline-block; background:' + bg + '; color:white; height:26px; line-height:26px; border-radius:4px; border:none; cursor:pointer; padding:0 14px; font-weight:bold; font-size:13px; text-decoration:none;">🖨️ พิมพ์</a>';
+                                $header.append(link);
+                            }} else {{
+                                var fallback = django.jQuery('#submit-row .flex-col-reverse');
+                                if (!fallback.length) {{ fallback = django.jQuery('#submit-row'); }}
+                                var link = '<a href="' + url + '" target="_blank" style="display:inline-block; background:' + bg + '; color:white; height:35px; line-height:35px; margin-right:10px; border-radius:4px; border:none; cursor:pointer; padding:0 20px; font-weight:bold; text-decoration:none;">🖨️ ' + fullLabel + '</a>';
+                                fallback.prepend(link);
+                            }}
+                        }}
+                        addPrintBtn('Sales items', '{print_so_url}', '#17a2b8', 'พิมพ์ใบสั่งขาย');
+                        addPrintBtn('Sales delivery logs', '{print_delivery_url}', '#6f42c1', 'พิมพ์ใบส่งสินค้า');
                     }});
                 </script>
             """
