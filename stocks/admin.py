@@ -1481,7 +1481,7 @@ class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
 class ProductionMaterialUsageInline(UnfoldTabularInline):
     model = ProductionMaterialUsage
     extra = 0
-    fields = ['raw_material', 'planned_qty', 'actual_qty_to_use', 'used_so_far', 'get_projected_stock']
+    fields = ['raw_material', 'get_projected_stock', 'planned_qty', 'actual_qty_to_use', 'used_so_far']
     readonly_fields = ['planned_qty', 'used_so_far', 'get_projected_stock'] # สองฟิลด์นี้ให้ระบบคำนวณเอง
     verbose_name = "ส่วนประกอบ/Package ตามสูตร"
 
@@ -1505,9 +1505,13 @@ class ProductionMaterialUsageInline(UnfoldTabularInline):
         ).aggregate(t=Sum(Greatest(F('quantity_planned') - F('quantity_actual'), Value(0))))['t'] or 0
         # actual_qty_to_use/used_so_far เป็น DecimalField ต้องระบุ output_field ให้ Value(0) ชัดเจน
         # ไม่งั้น Django จะ error "mixed types: DecimalField, IntegerField"
-        p_usage = ProductionMaterialUsage.objects.filter(
+        # ไม่นับรวมยอดจองของ "ใบสั่งผลิตนี้เอง" เพื่อให้เห็นสต็อกที่มีจริงก่อนหักของใบนี้
+        p_usage_qs = ProductionMaterialUsage.objects.filter(
             raw_material=material, production_order__status__in=self._ACTIVE_PD
-        ).aggregate(t=Sum(Greatest(F('actual_qty_to_use') - F('used_so_far'), Value(0, output_field=DecimalField()))))['t'] or 0
+        )
+        if obj.production_order_id:
+            p_usage_qs = p_usage_qs.exclude(production_order_id=obj.production_order_id)
+        p_usage = p_usage_qs.aggregate(t=Sum(Greatest(F('actual_qty_to_use') - F('used_so_far'), Value(0, output_field=DecimalField()))))['t'] or 0
         net = material.stock_quantity + int(p_in) - int(p_out) + (int(p_receipt) - int(p_usage))
         color = "#dc3545" if net < 0 else "#0d6efd"
         return format_html('<b style="color: {};">{}</b> {}', color, net, material.unit)
