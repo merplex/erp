@@ -2138,6 +2138,15 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         if strong_ticks:
             strong_ticks[-1]['tick_align'] = 'end'
 
+        # สัดส่วนความกว้างแต่ละช่วงระหว่างป้ายวันที่ (สำหรับ grid-template-columns ในหน้าพิมพ์ —
+        # ใช้ layout แบบ grid ธรรมดาแทน position:absolute เพราะ Chrome มีบั๊กไม่วาดข้อความที่ position:absolute
+        # ซ้ำใน <thead> ที่ repeat ข้ามหน้ากระดาษ (เส้น grid ที่ไม่มีตัวอักษรวาดซ้ำได้ปกติ แต่ป้ายวันที่ที่มีตัวอักษรไม่วาด)
+        tick_cells = []
+        _prev_pct = 0.0
+        for _t in strong_ticks:
+            tick_cells.append({'date': _t['date'], 'width_pct': round(_t['pct'] - _prev_pct, 4)})
+            _prev_pct = _t['pct']
+
         # สรุป filter ที่ใช้อยู่เป็นข้อความ (ไว้โชว์เป็นหัวกระดาษตอนพิมพ์ แทนฟอร์ม filter ที่กดเลือกได้จริง)
         filter_summary_parts = [f"ช่วงเวลา {start_date:%d/%m/%Y} - {end_date:%d/%m/%Y}"]
         if q:
@@ -2166,6 +2175,7 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             'start_date': start_date,
             'end_date': end_date,
             'gridlines': gridlines,
+            'tick_cells': tick_cells,
             'q': q,
             'page_obj': page_obj,
             'querystring': querystring.urlencode(),

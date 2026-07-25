@@ -38,8 +38,13 @@
     .stp-track { position:absolute; left:10px; right:10px; top:0; bottom:0; }
     .stp-gridline { position:absolute; top:0; bottom:0; width:1px; background:#e2e8f0; }
     .stp-gridline.strong { width:0; border-left:1.5px dashed #0f172a; background:none; opacity:0.55; }
-    .stp-tick { position:absolute; top:6px; transform:translateX(6px); text-align:left; font-size:9px; font-weight:700; color:#0f172a; white-space:nowrap; }
-    .stp-tick.tick-end { transform:translateX(calc(-100% - 6px)); text-align:right; }
+    /* ⚠️ ป้ายวันที่หัวตาราง: ห้ามใช้ position:absolute (ต่างจากจุดในแถวข้อมูล) เพราะ Chrome มีบั๊ก
+       ไม่วาดข้อความที่ position:absolute ซ้ำตอน <thead> repeat ข้ามหน้ากระดาษตอนพิมพ์ (เส้น grid เฉยๆ
+       ไม่มีตัวอักษรวาดซ้ำได้ปกติ แต่ตัวอักษรใน position:absolute ไม่วาด) เลยใช้ CSS grid ธรรมดาแทน
+       ซึ่งมีสัดส่วนความกว้างช่องตรงกับระยะห่างจริงระหว่างวันที่ (ไม่ได้แบ่งเท่ากันเสมอไป) */
+    .stp-tick-row { position:relative; z-index:1; display:grid; height:100%; padding:0 10px; }
+    .stp-tick-cell { display:flex; align-items:center; padding-left:6px; font-size:9px; font-weight:700; color:#0f172a; white-space:nowrap; overflow:hidden; }
+    .stp-tick-cell.last { justify-content:flex-end; padding-left:0; padding-right:6px; }
     .stp-line { position:absolute; left:0; right:0; top:50%; height:1px; background:#cbd5e1; }
     .stp-point { position:absolute; top:50%; transform:translate(6px, -50%); text-align:left; min-width:40px; }
     .stp-point.edge-end { transform:translate(calc(-100% - 6px), -50%); text-align:right; }
@@ -81,10 +86,10 @@
                         {% for g in gridlines %}
                         <div class="stp-gridline{% if g.strong %} strong{% endif %}" style="left: {{ g.pct }}%;"></div>
                         {% endfor %}
-                        {% for g in gridlines %}
-                        {% if g.strong %}
-                        <div class="stp-tick{% if g.tick_align == 'end' %} tick-end{% endif %}" style="left: {{ g.pct }}%;">{{ g.date|date:'d/m' }}</div>
-                        {% endif %}
+                    </div>
+                    <div class="stp-tick-row" style="grid-template-columns: {% for c in tick_cells %}{{ c.width_pct }}% {% endfor %};">
+                        {% for c in tick_cells %}
+                        <div class="stp-tick-cell{% if forloop.last %} last{% endif %}">{{ c.date|date:'d/m' }}</div>
                         {% endfor %}
                     </div>
                 </th>
