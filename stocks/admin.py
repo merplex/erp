@@ -2052,10 +2052,9 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             d += day_step
         if gridlines[-1]['pct'] < 100:
             gridlines.append({'pct': 100.0, 'date': end_date, 'strong': True})
-        # ป้ายวันที่ตัวแรก/ตัวสุดท้าย ต้องชิดขอบ ไม่ใช้กึ่งกลาง ไม่งั้นโดน overflow:hidden ตัดขาด
+        # ป้ายวันที่ตัวสุดท้าย ต้องชิดขอบขวา ไม่งั้นโดน overflow:hidden ตัดขาด (ตัวอื่นชิดซ้ายของเส้นอยู่แล้วโดย default)
         strong_ticks = [g for g in gridlines if g['strong']]
         if strong_ticks:
-            strong_ticks[0]['tick_align'] = 'start'
             strong_ticks[-1]['tick_align'] = 'end'
 
         context = {

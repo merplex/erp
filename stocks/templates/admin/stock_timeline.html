@@ -23,9 +23,8 @@
     .stp-axis-row { position:relative; z-index:1; display:flex; border-bottom:1px solid #e2e8f0; background:#f8fafc; }
     .stp-info-col { width:280px; flex-shrink:0; padding:10px 14px; font-size:12px; font-weight:700; color:#475569; }
     .stp-bar-col { flex:1; position:relative; min-width:520px; height:32px; }
-    .stp-tick { position:absolute; top:8px; transform:translateX(-50%); font-size:11px; font-weight:700; color:#0f172a; white-space:nowrap; }
-    .stp-tick.tick-start { transform:translateX(0); }
-    .stp-tick.tick-end { transform:translateX(-100%); }
+    .stp-tick { position:absolute; top:8px; transform:translateX(6px); text-align:left; font-size:11px; font-weight:700; color:#0f172a; white-space:nowrap; }
+    .stp-tick.tick-end { transform:translateX(calc(-100% - 6px)); text-align:right; }
     .stp-row { position:relative; z-index:1; display:flex; border-bottom:1px solid #eef2f6; }
     .stp-row:last-child { border-bottom:none; }
     .stp-row:nth-child(even) { background:#fbfcfe; }
@@ -33,14 +32,14 @@
     .stp-info-col .meta { font-size:11px; color:#64748b; margin-top:2px; }
     .stp-bar-col { padding:18px 12px; }
     .stp-line { position:absolute; left:12px; right:12px; top:50%; height:1px; background:#cbd5e1; }
-    .stp-point { position:absolute; top:0; transform:translateX(-50%); text-align:center; min-width:56px; cursor:default; }
-    .stp-point.edge-start { transform:translateX(0); text-align:left; }
-    .stp-point.edge-end { transform:translateX(-100%); text-align:right; }
+    .stp-point { position:absolute; top:0; transform:translateX(6px); text-align:left; min-width:56px; cursor:default; }
+    .stp-point.edge-end { transform:translateX(calc(-100% - 6px)); text-align:right; }
+    .stp-point.edge-end .dot { margin-left:auto; margin-right:0; }
     .stp-point .delta { display:block; font-size:11px; font-weight:700; line-height:1.3; }
     .stp-point .delta.pos { color:#16a34a; }
     .stp-point .delta.neg { color:#dc2626; }
     .stp-point .balance { display:block; font-size:12px; font-weight:700; color:#1e293b; line-height:1.3; }
-    .stp-point .dot { display:block; width:7px; height:7px; border-radius:50%; background:#2563eb; margin:2px auto; }
+    .stp-point .dot { display:block; width:7px; height:7px; border-radius:50%; background:#2563eb; margin:2px 0; }
     .stp-pagination { display:flex; gap:8px; align-items:center; margin-top:14px; font-size:13px; }
     .stp-pagination a { color:#2563eb; text-decoration:none; }
     .stp-empty { padding:24px; text-align:center; color:#94a3b8; }
@@ -70,7 +69,7 @@
         <div class="stp-bar-col">
             {% for g in gridlines %}
             {% if g.strong %}
-            <div class="stp-tick{% if g.tick_align == 'start' %} tick-start{% elif g.tick_align == 'end' %} tick-end{% endif %}" style="left: {{ g.pct }}%;">{{ g.date|date:'d/m' }}</div>
+            <div class="stp-tick{% if g.tick_align == 'end' %} tick-end{% endif %}" style="left: {{ g.pct }}%;">{{ g.date|date:'d/m' }}</div>
             {% endif %}
             {% endfor %}
         </div>
@@ -89,7 +88,7 @@
         <div class="stp-bar-col">
             <div class="stp-line"></div>
             {% for point in row.points %}
-            <div class="stp-point{% if forloop.first %} edge-start{% elif forloop.last %} edge-end{% endif %}"
+            <div class="stp-point{% if forloop.last %} edge-end{% endif %}"
                  style="left: {{ point.pct }}%;"
                  title="{% if point.date %}{{ point.date|date:'d/m/Y' }}: {% endif %}{% if point.delta_full %}{{ point.delta_full }} &rarr; {% endif %}คงเหลือ {{ point.balance_full }}">
                 {% if point.delta %}
