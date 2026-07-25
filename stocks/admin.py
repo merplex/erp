@@ -2146,11 +2146,14 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         # สัดส่วนความกว้างแต่ละช่วงระหว่างป้ายวันที่ (สำหรับ grid-template-columns ในหน้าพิมพ์ —
         # ใช้ layout แบบ grid ธรรมดาแทน position:absolute เพราะ Chrome มีบั๊กไม่วาดข้อความที่ position:absolute
         # ซ้ำใน <thead> ที่ repeat ข้ามหน้ากระดาษ (เส้น grid ที่ไม่มีตัวอักษรวาดซ้ำได้ปกติ แต่ป้ายวันที่ที่มีตัวอักษรไม่วาด)
+        # ⚠️ คอลัมน์ของแต่ละวันที่ต้องเป็นช่วง "หลัง" ตัวมันเอง (ไปจนถึงวันที่ถัดไป) ไม่ใช่ช่วง "ก่อน" ตัวมันเอง
+        # เพราะ label ถูก left-align ไว้ที่ต้นคอลัมน์ (ให้อยู่หลังเส้นเหมือนจุดข้อมูลในแถว) — ถ้าจับคู่ผิดฝั่ง
+        # ป้ายวันที่จะไปโผล่ตรงตำแหน่งวันก่อนหน้าแทน ยิ่งวันหลังๆ ยิ่งเห็นเพี้ยนชัด (แถมคอลัมน์แรกจะกว้าง=0 ด้วย
+        # เพราะวันแรกอยู่ที่ 0% อยู่แล้ว)
         tick_cells = []
-        _prev_pct = 0.0
-        for _t in strong_ticks:
-            tick_cells.append({'date': _t['date'], 'width_pct': round(_t['pct'] - _prev_pct, 4)})
-            _prev_pct = _t['pct']
+        for _i, _t in enumerate(strong_ticks):
+            _next_pct = strong_ticks[_i + 1]['pct'] if _i + 1 < len(strong_ticks) else 100.0
+            tick_cells.append({'date': _t['date'], 'width_pct': round(_next_pct - _t['pct'], 4)})
 
         # สรุป filter ที่ใช้อยู่เป็นข้อความ (ไว้โชว์เป็นหัวกระดาษตอนพิมพ์ แทนฟอร์ม filter ที่กดเลือกได้จริง)
         filter_summary_parts = [f"ช่วงเวลา {start_date:%d/%m/%Y} - {end_date:%d/%m/%Y}"]
