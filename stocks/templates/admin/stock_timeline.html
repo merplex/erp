@@ -41,8 +41,13 @@
     .stp-gridline { position:absolute; top:0; bottom:0; width:1px; background:#e2e8f0; }
     .stp-gridline.strong { width:0; border-left:2px dashed #0f172a; background:none; opacity:0.55; }
     .stp-axis-row { position:relative; z-index:1; display:flex; border-bottom:1px solid #e2e8f0; background:#f8fafc; }
+    .stp-axis-row .stp-bar-col { height:32px; }
     .stp-info-col { width:280px; flex-shrink:0; display:flex; flex-direction:column; justify-content:center; padding:10px 14px; font-size:12px; font-weight:700; color:#475569; }
-    .stp-bar-col { flex:1; position:relative; min-width:520px; height:32px; }
+    /* ⚠️ ห้ามตั้ง height ตายตัวให้ .stp-bar-col ของแถวสินค้า (ใช้เฉพาะ axis-row ด้านบนเท่านั้น)
+       เพราะ height ตายตัวจะทำให้ flexbox ไม่ stretch คอลัมน์นี้ให้สูงเท่าแถว (align-items:stretch ใช้ไม่ได้
+       กับ element ที่มี height ชัดเจนอยู่แล้ว) ผลคือจุด/ตัวเลขที่ center อยู่กลาง .stp-bar-col จะไม่ตรงกับ
+       กึ่งกลางแถวจริง ไปเกาะติดขอบบนแทนเมื่อแถวสูงกว่า .stp-bar-col (เช่นแถวที่ชื่อสินค้ายาว 2 บรรทัด) */
+    .stp-bar-col { flex:1; position:relative; min-width:520px; }
     /* ⚠️ .stp-track คือ containing block จริงของ tick/point (left:X% คำนวณจากกรอบนี้)
        ต้องมี left/right เท่ากับ .stp-gridlines ทุกตัวเป๊ะๆ (292px/12px นับจาก .stp-table)
        ไม่งั้นเปอร์เซ็นต์ของจุด/ป้ายวันที่ กับเส้น grid จะอ้างอิงกรอบกว้างไม่เท่ากัน แล้วเพี้ยนสะสมมากขึ้นเรื่อยๆ
