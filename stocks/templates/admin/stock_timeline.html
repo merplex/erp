@@ -36,7 +36,7 @@
     .stp-gridline { position:absolute; top:0; bottom:0; width:1px; background:#e2e8f0; }
     .stp-gridline.strong { width:0; border-left:2px dashed #0f172a; background:none; opacity:0.55; }
     .stp-axis-row { position:relative; z-index:1; display:flex; border-bottom:1px solid #e2e8f0; background:#f8fafc; }
-    .stp-info-col { width:280px; flex-shrink:0; padding:10px 14px; font-size:12px; font-weight:700; color:#475569; }
+    .stp-info-col { width:280px; flex-shrink:0; display:flex; flex-direction:column; justify-content:center; padding:10px 14px; font-size:12px; font-weight:700; color:#475569; }
     .stp-bar-col { flex:1; position:relative; min-width:520px; height:32px; }
     /* ⚠️ .stp-track คือ containing block จริงของ tick/point (left:X% คำนวณจากกรอบนี้)
        ต้องมี left/right เท่ากับ .stp-gridlines ทุกตัวเป๊ะๆ (292px/12px นับจาก .stp-table)
@@ -45,7 +45,9 @@
     .stp-track { position:absolute; left:12px; right:12px; top:0; bottom:0; }
     .stp-tick { position:absolute; top:8px; transform:translateX(6px); text-align:left; font-size:11px; font-weight:700; color:#0f172a; white-space:nowrap; }
     .stp-tick.tick-end { transform:translateX(calc(-100% - 6px)); text-align:right; }
-    .stp-row { position:relative; z-index:1; display:flex; border-bottom:1px solid #eef2f6; }
+    /* min-height คงที่ กันแถวที่ชื่อสินค้ายาวจนขึ้น 2 บรรทัด สูงไม่เท่าแถวชื่อสั้น
+       ไม่งั้นจุด/ตัวเลขซึ่ง center อยู่กลางแถวของตัวเอง จะอยู่คนละระดับกันเมื่อเทียบข้ามแถว */
+    .stp-row { position:relative; z-index:1; display:flex; align-items:stretch; min-height:68px; border-bottom:1px solid #eef2f6; }
     .stp-row:last-child { border-bottom:none; }
     .stp-row:nth-child(even) { background:#fbfcfe; }
     .stp-info-col .name { font-weight:600; color:#1e293b; font-size:13px; }
@@ -152,7 +154,7 @@
                 {% for point in row.points %}
                 <div class="stp-point{% if forloop.last %} edge-end{% endif %}"
                      style="left: {{ point.pct }}%;"
-                     title="{% if point.date %}{{ point.date|date:'d/m/Y' }}: {% endif %}{% if point.delta_full %}{{ point.delta_full }} &rarr; {% endif %}คงเหลือ {{ point.balance_full }}">
+                     title="{% if point.date %}{{ point.date|date:'d/m/Y' }}: {% endif %}{% if point.delta_full %}{{ point.delta_full }} &rarr; {% endif %}คงเหลือ {{ point.balance_full }}{% if point.refs %} ({{ point.refs }}){% endif %}">
                     {% if point.delta %}
                         <span class="delta {% if point.delta > 0 %}pos{% else %}neg{% endif %}">{% if point.delta > 0 %}+{{ point.delta_fmt }}{% else %}{{ point.delta_fmt }}{% endif %}</span>
                     {% else %}

@@ -1975,44 +1975,53 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             purchase_order__status__in=self._ACTIVE_PO,
         ).annotate(
             remaining=Greatest(F('quantity_ordered') - F('quantity_received'), Value(0))
-        ).filter(remaining__gt=0).values('product_id', 'remaining', 'purchase_order__order_date')
+        ).filter(remaining__gt=0).values('product_id', 'remaining', 'purchase_order__order_date', 'purchase_order__po_number')
 
         so_rows = SalesItem.objects.filter(
             product_id__in=product_ids,
             sales_order__status__in=self._ACTIVE_SO,
         ).annotate(
             remaining=Greatest(F('quantity_ordered') - F('quantity_shipped'), Value(0))
-        ).filter(remaining__gt=0).values('product_id', 'remaining', 'sales_order__order_date')
+        ).filter(remaining__gt=0).values('product_id', 'remaining', 'sales_order__order_date', 'sales_order__so_number')
 
         pd_rows = ProductionOrder.objects.filter(
             product_id__in=product_ids,
             status__in=self._ACTIVE_PD,
         ).annotate(
             remaining=Greatest(F('quantity_planned') - F('quantity_actual'), Value(0))
-        ).filter(remaining__gt=0).values('product_id', 'remaining', 'order_date')
+        ).filter(remaining__gt=0).values('product_id', 'remaining', 'order_date', 'pd_number')
 
         usage_rows = ProductionMaterialUsage.objects.filter(
             raw_material_id__in=product_ids,
             production_order__status__in=self._ACTIVE_PD,
         ).annotate(
             remaining=Greatest(F('actual_qty_to_use') - F('used_so_far'), Value(0, output_field=DecimalField()))
-        ).filter(remaining__gt=0).values('raw_material_id', 'remaining', 'production_order__order_date')
+        ).filter(remaining__gt=0).values(
+            'raw_material_id', 'remaining', 'production_order__order_date', 'production_order__pd_number'
+        )
 
+        # เก็บ (วันที่, +/-จำนวน, เลขที่เอกสารอ้างอิง) ไว้โยงกลับไปดูใบสั่งซื้อ/ขาย/ผลิตที่เกี่ยวข้องได้
         for row in po_rows:
             lead = products_by_id[row['product_id']].delivery_lead_time or 0
             event_date = row['purchase_order__order_date'] + timedelta(days=lead)
-            events_by_product[row['product_id']].append((event_date, int(row['remaining'])))
+            ref = f"PO {row['purchase_order__po_number']}"
+            events_by_product[row['product_id']].append((event_date, int(row['remaining']), ref))
 
         for row in so_rows:
-            events_by_product[row['product_id']].append((row['sales_order__order_date'], -int(row['remaining'])))
+            ref = f"SO {row['sales_order__so_number']}"
+            events_by_product[row['product_id']].append((row['sales_order__order_date'], -int(row['remaining']), ref))
 
         for row in pd_rows:
             lead = products_by_id[row['product_id']].production_lead_time or 0
             event_date = row['order_date'] + timedelta(days=lead)
-            events_by_product[row['product_id']].append((event_date, int(row['remaining'])))
+            ref = f"PD {row['pd_number']}"
+            events_by_product[row['product_id']].append((event_date, int(row['remaining']), ref))
 
         for row in usage_rows:
-            events_by_product[row['raw_material_id']].append((row['production_order__order_date'], -int(row['remaining'])))
+            ref = f"PD {row['production_order__pd_number']}"
+            events_by_product[row['raw_material_id']].append(
+                (row['production_order__order_date'], -int(row['remaining']), ref)
+            )
 
         def fmt_qty(n):
             """ย่อเลขจำนวนมาก: 12,500 -> 12.5K, 3,200,000 -> 3.2M (ทศนิยม 1 ตำแหน่ง) — เอาไว้ให้ label ในกราฟไม่ยาวเกิน"""
@@ -2026,7 +2035,7 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                 s = str(a)
             return f"-{s}" if n < 0 else s
 
-        def make_point(pct, balance, delta=None, event_date=None):
+        def make_point(pct, balance, delta=None, event_date=None, refs=None):
             return {
                 'pct': round(pct, 2),
                 'date': event_date,
@@ -2036,18 +2045,22 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                 'balance_full': f"{balance:,}",
                 'delta_fmt': fmt_qty(delta) if delta is not None else None,
                 'delta_full': f"{delta:+,}" if delta is not None else None,
+                'refs': ', '.join(refs) if refs else None,
             }
 
         rows = []
         for product in products:
             # เหตุการณ์ที่เกินวันสิ้นสุดช่วง → ตัดทิ้งไปเลย ไม่นับ (ยอดคาดการณ์ต้องตรงกับที่เห็นในกราฟ)
             # เหตุการณ์ที่ค้าง (วันที่ผ่านมาแล้วแต่ยัง pending) → นับที่จุดเริ่ม (start_date)
+            # เก็บเลขที่เอกสาร (PO/SO/PD) ของทุกรายการที่ถูก net รวมกันในวันเดียวกันไว้ด้วย ไว้โชว์ตอน hover
             daily_delta = {}
-            for event_date, delta in events_by_product.get(product.pk, []):
+            daily_refs = {}
+            for event_date, delta, ref in events_by_product.get(product.pk, []):
                 if event_date > end_date:
                     continue
                 clamped = max(event_date, start_date)
                 daily_delta[clamped] = daily_delta.get(clamped, 0) + delta
+                daily_refs.setdefault(clamped, []).append(ref)
 
             running = product.stock_quantity
             points = [make_point(0.0, running)]
@@ -2055,7 +2068,7 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                 delta = daily_delta[event_date]
                 running += delta
                 pct = (event_date - start_date).days / total_days * 100
-                points.append(make_point(pct, running, delta, event_date))
+                points.append(make_point(pct, running, delta, event_date, daily_refs.get(event_date)))
 
             if points[-1]['pct'] < 100:
                 points.append(make_point(100.0, running))
