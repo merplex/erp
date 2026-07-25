@@ -48,6 +48,8 @@ from django.http import HttpResponse, HttpResponseRedirect
 from django.template.response import TemplateResponse
 from django.urls import reverse, path # ✅ 3บรรทัดนี้ สำหรับระบบล็อคเอกสาร
 from django.contrib.contenttypes.models import ContentType
+from django.contrib.admin.models import LogEntry
+from django.core.paginator import Paginator
 from datetime import timedelta
 from django.utils import timezone
 from decimal import Decimal
@@ -860,6 +862,201 @@ class ProductBarcodeAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     def get_queryset(self, request):
         return super().get_queryset(request).select_related('product')
 
+
+def _normalize_history_date(d):
+    """แปลงวันที่ (DateField หรือ DateTimeField หรือ None) ให้เป็น datetime แบบมี timezone เดียวกันหมด
+    เพื่อให้เรียงลำดับ/แสดงผลในตารางประวัติได้โดยไม่พังตอนเทียบ date กับ datetime"""
+    if d is None:
+        return timezone.make_aware(datetime.datetime.min, timezone.get_default_timezone())
+    if isinstance(d, datetime.datetime):
+        return timezone.make_aware(d, timezone.get_default_timezone()) if timezone.is_naive(d) else d
+    return timezone.make_aware(datetime.datetime.combine(d, datetime.time.min), timezone.get_default_timezone())
+
+
+def build_product_history_rows(product):
+    """
+    รวมประวัติความเคลื่อนไหวทั้งหมดของสินค้าชิ้นนี้เป็นรายการเดียว:
+    ซื้อเข้า (PO), ขายออก (SO), ผลิตได้/ถูกใช้ผลิต (PD), ยกเลิก PO/SO, และแก้ไขข้อมูลสินค้า
+    เรียงจากล่าสุดไปเก่าสุด
+    """
+    rows = []
+
+    # 1. ซื้อเข้า — รับของตาม PO
+    receipts = list(
+        PurchaseReceiptLog.objects.filter(product=product)
+        .select_related('purchase_order', 'purchase_order__supplier')
+    )
+    po_ids = [r.purchase_order_id for r in receipts]
+    po_price_map = {
+        pi.purchase_order_id: pi.unit_price
+        for pi in PurchaseItem.objects.filter(purchase_order_id__in=po_ids, product=product)
+    }
+    for r in receipts:
+        unit_price = po_price_map.get(r.purchase_order_id) or Decimal('0')
+        rows.append({
+            'date': r.received_date,
+            'type': 'purchase',
+            'type_label': '🛒 ซื้อเข้า (รับของ)',
+            'ref_number': r.purchase_order.po_number,
+            'ref_url': reverse('admin:stocks_purchaseorder_change', args=[r.purchase_order_id]),
+            'quantity': r.quantity_received,
+            'unit_price': unit_price,
+            'total_value': unit_price * r.quantity_received,
+            'party': str(r.purchase_order.supplier) if r.purchase_order.supplier_id else '-',
+            'note': r.notes,
+        })
+
+    # 2. ขายออก — ส่งของตาม SO
+    deliveries = (
+        SalesDeliveryLog.objects.filter(product=product)
+        .select_related('sales_order', 'sales_order__customer')
+    )
+    for d in deliveries:
+        unit_price = (d.shipment_value / d.quantity_shipped) if d.quantity_shipped else Decimal('0')
+        rows.append({
+            'date': d.shipped_date,
+            'type': 'sale',
+            'type_label': '📤 ขายออก (ส่งของ)',
+            'ref_number': d.sales_order.so_number,
+            'ref_url': reverse('admin:stocks_salesorder_change', args=[d.sales_order_id]),
+            'quantity': d.quantity_shipped,
+            'unit_price': unit_price,
+            'total_value': d.shipment_value,
+            'party': str(d.sales_order.customer) if d.sales_order.customer_id else '-',
+            'note': d.notes,
+        })
+
+    # 3. ผลิตได้ — สินค้าสำเร็จรูปเข้าสต็อกจากใบ PD (เฉพาะกรณีสินค้านี้คือสินค้าที่ผลิต)
+    output_logs = (
+        ProductionLog.objects.filter(production_order__product=product)
+        .select_related('production_order', 'production_order__bom')
+    )
+    for log in output_logs:
+        pd_order = log.production_order
+        unit_cost = pd_order.bom.total_cost if pd_order.bom_id else (product.buy_price or Decimal('0'))
+        rows.append({
+            'date': log.finished_date,
+            'type': 'production_out',
+            'type_label': '🏭 ผลิตได้ (เข้าสต็อก)',
+            'ref_number': pd_order.pd_number,
+            'ref_url': reverse('admin:stocks_productionorder_change', args=[pd_order.pk]),
+            'quantity': log.quantity_finished,
+            'unit_price': unit_cost,
+            'total_value': unit_cost * log.quantity_finished,
+            'party': '-',
+            'note': log.notes,
+        })
+
+    # 4. ถูกใช้ผลิต — สินค้านี้ถูกตัดสต็อกไปเป็นวัตถุดิบ/แพ็คเกจของใบ PD อื่น
+    usage_logs = (
+        ProductionLog.objects.filter(production_order__material_usages__raw_material=product)
+        .select_related('production_order', 'production_order__product')
+        .prefetch_related('production_order__material_usages')
+        .distinct()
+    )
+    for log in usage_logs:
+        pd_order = log.production_order
+        if not pd_order.quantity_planned:
+            continue
+        usage = next(
+            (u for u in pd_order.material_usages.all() if u.raw_material_id == product.pk), None
+        )
+        if not usage:
+            continue
+        ratio = Decimal(str(log.quantity_finished)) / Decimal(str(pd_order.quantity_planned))
+        used_qty = usage.actual_qty_to_use * ratio
+        unit_cost = product.buy_price or Decimal('0')
+        rows.append({
+            'date': log.finished_date,
+            'type': 'production_use',
+            'type_label': '🧪 ถูกใช้ผลิต (ตัดสต็อก)',
+            'ref_number': pd_order.pd_number,
+            'ref_url': reverse('admin:stocks_productionorder_change', args=[pd_order.pk]),
+            'quantity': -used_qty,
+            'unit_price': unit_cost,
+            'total_value': -(used_qty * unit_cost),
+            'party': '-',
+            'note': f"ใช้ผลิต {pd_order.product.name}" if pd_order.product_id else '',
+        })
+
+    # 5. ยกเลิกใบสั่งซื้อ
+    cancelled_pos = (
+        PurchaseOrder.objects.filter(status='Cancelled', items__product=product)
+        .distinct().select_related('supplier')
+    )
+    po_item_map = {
+        pi.purchase_order_id: pi
+        for pi in PurchaseItem.objects.filter(purchase_order__in=cancelled_pos, product=product)
+    }
+    for po in cancelled_pos:
+        item = po_item_map.get(po.pk)
+        qty = item.quantity_ordered if item else 0
+        price = item.unit_price if item else Decimal('0')
+        rows.append({
+            'date': po.cancelled_at or po.order_date,
+            'type': 'po_cancelled',
+            'type_label': '❌ ยกเลิกใบสั่งซื้อ',
+            'ref_number': po.po_number,
+            'ref_url': reverse('admin:stocks_purchaseorder_change', args=[po.pk]),
+            'quantity': qty,
+            'unit_price': price,
+            'total_value': qty * price,
+            'party': str(po.supplier) if po.supplier_id else '-',
+            'note': 'ยกเลิกใบสั่งซื้อ',
+        })
+
+    # 6. ยกเลิกใบสั่งขาย
+    cancelled_sos = (
+        SalesOrder.objects.filter(status='Cancelled', items__product=product)
+        .distinct().select_related('customer')
+    )
+    so_item_map = {
+        si.sales_order_id: si
+        for si in SalesItem.objects.filter(sales_order__in=cancelled_sos, product=product)
+    }
+    for so in cancelled_sos:
+        item = so_item_map.get(so.pk)
+        qty = item.quantity_ordered if item else 0
+        price = item.sale_price if item else Decimal('0')
+        rows.append({
+            'date': so.cancelled_at or so.order_date,
+            'type': 'so_cancelled',
+            'type_label': '❌ ยกเลิกใบสั่งขาย',
+            'ref_number': so.so_number,
+            'ref_url': reverse('admin:stocks_salesorder_change', args=[so.pk]),
+            'quantity': qty,
+            'unit_price': price,
+            'total_value': qty * price,
+            'party': str(so.customer) if so.customer_id else '-',
+            'note': 'ยกเลิกใบสั่งขาย',
+        })
+
+    # 7. แก้ไขข้อมูลสินค้า (ของเดิม — ประวัติการเปลี่ยนแปลงรายละเอียดข้อมูล)
+    content_type = ContentType.objects.get_for_model(Product)
+    edits = LogEntry.objects.filter(
+        content_type=content_type, object_id=str(product.pk)
+    ).select_related('user')
+    for e in edits:
+        who = e.user.get_full_name() or e.user.username if e.user_id else '-'
+        rows.append({
+            'date': e.action_time,
+            'type': 'edit',
+            'type_label': '📝 แก้ไขข้อมูลสินค้า',
+            'ref_number': '-',
+            'ref_url': None,
+            'quantity': None,
+            'unit_price': None,
+            'total_value': None,
+            'party': who,
+            'note': e.get_change_message(),
+        })
+
+    for row in rows:
+        row['date'] = _normalize_history_date(row['date'])
+    rows.sort(key=lambda r: r['date'], reverse=True)
+    return rows
+
+
 @admin.register(Product)
 class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'min_stock', 'unit','get_total_stock_value', 'has_bom', 'created_by')
@@ -1050,6 +1247,35 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
                 f"คำนวณอัตโนมัติ ({obj.name}): {', '.join(auto_filled)} บาท",
                 messages.INFO,
             )
+
+    # ✅ แทนที่หน้า "History" เดิม (ที่โชว์แค่การแก้ไขข้อมูล) ด้วยประวัติแบบเต็ม
+    # รวมซื้อเข้า/ขายออก/ผลิต/ยกเลิก เข้าไปด้วย — เรียกจากปุ่ม History เดิมของ Django admin ได้เลย
+    def history_view(self, request, object_id, extra_context=None):
+        from django.core.exceptions import PermissionDenied
+        from django.http import Http404
+        if not self.has_view_or_change_permission(request):
+            raise PermissionDenied
+        obj = self.get_object(request, object_id)
+        if obj is None:
+            raise Http404("ไม่พบสินค้านี้")
+
+        rows = build_product_history_rows(obj)
+
+        paginator = Paginator(rows, 50)
+        page_number = request.GET.get('p') or 1
+        page_obj = paginator.get_page(page_number)
+
+        context = {
+            **self.admin_site.each_context(request),
+            'title': f"ประวัติสินค้า: {obj.name}",
+            'object': obj,
+            'opts': self.model._meta,
+            'page_obj': page_obj,
+            'rows': page_obj.object_list,
+            'total_count': paginator.count,
+        }
+        context.update(extra_context or {})
+        return TemplateResponse(request, 'admin/product_history.html', context)
 
     class Media:
         js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน

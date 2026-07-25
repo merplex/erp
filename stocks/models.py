@@ -357,6 +357,7 @@ class PurchaseOrder(models.Model):
     departed_date = models.DateField(null=True, blank=True, verbose_name="วันที่ออกเดินทาง")
     arrived_date = models.DateField(null=True, blank=True, verbose_name="วันที่ถึงไทย")
     received_date = models.DateField(null=True, blank=True, verbose_name="วันที่ถึงโกดัง (ล่าสุด)")
+    cancelled_at = models.DateTimeField(null=True, blank=True, editable=False, verbose_name="วันที่ยกเลิก")
 
     class Meta:
         verbose_name_plural = "B1. ใบสั่งซื้อ (Purchase)"
@@ -444,9 +445,16 @@ class PurchaseOrder(models.Model):
                 pass 
 
         # 2. Logic ต่างประเทศ (VAT 0)
-        if self.supplier_id: 
+        if self.supplier_id:
             if hasattr(self.supplier, 'type') and self.supplier.type == 'International':
                 self.vat_percent = Decimal(0)
+
+        # 3. บันทึกวันที่ยกเลิก (สำหรับหน้าประวัติสินค้า)
+        if self.status == 'Cancelled':
+            if not self.cancelled_at:
+                self.cancelled_at = timezone.now()
+        else:
+            self.cancelled_at = None
 
         super().save(*args, **kwargs)
 
@@ -552,6 +560,7 @@ class SalesOrder(models.Model):
     status = models.CharField(max_length=20, default='Draft', choices=STATUS_CHOICES)
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True, editable=False, verbose_name="วันที่ยกเลิก")
 
     @property
     def total_items_price(self):
@@ -592,6 +601,12 @@ class SalesOrder(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.so_number: self.so_number = generate_number('SO', SalesOrder, 'so_number')
+        # บันทึกวันที่ยกเลิก (สำหรับหน้าประวัติสินค้า)
+        if self.status == 'Cancelled':
+            if not self.cancelled_at:
+                self.cancelled_at = timezone.now()
+        else:
+            self.cancelled_at = None
         super().save(*args, **kwargs)
 
     class Meta: verbose_name_plural = "B2. ใบสั่งขาย (Sales)"

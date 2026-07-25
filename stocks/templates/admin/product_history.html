@@ -1,0 +1,89 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<style>
+    .ph-summary { margin-bottom: 14px; color: #64748b; font-size: 13px; }
+    .ph-table-wrap { border: 1px solid #e2e8f0; border-radius: 8px; overflow: auto; background: #fff; }
+    .ph-table { width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; }
+    .ph-table th {
+        position: sticky; top: 0; background: #f8fafc; color: #475569;
+        text-align: left; padding: 10px 12px; border-bottom: 1px solid #e2e8f0; font-weight: 700;
+    }
+    .ph-table td { padding: 8px 12px; border-bottom: 1px solid #eef2f6; vertical-align: top; }
+    .ph-table tr:last-child td { border-bottom: none; }
+    .ph-type { font-weight: 600; }
+    .ph-ref a { color: #2563eb; text-decoration: none; font-weight: 600; }
+    .ph-ref a:hover { text-decoration: underline; }
+    .ph-num { text-align: right; font-variant-numeric: tabular-nums; }
+    .ph-qty-pos { color: #16a34a; font-weight: 700; }
+    .ph-qty-neg { color: #dc2626; font-weight: 700; }
+    .ph-note { white-space: normal; color: #64748b; max-width: 320px; }
+    .ph-pagination { display: flex; gap: 6px; align-items: center; margin-top: 14px; font-size: 13px; }
+    .ph-pagination a, .ph-pagination span {
+        display: inline-block; padding: 5px 12px; border-radius: 6px; border: 1px solid #cbd5e1;
+        color: #1e293b; text-decoration: none;
+    }
+    .ph-pagination .active { background: #2563eb; border-color: #2563eb; color: #fff; font-weight: 700; }
+    .ph-pagination .disabled { color: #cbd5e1; }
+</style>
+
+<div class="ph-summary">
+    สินค้า: <b>{{ object.name }}</b> &nbsp;|&nbsp; สต็อกปัจจุบัน: <b>{{ object.stock_quantity }} {{ object.unit }}</b>
+    &nbsp;|&nbsp; รวมทั้งหมด {{ total_count }} รายการ (แสดงหน้าละ 50 รายการ เรียงล่าสุดอยู่บนสุด)
+</div>
+
+<div class="ph-table-wrap">
+    <table class="ph-table">
+        <thead>
+            <tr>
+                <th>วันที่</th>
+                <th>ประเภท</th>
+                <th>เลขที่เอกสาร</th>
+                <th>คู่ค้า</th>
+                <th class="ph-num">จำนวน</th>
+                <th class="ph-num">ราคา/หน่วย</th>
+                <th class="ph-num">มูลค่ารวม</th>
+                <th>หมายเหตุ</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in rows %}
+            <tr>
+                <td>{{ row.date|date:"d/m/Y H:i" }}</td>
+                <td class="ph-type">{{ row.type_label }}</td>
+                <td class="ph-ref">
+                    {% if row.ref_url %}<a href="{{ row.ref_url }}" target="_blank">{{ row.ref_number }}</a>
+                    {% else %}{{ row.ref_number }}{% endif %}
+                </td>
+                <td>{{ row.party|default:"-" }}</td>
+                <td class="ph-num {% if row.quantity is not None %}{% if row.quantity < 0 %}ph-qty-neg{% else %}ph-qty-pos{% endif %}{% endif %}">
+                    {% if row.quantity is not None %}{{ row.quantity|floatformat:2 }}{% else %}-{% endif %}
+                </td>
+                <td class="ph-num">{% if row.unit_price is not None %}{{ row.unit_price|floatformat:2 }}{% else %}-{% endif %}</td>
+                <td class="ph-num">{% if row.total_value is not None %}{{ row.total_value|floatformat:2 }}{% else %}-{% endif %}</td>
+                <td class="ph-note">{{ row.note|default:"-" }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="8" style="text-align:center; color:#94a3b8; padding:24px;">ยังไม่มีประวัติของสินค้านี้</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% if page_obj.paginator.num_pages > 1 %}
+<div class="ph-pagination">
+    {% if page_obj.has_previous %}
+        <a href="?p={{ page_obj.previous_page_number }}">&laquo; ก่อนหน้า</a>
+    {% else %}
+        <span class="disabled">&laquo; ก่อนหน้า</span>
+    {% endif %}
+    <span class="active">หน้า {{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
+    {% if page_obj.has_next %}
+        <a href="?p={{ page_obj.next_page_number }}">ถัดไป &raquo;</a>
+    {% else %}
+        <span class="disabled">ถัดไป &raquo;</span>
+    {% endif %}
+</div>
+{% endif %}
+{% endblock %}
