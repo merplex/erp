@@ -360,27 +360,6 @@ class SalesPaymentInline(UnfoldTabularInline):
         return True
     
 # ---------------------------------------------------------
-# Inline แสดงรายการสินค้าในหน้ากลุ่มสินค้า (Category)
-# ---------------------------------------------------------
-class ProductInCategoryInline(UnfoldTabularInline):
-    model = Product
-    fields = ['get_barcode', 'buy_price', 'sale_price', 'stock_quantity', 'unit']
-    readonly_fields = fields # ให้ดูอย่างเดียว ไม่ให้แก้จากหน้านี้เพื่อความปลอดภัย
-    extra = 0
-    can_delete = False
-    verbose_name = "📦 สินค้าในกลุ่มนี้"
-    verbose_name_plural = "📦 รายการสินค้าทั้งหมดในกลุ่ม"
-
-    def has_add_permission(self, request, obj=None): return False
-
-    # ✅ เพิ่มฟังก์ชันนี้เพื่อดึงบาร์โค้ดมาแสดงในตาราง
-    def get_barcode(self, obj):
-        return obj.latest_barcode # ใช้ property ที่เราเขียนไว้ใน models.py
-    get_barcode.short_description = "บาร์โค้ด (ล่าสุด)"
-
-    def has_add_permission(self, request, obj=None): 
-        return False
-# ---------------------------------------------------------
 # 1. สร้าง Inline สำหรับแสดงสินค้าที่ใช้แท็กนี้
 # ---------------------------------------------------------
 class ProductInTagInline(UnfoldTabularInline):
@@ -1965,9 +1944,27 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
 
 @admin.register(ProductCategory)
 class ProductCategoryAdmin(UnfoldModelAdmin):
-    list_display = ('name',)
+    list_display = ('name', 'products_link')
     search_fields = ('name',)
-    inlines = [ProductInCategoryInline]
+    readonly_fields = ('products_link',)
+    fields = ('name', 'products_link')
+
+    def get_queryset(self, request):
+        from django.db.models import Count
+        return super().get_queryset(request).annotate(num_products=Count('product'))
+
+    def products_link(self, obj):
+        # ✅ ลิงก์ไปหน้ารายการสินค้าที่ filter ตาม category แทนการฝัง inline ทั้งหมด
+        # (category ที่มีสินค้าเป็นร้อยรายการทำให้หน้า change ช้ามาก ทั้งตอนโหลดและตอน save
+        # เพราะ Django ต้อง build/validate formset ของทุกแถวเสมอ ไม่ว่าจะแก้อะไรก็ตาม)
+        if not obj or not obj.pk:
+            return "-"
+        count = getattr(obj, 'num_products', None)
+        if count is None:
+            count = obj.product_set.count()
+        url = f"/admin/stocks/product/?category__id__exact={obj.pk}"
+        return format_html('<a class="button" href="{}">📦 ดูสินค้าในกลุ่มนี้ ({} รายการ)</a>', url, count)
+    products_link.short_description = "สินค้าในกลุ่มนี้"
 
     def changelist_view(self, request, extra_context=None):
         from django.db.models import Count
