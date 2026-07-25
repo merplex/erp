@@ -17,8 +17,6 @@
     <div><span class="label">ที่อยู่:</span> {{ obj.supplier.address|default:"-" }}</div>
     <div><span class="label">เบอร์โทร:</span> {{ obj.supplier.phone|default:"-" }}</div>
     <div><span class="label">เลข Invoice ผู้ขาย:</span> {{ obj.invoice_no_supplier|default:"-" }}</div>
-    <div><span class="label">สถานะ:</span> <span class="status-badge">{{ obj.get_status_display }}</span></div>
-    <div><span class="label">สถานะการเงิน:</span> {{ obj.get_payment_status_display }}</div>
     <div><span class="label">ผู้สร้างเอกสาร:</span> {{ obj.created_by.get_full_name|default:obj.created_by.username|default:"-" }}</div>
 </div>
 
