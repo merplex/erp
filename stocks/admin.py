@@ -360,50 +360,6 @@ class SalesPaymentInline(UnfoldTabularInline):
         return True
     
 # ---------------------------------------------------------
-# 1. สร้าง Inline สำหรับแสดงสินค้าที่ใช้แท็กนี้
-# ---------------------------------------------------------
-class ProductInTagInline(UnfoldTabularInline):
-    # ใช้ table กลางของ ManyToMany ระหว่าง Product และ Tags
-    model = Product.tags.through 
-    extra = 0
-    verbose_name = "สินค้าที่ใช้แท็กนี้"
-    verbose_name_plural = "รายการสินค้าทั้งหมดที่ใช้แท็กนี้"
-    
-    # ปรับให้ดูอย่างเดียว (Read-only) เพื่อความปลอดภัย ไม่ให้เผลอลบสินค้าจากหน้านี้
-    readonly_fields = ('product',)
-    can_delete = False
-    
-    def has_add_permission(self, request, obj=None): 
-        return False
-    
-    # ✅ แสดงฟิลด์ตามที่เปรมต้องการ
-    fields = ('get_product_name', 'get_barcode', 'get_buy_price', 'get_sale_price', 'get_stock')
-    readonly_fields = ('get_product_name', 'get_barcode', 'get_buy_price', 'get_sale_price', 'get_stock')
-
-    def get_product_name(self, obj):
-        # ใน ManyToMany Inline ต้องเข้าผ่าน obj.product นะครับ
-        return obj.product.name
-    get_product_name.short_description = "ชื่อสินค้า"
-
-    def get_barcode(self, obj):
-        # ✅ ดึงบาร์โค้ดล่าสุด (Last ID) ตามที่เปรมออกแบบไว้
-        barcode = obj.product.barcodes.order_by('-id').first()
-        return barcode.code if barcode else "-"
-    get_barcode.short_description = "บาร์โค้ดล่าสุด"
-
-    def get_buy_price(self, obj):
-        return f"{obj.product.buy_price:,.2f}"
-    get_buy_price.short_description = "ราคาทุน"
-
-    def get_sale_price(self, obj):
-        return f"{obj.product.sale_price:,.2f}"
-    get_sale_price.short_description = "ราคาขาย"
-
-    def get_stock(self, obj):
-        # ✅ แสดงสต็อกปัจจุบันพร้อมหน่วย
-        return f"{obj.product.stock_quantity} {obj.product.unit}"
-    get_stock.short_description = "สต็อกปัจจุบัน"
-# ---------------------------------------------------------
 # 1. รายการสั่งซื้อ (ค้างรับ) -> ใช้ po_number และติดลบ
 # ---------------------------------------------------------
 class PendingPurchaseInline(UnfoldTabularInline):
@@ -2010,8 +1966,7 @@ class ProductTagAdmin(UnfoldModelAdmin):
     # แสดงชื่อแท็กและตัวอย่างสีในหน้า List
     list_display = ('display_name_with_count', 'color')
     search_fields = ('name',)
-    # ✅ เพิ่ม Inline เข้าไปที่นี่ค่ะ
-    inlines = [ProductInTagInline]
+    readonly_fields = ('products_link',)
 
     def get_queryset(self, request):
         # ใช้ annotate นับจำนวนสินค้าที่เชื่อมกับ Tag นี้
@@ -2022,6 +1977,19 @@ class ProductTagAdmin(UnfoldModelAdmin):
         # เอาชื่อ Tag มาต่อด้วยจำนวนสินค้า
         return f"{obj.name} ({obj.product_count})"
     display_name_with_count.short_description = "ชื่อแท็ก (จำนวนสินค้า)"
+
+    def products_link(self, obj):
+        # ✅ ลิงก์ไปหน้ารายการสินค้าที่ filter ตาม tag แทนการฝัง inline ทั้งหมด
+        # (แท็กที่มีสินค้าเยอะๆ ทำให้หน้า change ช้ามาก ทั้งตอนโหลดและตอน save เหมือนที่แก้ไปแล้ว
+        # ใน ProductCategoryAdmin เพราะ Django ต้อง build/validate formset ของทุกแถวเสมอ)
+        if not obj or not obj.pk:
+            return "-"
+        count = getattr(obj, 'product_count', None)
+        if count is None:
+            count = obj.products.count()
+        url = f"/admin/stocks/product/?tags__id__exact={obj.pk}"
+        return format_html('<a class="button" href="{}">📦 ดูสินค้าที่ใช้แท็กนี้ ({} รายการ)</a>', url, count)
+    products_link.short_description = "สินค้าที่ใช้แท็กนี้"
 
     def color_display(self, obj):
         # แสดงเป็นกล่องสีสวยๆ ให้เห็นในหน้า Admin เลยครับ
