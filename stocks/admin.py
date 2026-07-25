@@ -1949,6 +1949,10 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         if supplier_id:
             qs = qs.filter(suppliers__id=supplier_id).distinct()
 
+        tag_ids = [t for t in request.GET.getlist('tag') if t.strip()]
+        if tag_ids:
+            qs = qs.filter(tags__id__in=tag_ids).distinct()
+
         price_range = request.GET.get('price_range', '').strip()
         if price_range == '0-100':
             qs = qs.filter(buy_price__lte=100)
@@ -1975,21 +1979,25 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             purchase_order__status__in=self._ACTIVE_PO,
         ).annotate(
             remaining=Greatest(F('quantity_ordered') - F('quantity_received'), Value(0))
-        ).filter(remaining__gt=0).values('product_id', 'remaining', 'purchase_order__order_date', 'purchase_order__po_number')
+        ).filter(remaining__gt=0).values(
+            'product_id', 'remaining', 'purchase_order_id', 'purchase_order__order_date', 'purchase_order__po_number'
+        )
 
         so_rows = SalesItem.objects.filter(
             product_id__in=product_ids,
             sales_order__status__in=self._ACTIVE_SO,
         ).annotate(
             remaining=Greatest(F('quantity_ordered') - F('quantity_shipped'), Value(0))
-        ).filter(remaining__gt=0).values('product_id', 'remaining', 'sales_order__order_date', 'sales_order__so_number')
+        ).filter(remaining__gt=0).values(
+            'product_id', 'remaining', 'sales_order_id', 'sales_order__order_date', 'sales_order__so_number'
+        )
 
         pd_rows = ProductionOrder.objects.filter(
             product_id__in=product_ids,
             status__in=self._ACTIVE_PD,
         ).annotate(
             remaining=Greatest(F('quantity_planned') - F('quantity_actual'), Value(0))
-        ).filter(remaining__gt=0).values('product_id', 'remaining', 'order_date', 'pd_number')
+        ).filter(remaining__gt=0).values('id', 'product_id', 'remaining', 'order_date', 'pd_number')
 
         usage_rows = ProductionMaterialUsage.objects.filter(
             raw_material_id__in=product_ids,
@@ -1997,28 +2005,41 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         ).annotate(
             remaining=Greatest(F('actual_qty_to_use') - F('used_so_far'), Value(0, output_field=DecimalField()))
         ).filter(remaining__gt=0).values(
-            'raw_material_id', 'remaining', 'production_order__order_date', 'production_order__pd_number'
+            'raw_material_id', 'remaining', 'production_order_id',
+            'production_order__order_date', 'production_order__pd_number',
         )
 
-        # เก็บ (วันที่, +/-จำนวน, เลขที่เอกสารอ้างอิง) ไว้โยงกลับไปดูใบสั่งซื้อ/ขาย/ผลิตที่เกี่ยวข้องได้
+        # เก็บ (วันที่, +/-จำนวน, เอกสารอ้างอิง {label, url}) ไว้โยงกลับไปดูใบสั่งซื้อ/ขาย/ผลิตที่เกี่ยวข้องได้ (คลิกได้)
         for row in po_rows:
             lead = products_by_id[row['product_id']].delivery_lead_time or 0
             event_date = row['purchase_order__order_date'] + timedelta(days=lead)
-            ref = f"PO {row['purchase_order__po_number']}"
+            ref = {
+                'label': f"PO {row['purchase_order__po_number']}",
+                'url': f"/admin/stocks/purchaseorder/{row['purchase_order_id']}/change/",
+            }
             events_by_product[row['product_id']].append((event_date, int(row['remaining']), ref))
 
         for row in so_rows:
-            ref = f"SO {row['sales_order__so_number']}"
+            ref = {
+                'label': f"SO {row['sales_order__so_number']}",
+                'url': f"/admin/stocks/salesorder/{row['sales_order_id']}/change/",
+            }
             events_by_product[row['product_id']].append((row['sales_order__order_date'], -int(row['remaining']), ref))
 
         for row in pd_rows:
             lead = products_by_id[row['product_id']].production_lead_time or 0
             event_date = row['order_date'] + timedelta(days=lead)
-            ref = f"PD {row['pd_number']}"
+            ref = {
+                'label': f"PD {row['pd_number']}",
+                'url': f"/admin/stocks/productionorder/{row['id']}/change/",
+            }
             events_by_product[row['product_id']].append((event_date, int(row['remaining']), ref))
 
         for row in usage_rows:
-            ref = f"PD {row['production_order__pd_number']}"
+            ref = {
+                'label': f"PD {row['production_order__pd_number']}",
+                'url': f"/admin/stocks/productionorder/{row['production_order_id']}/change/",
+            }
             events_by_product[row['raw_material_id']].append(
                 (row['production_order__order_date'], -int(row['remaining']), ref)
             )
@@ -2045,7 +2066,8 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                 'balance_full': f"{balance:,}",
                 'delta_fmt': fmt_qty(delta) if delta is not None else None,
                 'delta_full': f"{delta:+,}" if delta is not None else None,
-                'refs': ', '.join(refs) if refs else None,
+                'refs': refs or [],
+                'refs_text': ', '.join(r['label'] for r in refs) if refs else None,
             }
 
         rows = []
@@ -2111,9 +2133,11 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             'querystring': querystring.urlencode(),
             'categories': ProductCategory.objects.order_by('name'),
             'suppliers': Supplier.objects.order_by('company_name'),
+            'tags': ProductTag.objects.order_by('name'),
             'f_category': category_id,
             'f_is_product': is_product,
             'f_supplier': supplier_id,
+            'f_tag': tag_ids,
             'f_price_range': price_range,
         }
         return TemplateResponse(request, 'admin/stock_timeline.html', context)

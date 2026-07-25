@@ -16,6 +16,11 @@
         padding:6px 14px; border:none; border-radius:6px; background:#2563eb; color:#fff;
         font-weight:600; font-size:13px; cursor:pointer;
     }
+    .stp-print-btn {
+        display:inline-block; padding:6px 14px; border-radius:6px; background:#0f172a; color:#fff;
+        font-weight:600; font-size:13px; text-decoration:none; cursor:pointer; white-space:nowrap;
+    }
+    .stp-print-header { display:none; }
     .stp-filters-toggle { position:relative; }
     .stp-filters-toggle summary {
         list-style:none; cursor:pointer; padding:6px 14px; border-radius:6px;
@@ -62,15 +67,25 @@
     .stp-point .delta.neg { color:#dc2626; }
     .stp-point .balance { display:block; font-size:12px; font-weight:700; color:#1e293b; line-height:1.3; }
     .stp-point .dot { display:block; width:7px; height:7px; border-radius:50%; background:#2563eb; margin:2px 0; }
+    .stp-point .refs { display:block; font-size:10px; line-height:1.3; white-space:nowrap; }
+    .stp-point .refs a { color:#2563eb; text-decoration:underline; }
     .stp-pagination { display:flex; gap:8px; align-items:center; margin-top:14px; font-size:13px; }
     .stp-pagination a { color:#2563eb; text-decoration:none; }
     .stp-empty { padding:24px; text-align:center; color:#94a3b8; }
+    @page { size: landscape; margin: 10mm; }
+    @media print {
+        .stp-toolbar, .stp-pagination { display:none !important; }
+        .stp-print-header { display:block; font-size:16px; font-weight:700; margin-bottom:10px; }
+        .stp-table { border:none; overflow:visible; }
+        .stp-point .refs a { color:#000; }
+    }
 </style>
 <div class="stp-toolbar">
     <a class="stp-view-btn inactive" href="/admin/stocks/stockplanning/">📊 Forecast stock</a>
     <a class="stp-view-btn active" href="/admin/stocks/stockplanning/timeline/">📅 Timeline stock</a>
 
     <form class="stp-filter-form" method="get">
+        <a href="#" class="stp-print-btn" onclick="window.print(); return false;">🖨️ พิมพ์หน้านี้</a>
         <label for="stp-start">ช่วงเวลา:</label>
         <input type="date" id="stp-start" name="start" value="{{ start_date|date:'Y-m-d' }}">
         <span>–</span>
@@ -103,6 +118,13 @@
                         {% endfor %}
                     </select>
                 </label>
+                <label>Tag (เลือกได้หลายอัน)
+                    <select name="tag" multiple size="4">
+                        {% for t in tags %}
+                        <option value="{{ t.pk }}" {% if t.pk|stringformat:"s" in f_tag %}selected{% endif %}>{{ t.name }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
                 <label>ช่วงราคาทุน
                     <select name="price_range">
                         <option value="" {% if f_price_range == '' %}selected{% endif %}>ทั้งหมด</option>
@@ -118,6 +140,8 @@
         <button type="submit">แสดงผล</button>
     </form>
 </div>
+
+<div class="stp-print-header">📅 Timeline Stock &middot; {{ start_date|date:'d/m/Y' }} - {{ end_date|date:'d/m/Y' }}{% if q %} &middot; ค้นหา "{{ q }}"{% endif %}</div>
 
 <div class="stp-table">
     <div class="stp-gridlines">
@@ -154,13 +178,16 @@
                 {% for point in row.points %}
                 <div class="stp-point{% if forloop.last %} edge-end{% endif %}"
                      style="left: {{ point.pct }}%;"
-                     title="{% if point.date %}{{ point.date|date:'d/m/Y' }}: {% endif %}{% if point.delta_full %}{{ point.delta_full }} &rarr; {% endif %}คงเหลือ {{ point.balance_full }}{% if point.refs %} ({{ point.refs }}){% endif %}">
+                     title="{% if point.date %}{{ point.date|date:'d/m/Y' }}: {% endif %}{% if point.delta_full %}{{ point.delta_full }} &rarr; {% endif %}คงเหลือ {{ point.balance_full }}{% if point.refs_text %} ({{ point.refs_text }}){% endif %}">
                     {% if point.delta %}
                         <span class="delta {% if point.delta > 0 %}pos{% else %}neg{% endif %}">{% if point.delta > 0 %}+{{ point.delta_fmt }}{% else %}{{ point.delta_fmt }}{% endif %}</span>
                     {% else %}
                         <span class="dot"></span>
                     {% endif %}
                     <span class="balance">{{ point.balance_fmt }}</span>
+                    {% if point.refs %}
+                    <span class="refs">{% for r in point.refs %}<a href="{{ r.url }}" target="_blank">{{ r.label }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}</span>
+                    {% endif %}
                 </div>
                 {% endfor %}
             </div>
