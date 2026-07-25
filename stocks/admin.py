@@ -1986,6 +1986,30 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         for row in usage_rows:
             events_by_product[row['raw_material_id']].append((row['production_order__order_date'], -int(row['remaining'])))
 
+        def fmt_qty(n):
+            """ย่อเลขจำนวนมาก: 12,500 -> 12.5K, 3,200,000 -> 3.2M (ทศนิยม 1 ตำแหน่ง) — เอาไว้ให้ label ในกราฟไม่ยาวเกิน"""
+            n = int(n)
+            a = abs(n)
+            if a >= 1_000_000:
+                s = f"{a / 1_000_000:.1f}M"
+            elif a >= 1_000:
+                s = f"{a / 1_000:.1f}K"
+            else:
+                s = str(a)
+            return f"-{s}" if n < 0 else s
+
+        def make_point(pct, balance, delta=None, event_date=None):
+            return {
+                'pct': round(pct, 2),
+                'date': event_date,
+                'balance': balance,
+                'delta': delta,
+                'balance_fmt': fmt_qty(balance),
+                'balance_full': f"{balance:,}",
+                'delta_fmt': fmt_qty(delta) if delta is not None else None,
+                'delta_full': f"{delta:+,}" if delta is not None else None,
+            }
+
         rows = []
         for product in products:
             # เหตุการณ์ที่เกินวันสิ้นสุดช่วง → ตัดทิ้งไปเลย ไม่นับ (ยอดคาดการณ์ต้องตรงกับที่เห็นในกราฟ)
@@ -1998,27 +2022,41 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                 daily_delta[clamped] = daily_delta.get(clamped, 0) + delta
 
             running = product.stock_quantity
-            points = [{'pct': 0.0, 'balance': running, 'delta': None}]
+            points = [make_point(0.0, running)]
             for event_date in sorted(daily_delta):
                 delta = daily_delta[event_date]
                 running += delta
                 pct = (event_date - start_date).days / total_days * 100
-                points.append({'pct': round(pct, 2), 'date': event_date, 'balance': running, 'delta': delta})
+                points.append(make_point(pct, running, delta, event_date))
 
             if points[-1]['pct'] < 100:
-                points.append({'pct': 100.0, 'balance': running, 'delta': None})
+                points.append(make_point(100.0, running))
 
             rows.append({'product': product, 'points': points})
 
         querystring = request.GET.copy()
         querystring.pop('page', None)
 
-        num_ticks = 6
-        ticks = []
-        for i in range(num_ticks + 1):
-            pct = i / num_ticks * 100
-            tick_date = start_date + timedelta(days=round(total_days * i / num_ticks))
-            ticks.append({'pct': round(pct, 2), 'date': tick_date})
+        # เส้นแบ่งแนวตั้งตามวันที่: เส้นบางทุกวัน + เส้นเข้ม (dashed) ทุก 5 วันไว้จับตำแหน่งง่ายๆ
+        # คำนวณครั้งเดียวสำหรับทั้งตาราง (ไม่ผูกกับแต่ละแถว) เพื่อไม่ให้ช้าตอน 200 แถว
+        strong_every = 5
+        day_step = 1 if total_days <= 120 else strong_every
+        gridlines = []
+        d = 0
+        while d <= total_days:
+            gridlines.append({
+                'pct': round(d / total_days * 100, 2),
+                'date': start_date + timedelta(days=d),
+                'strong': (d % strong_every == 0),
+            })
+            d += day_step
+        if gridlines[-1]['pct'] < 100:
+            gridlines.append({'pct': 100.0, 'date': end_date, 'strong': True})
+        # ป้ายวันที่ตัวแรก/ตัวสุดท้าย ต้องชิดขอบ ไม่ใช้กึ่งกลาง ไม่งั้นโดน overflow:hidden ตัดขาด
+        strong_ticks = [g for g in gridlines if g['strong']]
+        if strong_ticks:
+            strong_ticks[0]['tick_align'] = 'start'
+            strong_ticks[-1]['tick_align'] = 'end'
 
         context = {
             **self.admin_site.each_context(request),
@@ -2027,7 +2065,7 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             'rows': rows,
             'start_date': start_date,
             'end_date': end_date,
-            'ticks': ticks,
+            'gridlines': gridlines,
             'q': q,
             'page_obj': page_obj,
             'querystring': querystring.urlencode(),
