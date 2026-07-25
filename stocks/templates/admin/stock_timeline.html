@@ -38,6 +38,11 @@
     .stp-axis-row { position:relative; z-index:1; display:flex; border-bottom:1px solid #e2e8f0; background:#f8fafc; }
     .stp-info-col { width:280px; flex-shrink:0; padding:10px 14px; font-size:12px; font-weight:700; color:#475569; }
     .stp-bar-col { flex:1; position:relative; min-width:520px; height:32px; }
+    /* ⚠️ .stp-track คือ containing block จริงของ tick/point (left:X% คำนวณจากกรอบนี้)
+       ต้องมี left/right เท่ากับ .stp-gridlines ทุกตัวเป๊ะๆ (292px/12px นับจาก .stp-table)
+       ไม่งั้นเปอร์เซ็นต์ของจุด/ป้ายวันที่ กับเส้น grid จะอ้างอิงกรอบกว้างไม่เท่ากัน แล้วเพี้ยนสะสมมากขึ้นเรื่อยๆ
+       ยิ่งไปทางขวายิ่งเห็นชัด (นี่คือบั๊กที่ทำให้ตัวเลขไม่ตรงเส้นมาก่อนหน้านี้) */
+    .stp-track { position:absolute; left:12px; right:12px; top:0; bottom:0; }
     .stp-tick { position:absolute; top:8px; transform:translateX(6px); text-align:left; font-size:11px; font-weight:700; color:#0f172a; white-space:nowrap; }
     .stp-tick.tick-end { transform:translateX(calc(-100% - 6px)); text-align:right; }
     .stp-row { position:relative; z-index:1; display:flex; border-bottom:1px solid #eef2f6; }
@@ -45,10 +50,10 @@
     .stp-row:nth-child(even) { background:#fbfcfe; }
     .stp-info-col .name { font-weight:600; color:#1e293b; font-size:13px; }
     .stp-info-col .meta { font-size:11px; color:#64748b; margin-top:2px; }
-    .stp-bar-col { padding:18px 12px; }
-    .stp-line { position:absolute; left:12px; right:12px; top:50%; height:1px; background:#cbd5e1; }
-    .stp-point { position:absolute; top:0; transform:translateX(6px); text-align:left; min-width:56px; cursor:default; }
-    .stp-point.edge-end { transform:translateX(calc(-100% - 6px)); text-align:right; }
+    .stp-bar-col { padding:18px 0; }
+    .stp-line { position:absolute; left:0; right:0; top:50%; height:1px; background:#cbd5e1; }
+    .stp-point { position:absolute; top:50%; transform:translate(6px, -50%); text-align:left; min-width:56px; cursor:default; }
+    .stp-point.edge-end { transform:translate(calc(-100% - 6px), -50%); text-align:right; }
     .stp-point.edge-end .dot { margin-left:auto; margin-right:0; }
     .stp-point .delta { display:block; font-size:11px; font-weight:700; line-height:1.3; }
     .stp-point .delta.pos { color:#16a34a; }
@@ -121,11 +126,13 @@
     <div class="stp-axis-row">
         <div class="stp-info-col">สินค้า (สต็อกปัจจุบัน / Min Stock)</div>
         <div class="stp-bar-col">
-            {% for g in gridlines %}
-            {% if g.strong %}
-            <div class="stp-tick{% if g.tick_align == 'end' %} tick-end{% endif %}" style="left: {{ g.pct }}%;">{{ g.date|date:'d/m' }}</div>
-            {% endif %}
-            {% endfor %}
+            <div class="stp-track">
+                {% for g in gridlines %}
+                {% if g.strong %}
+                <div class="stp-tick{% if g.tick_align == 'end' %} tick-end{% endif %}" style="left: {{ g.pct }}%;">{{ g.date|date:'d/m' }}</div>
+                {% endif %}
+                {% endfor %}
+            </div>
         </div>
     </div>
 
@@ -140,19 +147,21 @@
             </div>
         </div>
         <div class="stp-bar-col">
-            <div class="stp-line"></div>
-            {% for point in row.points %}
-            <div class="stp-point{% if forloop.last %} edge-end{% endif %}"
-                 style="left: {{ point.pct }}%;"
-                 title="{% if point.date %}{{ point.date|date:'d/m/Y' }}: {% endif %}{% if point.delta_full %}{{ point.delta_full }} &rarr; {% endif %}คงเหลือ {{ point.balance_full }}">
-                {% if point.delta %}
-                    <span class="delta {% if point.delta > 0 %}pos{% else %}neg{% endif %}">{% if point.delta > 0 %}+{{ point.delta_fmt }}{% else %}{{ point.delta_fmt }}{% endif %}</span>
-                {% else %}
-                    <span class="dot"></span>
-                {% endif %}
-                <span class="balance">{{ point.balance_fmt }}</span>
+            <div class="stp-track">
+                <div class="stp-line"></div>
+                {% for point in row.points %}
+                <div class="stp-point{% if forloop.last %} edge-end{% endif %}"
+                     style="left: {{ point.pct }}%;"
+                     title="{% if point.date %}{{ point.date|date:'d/m/Y' }}: {% endif %}{% if point.delta_full %}{{ point.delta_full }} &rarr; {% endif %}คงเหลือ {{ point.balance_full }}">
+                    {% if point.delta %}
+                        <span class="delta {% if point.delta > 0 %}pos{% else %}neg{% endif %}">{% if point.delta > 0 %}+{{ point.delta_fmt }}{% else %}{{ point.delta_fmt }}{% endif %}</span>
+                    {% else %}
+                        <span class="dot"></span>
+                    {% endif %}
+                    <span class="balance">{{ point.balance_fmt }}</span>
+                </div>
+                {% endfor %}
             </div>
-            {% endfor %}
         </div>
     </div>
     {% empty %}
