@@ -1927,11 +1927,14 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         total_days = max((end_date - start_date).days, 1)
 
         q = request.GET.get('q', '').strip()
-        qs = self.get_queryset(request).order_by('name')
+        # ⚠️ ใช้ queryset เปล่า ๆ (ไม่เรียก self.get_queryset ของ get_queryset ด้านบน) เพราะอันนั้นมี
+        # subquery annotate _pending_in/out/receipt/usage ที่หนักและไม่ได้ใช้ในหน้านี้เลย —
+        # หน้านี้คำนวณ event เองแยกด้านล่างอยู่แล้ว ตัดออกให้เบาและเร็วขึ้น
+        qs = self.model.objects.select_related('category').order_by('name')
         if q:
             qs, _ = self.get_search_results(request, qs, q)
 
-        paginator = Paginator(qs, 25)
+        paginator = Paginator(qs, 200)
         page_obj = paginator.get_page(request.GET.get('page', 1))
         products = list(page_obj.object_list)
         product_ids = [p.pk for p in products]
