@@ -1898,16 +1898,34 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     def get_urls(self):
         custom_urls = [
             path('timeline/', self.admin_site.admin_view(self.timeline_view), name='stocks_stockplanning_timeline'),
+            path('timeline/print/', self.admin_site.admin_view(self.timeline_print_view), name='stocks_stockplanning_timeline_print'),
         ]
         return custom_urls + super().get_urls()
 
     def timeline_view(self, request):
+        data = self._timeline_data(request)
+        context = {
+            **self.admin_site.each_context(request),
+            'title': '📅 Timeline Stock',
+            'opts': self.model._meta,
+            **data,
+        }
+        return TemplateResponse(request, 'admin/stock_timeline.html', context)
+
+    def timeline_print_view(self, request):
+        """หน้าพิมพ์ Timeline stock: ตารางล้วนๆ ไม่มี chrome ของแอดมิน (เหมือนหน้าพิมพ์ใบสั่งซื้อ/ขาย)"""
+        data = self._timeline_data(request)
+        return TemplateResponse(request, 'admin/stock_timeline_print.html', data)
+
+    def _timeline_data(self, request):
         """
-        View 'Timeline stock': กราฟ Gantt แบบ % position แสดงสต็อกปัจจุบันที่จุดเริ่ม
-        แล้ว plot รายการรับ/ส่ง/ผลิต ที่ยัง pending อยู่ ตามวันที่ประมาณการ
-        (PO: order_date + delivery_lead_time, SO: order_date, PD รับ: order_date +
-        production_lead_time, PD เบิกวัตถุดิบ: order_date ของใบสั่งผลิต) จนถึงยอดคาดการณ์
-        สุดท้าย ณ วันสิ้นสุดช่วงที่เลือก — เหตุการณ์ที่เกินช่วงที่แสดงจะไม่ถูกนับเลย
+        คำนวณข้อมูล Timeline stock (rows + gridlines) ใช้ร่วมกันทั้งหน้าเว็บปกติ (timeline_view)
+        และหน้าพิมพ์ (timeline_print_view) เพื่อให้ตารางตรงกันเป๊ะๆ ไม่ต้องคำนวณซ้ำสองที่
+
+        กราฟ Gantt แบบ % position แสดงสต็อกปัจจุบันที่จุดเริ่ม แล้ว plot รายการรับ/ส่ง/ผลิต
+        ที่ยัง pending อยู่ ตามวันที่ประมาณการ (PO: order_date + delivery_lead_time, SO: order_date,
+        PD รับ: order_date + production_lead_time, PD เบิกวัตถุดิบ: order_date ของใบสั่งผลิต)
+        จนถึงยอดคาดการณ์สุดท้าย ณ วันสิ้นสุดช่วงที่เลือก — เหตุการณ์ที่เกินช่วงที่แสดงจะไม่ถูกนับเลย
         เพื่อให้ยอดคาดการณ์ตรงกับสิ่งที่เห็นบนหน้าจอ
         """
         from django.core.paginator import Paginator
@@ -2120,10 +2138,30 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         if strong_ticks:
             strong_ticks[-1]['tick_align'] = 'end'
 
-        context = {
-            **self.admin_site.each_context(request),
-            'title': '📅 Timeline Stock',
-            'opts': self.model._meta,
+        # สรุป filter ที่ใช้อยู่เป็นข้อความ (ไว้โชว์เป็นหัวกระดาษตอนพิมพ์ แทนฟอร์ม filter ที่กดเลือกได้จริง)
+        filter_summary_parts = [f"ช่วงเวลา {start_date:%d/%m/%Y} - {end_date:%d/%m/%Y}"]
+        if q:
+            filter_summary_parts.append(f'ค้นหา "{q}"')
+        if category_id:
+            cat = ProductCategory.objects.filter(pk=category_id).first()
+            if cat:
+                filter_summary_parts.append(f"หมวดหมู่ {cat.name}")
+        if supplier_id:
+            sup = Supplier.objects.filter(pk=supplier_id).first()
+            if sup:
+                filter_summary_parts.append(f"Supplier {sup.company_name}")
+        if tag_ids:
+            tag_names = list(ProductTag.objects.filter(pk__in=tag_ids).values_list('name', flat=True))
+            if tag_names:
+                filter_summary_parts.append(f"Tag {', '.join(tag_names)}")
+        if is_product == 'false':
+            filter_summary_parts.append("ไม่ใช่สินค้า")
+        elif is_product == 'all':
+            filter_summary_parts.append("สินค้า+อื่นๆ ทั้งหมด")
+        if price_range:
+            filter_summary_parts.append(f"ราคาทุน {price_range}")
+
+        return {
             'rows': rows,
             'start_date': start_date,
             'end_date': end_date,
@@ -2139,8 +2177,8 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             'f_supplier': supplier_id,
             'f_tag': tag_ids,
             'f_price_range': price_range,
+            'filter_summary': ' | '.join(filter_summary_parts),
         }
-        return TemplateResponse(request, 'admin/stock_timeline.html', context)
 
     class Media:
         js = ('js/admin_sum_selected.js', 'js/stock_view_toggle.js') # เรียกไฟล์ JS มาใช้งาน

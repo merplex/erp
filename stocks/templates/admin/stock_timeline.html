@@ -20,7 +20,6 @@
         display:inline-block; padding:6px 14px; border-radius:6px; background:#0f172a; color:#fff;
         font-weight:600; font-size:13px; text-decoration:none; cursor:pointer; white-space:nowrap;
     }
-    .stp-print-header { display:none; }
     .stp-filters-toggle { position:relative; }
     .stp-filters-toggle summary {
         list-style:none; cursor:pointer; padding:6px 14px; border-radius:6px;
@@ -77,20 +76,13 @@
     .stp-pagination { display:flex; gap:8px; align-items:center; margin-top:14px; font-size:13px; }
     .stp-pagination a { color:#2563eb; text-decoration:none; }
     .stp-empty { padding:24px; text-align:center; color:#94a3b8; }
-    @page { size: landscape; margin: 10mm; }
-    @media print {
-        .stp-toolbar, .stp-pagination { display:none !important; }
-        .stp-print-header { display:block; font-size:16px; font-weight:700; margin-bottom:10px; }
-        .stp-table { border:none; overflow:visible; }
-        .stp-point .refs a { color:#000; }
-    }
 </style>
 <div class="stp-toolbar">
     <a class="stp-view-btn inactive" href="/admin/stocks/stockplanning/">📊 Forecast stock</a>
     <a class="stp-view-btn active" href="/admin/stocks/stockplanning/timeline/">📅 Timeline stock</a>
 
     <form class="stp-filter-form" method="get">
-        <a href="#" class="stp-print-btn" onclick="window.print(); return false;">🖨️ พิมพ์หน้านี้</a>
+        <a href="/admin/stocks/stockplanning/timeline/print/?{{ querystring }}&page={{ page_obj.number }}" target="_blank" class="stp-print-btn">🖨️ พิมพ์หน้านี้</a>
         <label for="stp-start">ช่วงเวลา:</label>
         <input type="date" id="stp-start" name="start" value="{{ start_date|date:'Y-m-d' }}">
         <span>–</span>
