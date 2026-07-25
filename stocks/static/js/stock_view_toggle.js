@@ -5,7 +5,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     const wrap = document.createElement('div');
     wrap.id = 'stock-view-toggle';
-    wrap.style.cssText = 'display:flex;gap:6px;flex-shrink:0;';
+    wrap.style.cssText = 'display:flex;gap:6px;flex-shrink:0;flex-wrap:nowrap;align-items:center;margin-right:8px;';
 
     function makeBtn(label, href, active) {
         const a = document.createElement('a');
@@ -27,12 +27,29 @@ document.addEventListener('DOMContentLoaded', function () {
     wrap.appendChild(makeBtn('📊 Forecast stock', '/admin/stocks/stockplanning/', !isTimeline));
     wrap.appendChild(makeBtn('📅 Timeline stock', '/admin/stocks/stockplanning/timeline/', isTimeline));
 
-    // unfold layout: #changelist-search อยู่ใน flex-row เดียวกับปุ่ม filter (เหมือน admin_sum_selected.js)
-    const searchForm = document.querySelector('#changelist-search');
-    const filterBtn = document.querySelector('[x-on\\:click*="filterOpen"]');
+    // หาปุ่ม Filters: ลอง selector แบบ Alpine ก่อน (x-on:click / @click ตัวย่อ)
+    // ถ้าหาไม่เจอ fallback เป็นการหา element ที่ข้อความตรงกับ "Filters" เป๊ะๆ
+    // (กันเคส Unfold เปลี่ยน syntax ภายใน แล้ว selector เดิมไม่ match — เกิดปัญหานี้มาแล้วครั้งนึง)
+    function findFilterBtn() {
+        let btn = document.querySelector('[x-on\\:click*="filterOpen"]')
+            || document.querySelector('[\\@click*="filterOpen"]');
+        if (btn) return btn;
+        const candidates = document.querySelectorAll('button, a, summary');
+        for (const el of candidates) {
+            if (el.textContent.trim() === 'Filters' || el.textContent.trim() === 'Filter') {
+                return el;
+            }
+        }
+        return null;
+    }
 
-    if (searchForm && filterBtn && searchForm.parentNode.contains(filterBtn)) {
-        searchForm.parentNode.insertBefore(wrap, filterBtn);
+    const searchForm = document.querySelector('#changelist-search');
+    const filterBtn = findFilterBtn();
+
+    if (filterBtn) {
+        // แทรกไว้ก่อนปุ่ม Filters เลย ไม่สนว่า parent เดียวกับ search หรือไม่
+        // (ตำแหน่งที่ต้องการคือ "ติดซ้ายปุ่ม Filters" เป็นหลัก)
+        filterBtn.parentNode.insertBefore(wrap, filterBtn);
     } else if (searchForm) {
         searchForm.insertAdjacentElement('afterend', wrap);
     } else {
