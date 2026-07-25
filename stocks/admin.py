@@ -1908,7 +1908,9 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             raw_material=OuterRef('pk'),
             production_order__status__in=self._ACTIVE_PD,
         ).values('raw_material').annotate(
-            t=Sum(Greatest(F('actual_qty_to_use') - F('used_so_far'), Value(0)))
+            # actual_qty_to_use/used_so_far เป็น DecimalField ต้องระบุ output_field ให้ Value(0) ชัดเจน
+            # ไม่งั้น Django จะ error "mixed types: DecimalField, IntegerField"
+            t=Sum(Greatest(F('actual_qty_to_use') - F('used_so_far'), Value(0, output_field=DecimalField())))
         ).values('t')
 
         return qs.annotate(
