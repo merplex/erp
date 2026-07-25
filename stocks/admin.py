@@ -1931,6 +1931,34 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         # subquery annotate _pending_in/out/receipt/usage ที่หนักและไม่ได้ใช้ในหน้านี้เลย —
         # หน้านี้คำนวณ event เองแยกด้านล่างอยู่แล้ว ตัดออกให้เบาและเร็วขึ้น
         qs = self.model.objects.select_related('category').order_by('name')
+
+        # Filters (เหมือนหน้า Forecast): category / ประเภทรายการ / supplier / ช่วงราคาทุน
+        category_id = request.GET.get('category', '').strip()
+        if category_id:
+            qs = qs.filter(category_id=category_id)
+
+        is_product = request.GET.get('is_product', '').strip()
+        if is_product == 'false':
+            qs = qs.filter(is_product=False)
+        elif is_product == 'all':
+            pass
+        else:
+            qs = qs.filter(is_product=True)  # default เหมือน ProductOnlyFilter
+
+        supplier_id = request.GET.get('supplier', '').strip()
+        if supplier_id:
+            qs = qs.filter(suppliers__id=supplier_id).distinct()
+
+        price_range = request.GET.get('price_range', '').strip()
+        if price_range == '0-100':
+            qs = qs.filter(buy_price__lte=100)
+        elif price_range == '101-500':
+            qs = qs.filter(buy_price__gt=100, buy_price__lte=500)
+        elif price_range == '501-1000':
+            qs = qs.filter(buy_price__gt=500, buy_price__lte=1000)
+        elif price_range == '1001-plus':
+            qs = qs.filter(buy_price__gt=1000)
+
         if q:
             qs, _ = self.get_search_results(request, qs, q)
 
@@ -2068,6 +2096,12 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             'q': q,
             'page_obj': page_obj,
             'querystring': querystring.urlencode(),
+            'categories': ProductCategory.objects.order_by('name'),
+            'suppliers': Supplier.objects.order_by('company_name'),
+            'f_category': category_id,
+            'f_is_product': is_product,
+            'f_supplier': supplier_id,
+            'f_price_range': price_range,
         }
         return TemplateResponse(request, 'admin/stock_timeline.html', context)
 

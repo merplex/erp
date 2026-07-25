@@ -16,6 +16,21 @@
         padding:6px 14px; border:none; border-radius:6px; background:#2563eb; color:#fff;
         font-weight:600; font-size:13px; cursor:pointer;
     }
+    .stp-filters-toggle { position:relative; }
+    .stp-filters-toggle summary {
+        list-style:none; cursor:pointer; padding:6px 14px; border-radius:6px;
+        background:#f0f4f8; color:#1e293b; border:1px solid #cbd5e1; font-weight:600;
+    }
+    .stp-filters-toggle summary::-webkit-details-marker { display:none; }
+    .stp-filters-toggle[open] summary { background:#e2e8f0; }
+    .stp-filters-panel {
+        position:absolute; top:calc(100% + 4px); left:0; z-index:5;
+        display:flex; flex-direction:column; gap:10px; min-width:220px;
+        background:#fff; border:1px solid #cbd5e1; border-radius:8px; padding:12px;
+        box-shadow:0 4px 12px rgba(0,0,0,0.08);
+    }
+    .stp-filters-panel label { display:flex; flex-direction:column; gap:3px; font-size:12px; color:#64748b; }
+    .stp-filters-panel select { padding:5px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:13px; color:#1e293b; }
     .stp-table { position:relative; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; background:#fff; }
     .stp-gridlines { position:absolute; left:292px; right:12px; top:0; bottom:0; pointer-events:none; z-index:2; }
     .stp-gridline { position:absolute; top:0; bottom:0; width:1px; background:#e2e8f0; }
@@ -54,6 +69,45 @@
         <span>–</span>
         <input type="date" name="end" value="{{ end_date|date:'Y-m-d' }}">
         <input type="text" name="q" placeholder="ค้นหาสินค้า..." value="{{ q }}">
+
+        <details class="stp-filters-toggle">
+            <summary>🔧 Filters</summary>
+            <div class="stp-filters-panel">
+                <label>Category
+                    <select name="category">
+                        <option value="">ทั้งหมด</option>
+                        {% for c in categories %}
+                        <option value="{{ c.pk }}" {% if f_category == c.pk|stringformat:"s" %}selected{% endif %}>{{ c.name }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label>ประเภทรายการ
+                    <select name="is_product">
+                        <option value="" {% if f_is_product == '' or f_is_product == 'true' %}selected{% endif %}>สินค้าเท่านั้น</option>
+                        <option value="false" {% if f_is_product == 'false' %}selected{% endif %}>ไม่ใช่สินค้า (ค่าบริการ/อื่นๆ)</option>
+                        <option value="all" {% if f_is_product == 'all' %}selected{% endif %}>แสดงทั้งหมด</option>
+                    </select>
+                </label>
+                <label>Supplier
+                    <select name="supplier">
+                        <option value="">ทั้งหมด</option>
+                        {% for s in suppliers %}
+                        <option value="{{ s.pk }}" {% if f_supplier == s.pk|stringformat:"s" %}selected{% endif %}>{{ s.company_name }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label>ช่วงราคาทุน
+                    <select name="price_range">
+                        <option value="" {% if f_price_range == '' %}selected{% endif %}>ทั้งหมด</option>
+                        <option value="0-100" {% if f_price_range == '0-100' %}selected{% endif %}>0 - 100 บาท</option>
+                        <option value="101-500" {% if f_price_range == '101-500' %}selected{% endif %}>101 - 500 บาท</option>
+                        <option value="501-1000" {% if f_price_range == '501-1000' %}selected{% endif %}>501 - 1,000 บาท</option>
+                        <option value="1001-plus" {% if f_price_range == '1001-plus' %}selected{% endif %}>มากกว่า 1,000 บาท</option>
+                    </select>
+                </label>
+            </div>
+        </details>
+
         <button type="submit">แสดงผล</button>
     </form>
 </div>
