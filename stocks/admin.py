@@ -2131,8 +2131,13 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                 'strong': (d % strong_every == 0),
             })
             d += day_step
+        # ⚠️ วันสุดท้ายของช่วง (d == total_days) จะได้ pct=100 เป๊ะเสมอจาก loop ข้างบนอยู่แล้ว แต่ไม่ได้
+        # แปลว่ามันจะ strong=True เสมอ (เช่น total_days=29 → 29 % 5 != 0) ถ้าปล่อยแบบนั้นป้ายวันที่สุดท้าย
+        # จะหายไปเฉยๆ (ดูว่างๆ ตรงขอบขวา) ต้องบังคับให้ตัวสุดท้ายเป็น strong เสมอ ไม่ว่าจะ append ใหม่หรือมีอยู่แล้ว
         if gridlines[-1]['pct'] < 100:
             gridlines.append({'pct': 100.0, 'date': end_date, 'strong': True})
+        else:
+            gridlines[-1]['strong'] = True
         # ป้ายวันที่ตัวสุดท้าย ต้องชิดขอบขวา ไม่งั้นโดน overflow:hidden ตัดขาด (ตัวอื่นชิดซ้ายของเส้นอยู่แล้วโดย default)
         strong_ticks = [g for g in gridlines if g['strong']]
         if strong_ticks:
