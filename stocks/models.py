@@ -118,6 +118,7 @@ class Product(models.Model):
     sale_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, verbose_name="ราคาขาย")
     unit = models.CharField(max_length=50, default="ชิ้น", verbose_name="หน่วย")
     stock_quantity = models.IntegerField(default=0, verbose_name="สต็อกปัจจุบัน")
+    min_stock = models.PositiveIntegerField(default=0, verbose_name="สต็อกขั้นต่ำ (Min Stock)")
     production_lead_time = models.IntegerField(default=0, blank=True, null=True, verbose_name="ระยะเวลาผลิต (วัน)")
     delivery_lead_time = models.IntegerField(default=0, verbose_name="ระยะเวลาส่งมอบ (วัน)")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="prod_created")

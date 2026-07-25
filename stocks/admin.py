@@ -862,7 +862,7 @@ class ProductBarcodeAdmin(ExportToExcelMixin, UnfoldModelAdmin):
 
 @admin.register(Product)
 class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
-    list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'unit','get_total_stock_value', 'has_bom', 'created_by')
+    list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'min_stock', 'unit','get_total_stock_value', 'has_bom', 'created_by')
     list_filter = ('category','is_product', 'tags', 'has_bom', 'suppliers')
     search_fields = ('name', 'barcodes__code','tags__name')
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
@@ -870,7 +870,7 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     actions = ['export_to_excel', 'auto_fill_cost_price']
     fieldsets = (
         (None, {
-            'fields': ('name', 'category', 'is_product', 'tags', 'has_bom', 'unit', 'stock_quantity', 'production_lead_time', 'delivery_lead_time')
+            'fields': ('name', 'category', 'is_product', 'tags', 'has_bom', 'unit', 'stock_quantity', 'min_stock', 'production_lead_time', 'delivery_lead_time')
         }),
         ('💰 ต้นทุน & ราคาขาย', {
             'fields': (('auto_cost', 'manual_buy_price'), ('buy_price', 'sale_price')),
@@ -1803,7 +1803,7 @@ class BuyPriceRangeFilter(admin.SimpleListFilter):
 
 @admin.register(StockPlanning)
 class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
-    list_display = ('name', 'category', 'stock_quantity', 'get_pending_in', 'get_pending_out', 'get_pending_prod', 'get_available', 'buy_price', 'get_total_inventory_value')
+    list_display = ('name', 'category', 'stock_quantity', 'min_stock', 'get_pending_in', 'get_pending_out', 'get_pending_prod', 'get_available', 'buy_price', 'get_total_inventory_value')
     list_filter = ('category', 'suppliers', ProductOnlyFilter, BuyPriceRangeFilter)
     search_fields = ('name', 'barcodes__code', 'tags__name')
     actions = ['export_to_excel']
@@ -1895,8 +1895,144 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         )
     get_total_inventory_value.short_description = "มูลค่ารวม"
 
+    def get_urls(self):
+        custom_urls = [
+            path('timeline/', self.admin_site.admin_view(self.timeline_view), name='stocks_stockplanning_timeline'),
+        ]
+        return custom_urls + super().get_urls()
+
+    def timeline_view(self, request):
+        """
+        View 'Timeline stock': กราฟ Gantt แบบ % position แสดงสต็อกปัจจุบันที่จุดเริ่ม
+        แล้ว plot รายการรับ/ส่ง/ผลิต ที่ยัง pending อยู่ ตามวันที่ประมาณการ
+        (PO: order_date + delivery_lead_time, SO: order_date, PD รับ: order_date +
+        production_lead_time, PD เบิกวัตถุดิบ: order_date ของใบสั่งผลิต) จนถึงยอดคาดการณ์
+        สุดท้าย ณ วันสิ้นสุดช่วงที่เลือก — เหตุการณ์ที่เกินช่วงที่แสดงจะไม่ถูกนับเลย
+        เพื่อให้ยอดคาดการณ์ตรงกับสิ่งที่เห็นบนหน้าจอ
+        """
+        from django.core.paginator import Paginator
+        from .models import PurchaseItem, SalesItem, ProductionOrder, ProductionMaterialUsage
+
+        today = datetime.date.today()
+        try:
+            start_date = datetime.date.fromisoformat(request.GET.get('start', ''))
+        except ValueError:
+            start_date = today
+        try:
+            end_date = datetime.date.fromisoformat(request.GET.get('end', ''))
+        except ValueError:
+            end_date = start_date + timedelta(days=60)
+        if end_date <= start_date:
+            end_date = start_date + timedelta(days=60)
+        total_days = max((end_date - start_date).days, 1)
+
+        q = request.GET.get('q', '').strip()
+        qs = self.get_queryset(request).order_by('name')
+        if q:
+            qs, _ = self.get_search_results(request, qs, q)
+
+        paginator = Paginator(qs, 25)
+        page_obj = paginator.get_page(request.GET.get('page', 1))
+        products = list(page_obj.object_list)
+        product_ids = [p.pk for p in products]
+        products_by_id = {p.pk: p for p in products}
+
+        events_by_product = {pid: [] for pid in product_ids}
+
+        po_rows = PurchaseItem.objects.filter(
+            product_id__in=product_ids,
+            purchase_order__status__in=self._ACTIVE_PO,
+        ).annotate(
+            remaining=Greatest(F('quantity_ordered') - F('quantity_received'), Value(0))
+        ).filter(remaining__gt=0).values('product_id', 'remaining', 'purchase_order__order_date')
+
+        so_rows = SalesItem.objects.filter(
+            product_id__in=product_ids,
+            sales_order__status__in=self._ACTIVE_SO,
+        ).annotate(
+            remaining=Greatest(F('quantity_ordered') - F('quantity_shipped'), Value(0))
+        ).filter(remaining__gt=0).values('product_id', 'remaining', 'sales_order__order_date')
+
+        pd_rows = ProductionOrder.objects.filter(
+            product_id__in=product_ids,
+            status__in=self._ACTIVE_PD,
+        ).annotate(
+            remaining=Greatest(F('quantity_planned') - F('quantity_actual'), Value(0))
+        ).filter(remaining__gt=0).values('product_id', 'remaining', 'order_date')
+
+        usage_rows = ProductionMaterialUsage.objects.filter(
+            raw_material_id__in=product_ids,
+            production_order__status__in=self._ACTIVE_PD,
+        ).annotate(
+            remaining=Greatest(F('actual_qty_to_use') - F('used_so_far'), Value(0, output_field=DecimalField()))
+        ).filter(remaining__gt=0).values('raw_material_id', 'remaining', 'production_order__order_date')
+
+        for row in po_rows:
+            lead = products_by_id[row['product_id']].delivery_lead_time or 0
+            event_date = row['purchase_order__order_date'] + timedelta(days=lead)
+            events_by_product[row['product_id']].append((event_date, int(row['remaining'])))
+
+        for row in so_rows:
+            events_by_product[row['product_id']].append((row['sales_order__order_date'], -int(row['remaining'])))
+
+        for row in pd_rows:
+            lead = products_by_id[row['product_id']].production_lead_time or 0
+            event_date = row['order_date'] + timedelta(days=lead)
+            events_by_product[row['product_id']].append((event_date, int(row['remaining'])))
+
+        for row in usage_rows:
+            events_by_product[row['raw_material_id']].append((row['production_order__order_date'], -int(row['remaining'])))
+
+        rows = []
+        for product in products:
+            # เหตุการณ์ที่เกินวันสิ้นสุดช่วง → ตัดทิ้งไปเลย ไม่นับ (ยอดคาดการณ์ต้องตรงกับที่เห็นในกราฟ)
+            # เหตุการณ์ที่ค้าง (วันที่ผ่านมาแล้วแต่ยัง pending) → นับที่จุดเริ่ม (start_date)
+            daily_delta = {}
+            for event_date, delta in events_by_product.get(product.pk, []):
+                if event_date > end_date:
+                    continue
+                clamped = max(event_date, start_date)
+                daily_delta[clamped] = daily_delta.get(clamped, 0) + delta
+
+            running = product.stock_quantity
+            points = [{'pct': 0.0, 'balance': running, 'delta': None}]
+            for event_date in sorted(daily_delta):
+                delta = daily_delta[event_date]
+                running += delta
+                pct = (event_date - start_date).days / total_days * 100
+                points.append({'pct': round(pct, 2), 'date': event_date, 'balance': running, 'delta': delta})
+
+            if points[-1]['pct'] < 100:
+                points.append({'pct': 100.0, 'balance': running, 'delta': None})
+
+            rows.append({'product': product, 'points': points})
+
+        querystring = request.GET.copy()
+        querystring.pop('page', None)
+
+        num_ticks = 6
+        ticks = []
+        for i in range(num_ticks + 1):
+            pct = i / num_ticks * 100
+            tick_date = start_date + timedelta(days=round(total_days * i / num_ticks))
+            ticks.append({'pct': round(pct, 2), 'date': tick_date})
+
+        context = {
+            **self.admin_site.each_context(request),
+            'title': '📅 Timeline Stock',
+            'opts': self.model._meta,
+            'rows': rows,
+            'start_date': start_date,
+            'end_date': end_date,
+            'ticks': ticks,
+            'q': q,
+            'page_obj': page_obj,
+            'querystring': querystring.urlencode(),
+        }
+        return TemplateResponse(request, 'admin/stock_timeline.html', context)
+
     class Media:
-        js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
+        js = ('js/admin_sum_selected.js', 'js/stock_view_toggle.js') # เรียกไฟล์ JS มาใช้งาน
 
 @admin.register(ProductCategory)
 class ProductCategoryAdmin(UnfoldModelAdmin):
