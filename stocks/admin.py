@@ -54,6 +54,7 @@ from datetime import timedelta
 from django.utils import timezone
 from decimal import Decimal
 from unfold.contrib.filters.admin import RangeDateFilter as DjangoDateRangeFilter
+from unfold.contrib.filters.admin import RangeDateTimeFilter as DjangoDateTimeRangeFilter
 import re
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -857,6 +858,7 @@ class ProductBarcodeAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     list_filter = (
         ('product__tags', admin.RelatedOnlyFieldListFilter), # กรองตามกลุ่มสินค้าที่หน้า A4
     )
+    list_filter_submit = True
     actions = ['export_to_excel']
 
     def get_queryset(self, request):
@@ -1061,6 +1063,7 @@ def build_product_history_rows(product):
 class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'min_stock', 'unit','get_total_stock_value', 'has_bom', 'created_by')
     list_filter = ('category','is_product', 'tags', 'has_bom', 'suppliers')
+    list_filter_submit = True
     search_fields = ('name', 'barcodes__code','tags__name')
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
     readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at', 'auto_cost', 'buy_price', 'sale_price')
@@ -1284,6 +1287,7 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
 class BOMAdmin(DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('name', 'product', 'total_cost_display', 'sale_price', 'unit', 'production_time', 'created_by')
     list_filter = ('product__category',)
+    list_filter_submit = True
     autocomplete_fields = ['product']
     search_fields = ['name', 'product__name', 'product__code', 'product__barcodes__code']
     inlines = [BOMIngredientInline]
@@ -1308,6 +1312,7 @@ class BOMAdmin(DocumentLockMixin, UnfoldModelAdmin):
 class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('po_number', 'supplier', 'order_date', 'status', 'get_diff')
     list_filter = ('status', ('order_date', DjangoDateRangeFilter), 'supplier')
+    list_filter_submit = True
     search_fields = ('po_number', 'invoice_no_supplier', 'items__product__name',
     'items__product__barcodes__code', 'supplier__company_name')
     inlines = [PurchaseItemInline, PurchaseReceiptLogInline]
@@ -1472,6 +1477,7 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin
 class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('so_number', 'customer', 'order_date', 'status', 'vat_percent','get_diff')
     list_filter = ('status', ('order_date', DjangoDateRangeFilter), 'customer')
+    list_filter_submit = True
     search_fields = ('so_number', 'po_no_customer', 'customer__company_name',
         'items__product__barcodes__code')
     inlines = [SalesItemInline, SalesDeliveryLogInline, SalesPaymentInline]
@@ -1810,6 +1816,7 @@ class ProductionOrderAdmin(DocumentLockMixin, UnfoldModelAdmin):
     fields = ['product', 'bom', 'quantity_planned', 'quantity_actual', 'created_by','status', 'notes']
     list_display = ('pd_number', 'product', 'quantity_planned', 'quantity_actual', 'get_diff', 'status')
     list_filter = ('status', 'order_date', 'product')
+    list_filter_submit = True
     search_fields = ('pd_number', 'product__name')
     autocomplete_fields = ['product']
     inlines = [ProductionMaterialUsageInline,ProductionLogInline]
@@ -2031,6 +2038,7 @@ class BuyPriceRangeFilter(admin.SimpleListFilter):
 class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     list_display = ('name', 'category', 'stock_quantity', 'min_stock', 'get_pending_in', 'get_pending_out', 'get_pending_prod', 'get_available', 'buy_price', 'get_total_inventory_value')
     list_filter = ('category', 'suppliers', ProductOnlyFilter, BuyPriceRangeFilter)
+    list_filter_submit = True
     search_fields = ('name', 'barcodes__code', 'tags__name')
     actions = ['export_to_excel']
 
@@ -2666,7 +2674,8 @@ class FinanceReportAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin
     # ✅ 1. เปลี่ยน list_display ให้โชว์ Payment Status แทน
     list_display = ('po_number', 'get_invoice_no_supplier', 'get_supplier_truncated', 'get_grand_total_list', 'get_balance_due_list', 'payment_status')
     # ✅ 2. ตัวกรอง ก็ต้องกรองตามการจ่ายเงิน
-    list_filter = (('order_date', DjangoDateRangeFilter), 'payment_status', 'supplier') 
+    list_filter = (('order_date', DjangoDateRangeFilter), 'payment_status', 'supplier')
+    list_filter_submit = True
     # ✅ 3. ในหน้า Detail ก็เปลี่ยน fields
     fieldsets = (
         ('📊 สรุปยอดเงิน', {
@@ -2807,6 +2816,7 @@ class IncomeReportAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin)
     # ✅ ปรับ list_display ให้เอาตัวที่มีสีมาโชว์เลย จะได้ดูง่ายๆ
     list_display = ('so_number', 'get_po_no_customer', 'get_customer_truncated', 'get_grand_total_display', 'get_balance_due_display', 'payment_status')
     list_filter = (('order_date', DjangoDateRangeFilter),'payment_status', 'status', 'customer' )
+    list_filter_submit = True
     search_fields = ('so_number', 'customer__company_name')
     actions = [settle_and_close_orders, settle_income_special, 'calculate_income_totals', 'export_to_excel']
 
@@ -3010,6 +3020,7 @@ class ShipmentPaymentReportAdmin(UnfoldModelAdmin):
     list_display = ['payment_due_date', 'get_so_number', 'get_customer', 'quantity_shipped', 'get_shipment_value_display', 'get_dc_display','get_rebate_display', 'get_total_with_vat_display']
     search_fields = ['sales_order__so_number', 'sales_order__customer__company_name']
     list_filter = ['payment_due_date', 'sales_order__customer']
+    list_filter_submit = True
     ordering = ['payment_due_date']
 
     actions = ['calculate_selected_totals']
@@ -3158,6 +3169,7 @@ class CustomerProductContractAdmin(DocumentLockMixin, UnfoldModelAdmin):
     readonly_fields = ['display_product_tags', 'product', 'barcode_unit_detail']
     # ไม่ใช้ list_editable → ไม่มี spinner, คอลัมน์แคบลง
     list_filter = ['customer', 'product__tags']
+    list_filter_submit = True
     fields = ['customer', 'barcode', 'product', 'barcode_unit_detail', 'display_product_tags', 'contract_price', 'dc_percent', 'rebate_percent']
 
     # contract_price รับทศนิยม 4 ตำแหน่ง ส่วนเปอร์เซ็นต์ยังคง 2 ตำแหน่งเหมือนเดิม
@@ -3207,6 +3219,7 @@ class CustomerProductContractAdmin(DocumentLockMixin, UnfoldModelAdmin):
 class StockAdjustmentAdmin(UnfoldModelAdmin):
     list_display = ['created_at', 'product', 'adjustment_type', 'quantity', 'adjustment_value', 'reason']
     list_filter = ['adjustment_type', 'product']
+    list_filter_submit = True
     autocomplete_fields = ['product']
     search_fields = ['product__name', 'reason']
 
@@ -3216,8 +3229,9 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         'name', 'get_total_qty', 'get_total_revenue', 
         'get_total_cost_buy', 'get_total_cost_bom', 'get_profit_margin'
     )
-    list_filter = ( ('sales_items__sales_order__delivery_logs__shipped_date', DjangoDateRangeFilter),'category', 'tags',('sales_items__sales_order__customer', admin.RelatedOnlyFieldListFilter), # Path: salesitem -> sales_order -> customer
+    list_filter = ( ('sales_items__sales_order__delivery_logs__shipped_date', DjangoDateTimeRangeFilter),'category', 'tags',('sales_items__sales_order__customer', admin.RelatedOnlyFieldListFilter), # Path: salesitem -> sales_order -> customer
     )
+    list_filter_submit = True
     search_fields = ('name', 'barcodes__code', 'sales_items__sales_order__customer__company_name') # Path: customer__company_name
 
     # --- ให้การค้นหา ใช้ รูปแบบ และ หรือ ได้ ---
@@ -3446,10 +3460,11 @@ class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     )
     
     list_filter = (
-        ('shipped_date', DjangoDateRangeFilter), 
+        ('shipped_date', DjangoDateTimeRangeFilter),
         'is_revenue_confirmed', 'is_dc_confirmed', 'is_rebate_confirmed',
         'sales_order__customer'
     )
+    list_filter_submit = True
     
     search_fields = ('sales_order__so_number', 'product__name', 'product__barcodes__code') 
     ordering = ('-shipped_date', 'sales_order__so_number')
@@ -3665,6 +3680,7 @@ class InternationalPurchaseTrackingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     actions = ['export_to_excel']
     list_display = ('po_number', 'supplier', 'status', 'payment_status', 'display_tracking_table','arrived_date')
     list_filter = ('status', 'supplier', 'order_date')
+    list_filter_submit = True
     
     # ⚠️ สำคัญมาก: ใน models.py ของเปรม Supplier ใช้ชื่อฟิลด์ 'company_name' ไม่ใช่ 'name'
     search_fields = ('po_number', 'supplier__company_name') 
@@ -3964,6 +3980,7 @@ class RebatePayoutItemInline(UnfoldTabularInline):
 class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     list_display = ('contract', 'period_start', 'period_end', 'payout_date', 'total_sales_amount', 'rebate_amount', 'status', 'ref_invoice')
     list_filter = ('status', 'contract__customer')
+    list_filter_submit = True
     search_fields = ('contract__contract_name', 'contract__customer__company_name', 'ref_invoice')
     readonly_fields = ('contract', 'period_start', 'period_end', 'total_sales_amount', 'rebate_amount')
     list_display_links = ('contract',)
