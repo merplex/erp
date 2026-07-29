@@ -55,6 +55,9 @@ from django.utils import timezone
 from decimal import Decimal
 from unfold.contrib.filters.admin import RangeDateFilter as DjangoDateRangeFilter
 from unfold.contrib.filters.admin import RangeDateTimeFilter as DjangoDateTimeRangeFilter
+from django.core.validators import EMPTY_VALUES
+from django.forms import ValidationError as FilterValidationError
+from unfold.utils import parse_datetime_str
 import re
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -64,6 +67,38 @@ def _strip_html(text):
     if not isinstance(text, str):
         return '' if text is None else str(text)
     return re.sub(r'<[^>]+>', '', text).strip()
+
+
+class RangeDateTimeFilter(DjangoDateTimeRangeFilter):
+    """เหมือน unfold's RangeDateTimeFilter ทุกอย่าง ยกเว้นตอนกรอง:
+    ถ้าเลือกวันที่แต่ไม่ได้กรอกเวลา ปกติ unfold จะไม่กรองฝั่งนั้นเลย (เงียบๆ ไม่มีผล)
+    ที่นี่ถ้าไม่กรอกเวลา จะถือว่า "เริ่มต้นวัน" (00:01) / "สิ้นสุดวัน" (23:59) แทน
+    ส่วนถ้าไม่เลือกวันที่เลย (ทั้งวันและเวลาว่าง) ยังคงไม่กรองฝั่งนั้นเหมือนเดิม
+    (from ว่าง = ตั้งแต่รายการแรก, to ว่าง = ถึงรายการหลังสุด)"""
+
+    def queryset(self, request, queryset):
+        filters = {}
+
+        date_value_from = self.used_parameters.get(f"{self.parameter_name}_from_0")
+        time_value_from = self.used_parameters.get(f"{self.parameter_name}_from_1")
+        if date_value_from not in EMPTY_VALUES and time_value_from in EMPTY_VALUES:
+            time_value_from = "00:01"
+
+        date_value_to = self.used_parameters.get(f"{self.parameter_name}_to_0")
+        time_value_to = self.used_parameters.get(f"{self.parameter_name}_to_1")
+        if date_value_to not in EMPTY_VALUES and time_value_to in EMPTY_VALUES:
+            time_value_to = "23:59"
+
+        if date_value_from not in EMPTY_VALUES and time_value_from not in EMPTY_VALUES:
+            filters[f"{self.parameter_name}__gte"] = parse_datetime_str(f"{date_value_from} {time_value_from}")
+
+        if date_value_to not in EMPTY_VALUES and time_value_to not in EMPTY_VALUES:
+            filters[f"{self.parameter_name}__lte"] = parse_datetime_str(f"{date_value_to} {time_value_to}")
+
+        try:
+            return queryset.filter(**filters)
+        except (ValueError, FilterValidationError):
+            return None
 
 
 class ExportToExcelMixin:
@@ -3229,7 +3264,7 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         'name', 'get_total_qty', 'get_total_revenue', 
         'get_total_cost_buy', 'get_total_cost_bom', 'get_profit_margin'
     )
-    list_filter = ( ('sales_items__sales_order__delivery_logs__shipped_date', DjangoDateTimeRangeFilter),'category', 'tags',('sales_items__sales_order__customer', admin.RelatedOnlyFieldListFilter), # Path: salesitem -> sales_order -> customer
+    list_filter = ( ('sales_items__sales_order__delivery_logs__shipped_date', RangeDateTimeFilter),'category', 'tags',('sales_items__sales_order__customer', admin.RelatedOnlyFieldListFilter), # Path: salesitem -> sales_order -> customer
     )
     list_filter_submit = True
     search_fields = ('name', 'barcodes__code', 'sales_items__sales_order__customer__company_name') # Path: customer__company_name
@@ -3460,7 +3495,7 @@ class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     )
     
     list_filter = (
-        ('shipped_date', DjangoDateTimeRangeFilter),
+        ('shipped_date', RangeDateTimeFilter),
         'is_revenue_confirmed', 'is_dc_confirmed', 'is_rebate_confirmed',
         'sales_order__customer'
     )

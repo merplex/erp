@@ -244,6 +244,14 @@ li.font-semibold.text-primary-600 a {
     font-weight: 700 !important;
 }
 
+/* ── ปฏิทิน Django admin (calendar.js/DateTimeShortcuts) ในแผง filter วันที่ ──
+   ช่อง "วันนี้" (td.today) ตัวเลขเป็นสีขาว แต่ไม่มีพื้นหลังรองรับ (ไม่มี CSS
+   ของ Django ดั้งเดิมโหลดมาด้วยเพราะธีมนี้ใช้ Unfold) เลยมองไม่เห็นตัวเลข ── */
+.calendar td.today a {
+    background-color: rgb(2 132 199) !important;
+    border-radius: 9999px !important;
+}
+
 /* ── ปุ่ม "Apply Filters" (list_filter_submit) ในแผง Filters ──────────
    ปัญหาเดียวกับ addlink/filter-open-button — bg-primary-600/text-white
    ไม่มี CSS รองรับ ทำให้ปุ่มโปร่งใส/มองไม่เห็น (แต่ยังกดได้ปกติ) ── */
