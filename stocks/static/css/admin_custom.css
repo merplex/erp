@@ -243,3 +243,15 @@ li.font-semibold.text-primary-600 a {
     color: rgb(2 132 199) !important;
     font-weight: 700 !important;
 }
+
+/* ── ปุ่ม "Apply Filters" (list_filter_submit) ในแผง Filters ──────────
+   ปัญหาเดียวกับ addlink/filter-open-button — bg-primary-600/text-white
+   ไม่มี CSS รองรับ ทำให้ปุ่มโปร่งใส/มองไม่เห็น (แต่ยังกดได้ปกติ) ── */
+#filter-form button[type="submit"] {
+    background-color: rgb(2 132 199) !important;
+    border-color: rgb(2 132 199) !important;
+    color: #fff !important;
+}
+#filter-form button[type="submit"]:hover {
+    background-color: rgb(3 105 161) !important;
+}
