@@ -903,21 +903,7 @@ class SalesDeliveryLog(models.Model):
         if item:
             # sale_price คือราคาต่อหน่วยบาร์โค้ด (โหล/ชิ้น) × จำนวนที่ส่ง (หน่วยบาร์โค้ด)
             self.shipment_value = item.sale_price * self.quantity_shipped
-
-            # ดึงข้อมูล DC/Rebate จากสัญญา (Price List) มาคำนวณแยกเก็บเป็น "บาท"
-            from .models import CustomerProductContract
-            contract = CustomerProductContract.objects.filter(
-                customer=self.sales_order.customer,
-                product=self.product
-            ).first()
-
-            if contract:
-                # แยกเก็บค่า DC และ Rebate ลงคอลัมน์ของตัวเองชัดๆ
-                self.dc_amount = self.shipment_value * (contract.dc_percent / 100)
-                self.rebate_amount = self.shipment_value * (contract.rebate_percent / 100)
-            else:
-                self.dc_amount = 0
-                self.rebate_amount = 0
+            self.sync_dc_rebate_from_contract()
 
         # --- 3. [คำนวณวันจ่ายเงินตามรอบบัญชี — เฉพาะตอนสร้างแถวใหม่ครั้งแรกเท่านั้น] ---
         if is_new and self.sales_order.customer:
@@ -953,7 +939,23 @@ class SalesDeliveryLog(models.Model):
         net_before_vat = self.shipment_value - self.dc_amount - self.rebate_amount
         vat_p = self.sales_order.vat_percent or 0
         return net_before_vat * (1 + (vat_p / 100))
-        
+
+    def sync_dc_rebate_from_contract(self):
+        """ดึงข้อมูล DC/Rebate จากสัญญา (T2 Price List) ปัจจุบันมาคำนวณแยกเก็บเป็น "บาท"
+        ไว้ในคอลัมน์ dc_amount/rebate_amount ของแถวนี้ (ไม่ save)"""
+        from .models import CustomerProductContract
+        contract = CustomerProductContract.objects.filter(
+            customer=self.sales_order.customer,
+            product=self.product
+        ).first()
+
+        if contract:
+            self.dc_amount = self.shipment_value * (contract.dc_percent / 100)
+            self.rebate_amount = self.shipment_value * (contract.rebate_percent / 100)
+        else:
+            self.dc_amount = 0
+            self.rebate_amount = 0
+
 @receiver(post_delete, sender=SalesDeliveryLog)
 def handle_delivery_deletion(sender, instance, **kwargs):
     factor = getattr(instance.barcode_obj, 'conversion_factor', 1) or 1
@@ -1202,6 +1204,27 @@ class CustomerProductContract(models.Model):
 def recalc_product_price_on_contract_change(sender, instance, **kwargs):
     """เมื่อราคาสัญญา (CustomerProductContract) ถูกแก้ไข/ลบ ให้คำนวณ sale_price ของสินค้าที่เกี่ยวข้องใหม่"""
     instance.product.recalc_cost_and_price()
+
+@receiver(post_save, sender=CustomerProductContract)
+@receiver(post_delete, sender=CustomerProductContract)
+def recalc_dc_rebate_on_contract_change(sender, instance, **kwargs):
+    """เมื่อสัญญา (T2) ถูกแก้ไข/ลบ ให้คำนวณ dc_amount/rebate_amount ใหม่สำหรับใบส่งของ
+    (SalesDeliveryLog/C6) ของ customer+product คู่นี้ — เฉพาะฝั่งที่ "ยังไม่ยืนยัน/ยังไม่จ่าย"
+    เท่านั้น ฝั่งที่ confirm ไปแล้วถือเป็นยอดที่จ่ายจริงแล้ว ไม่แตะ"""
+    logs = SalesDeliveryLog.objects.filter(
+        sales_order__customer_id=instance.customer_id,
+        product_id=instance.product_id,
+    ).filter(
+        models.Q(is_dc_confirmed=False) | models.Q(is_rebate_confirmed=False)
+    ).select_related('sales_order__customer', 'product')
+
+    for log in logs:
+        old_dc, old_rebate = log.dc_amount, log.rebate_amount
+        log.sync_dc_rebate_from_contract()
+        new_dc = old_dc if log.is_dc_confirmed else log.dc_amount
+        new_rebate = old_rebate if log.is_rebate_confirmed else log.rebate_amount
+        if new_dc != old_dc or new_rebate != old_rebate:
+            SalesDeliveryLog.objects.filter(pk=log.pk).update(dc_amount=new_dc, rebate_amount=new_rebate)
 
 # --- T2.2 ระบบปรับปรุงสต็อก (Stock Adjustment) ---
 class StockAdjustment(models.Model):
