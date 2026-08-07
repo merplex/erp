@@ -1,5 +1,11 @@
 {% extends "admin/base_site.html" %}
-{% load i18n %}
+{% load i18n static %}
+
+{% block extrahead %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'admin/css/vendor/select2/select2.min.css' %}">
+<script src="{% static 'admin/js/vendor/select2/select2.full.min.js' %}"></script>
+{% endblock %}
 
 {% block content %}
 <style>
@@ -27,22 +33,26 @@
     }
     .stp-filters-toggle summary::-webkit-details-marker { display:none; }
     .stp-filters-toggle[open] summary { background:#e2e8f0; }
+    /* ── กล่อง filter เต็มความสูงจอ ชิดขวา เหมือนหน้า changelist อื่นๆ (ไม่ใช่กล่องเล็กลอยใต้ปุ่มแล้ว) ── */
+    .stp-filters-backdrop {
+        display:none; position:fixed; inset:0; background:rgba(15,23,42,0.35); z-index:998;
+    }
+    .stp-filters-toggle[open] .stp-filters-backdrop { display:block; }
     .stp-filters-panel {
-        position:absolute; top:calc(100% + 4px); left:0; z-index:5;
-        display:flex; flex-direction:column; gap:10px; min-width:220px;
-        background:#fff; border:1px solid #cbd5e1; border-radius:8px; padding:12px;
-        box-shadow:0 4px 12px rgba(0,0,0,0.08);
+        position:fixed; top:0; right:0; bottom:0; z-index:999;
+        width:340px; max-width:90vw; overflow-y:auto;
+        display:flex; flex-direction:column; gap:16px;
+        background:#fff; border-left:1px solid #cbd5e1; padding:20px 18px;
+        box-shadow:-6px 0 20px rgba(0,0,0,0.12);
     }
-    .stp-filters-panel label { display:flex; flex-direction:column; gap:3px; font-size:12px; color:#64748b; }
+    .stp-filters-panel-title { font-size:15px; font-weight:700; color:#1e293b; margin-bottom:4px; }
+    .stp-filters-panel label { display:flex; flex-direction:column; gap:5px; font-size:12px; font-weight:600; color:#64748b; }
     .stp-filters-panel select { padding:5px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:13px; color:#1e293b; }
-    .stp-filters-panel select[multiple] {
-        min-width:220px; min-height:96px; padding:4px;
-    }
-    .stp-filters-panel select[multiple] option {
-        padding:4px 6px; border-radius:4px;
-    }
-    .stp-filters-panel select[multiple] option:checked {
-        background:#2563eb; color:#fff;
+    .stp-filters-panel .select2-container { width:100% !important; }
+    .stp-filters-panel .select2-selection { min-height:36px !important; border-color:#cbd5e1 !important; }
+    .stp-filters-apply {
+        margin-top:auto; padding:9px 14px; border:none; border-radius:6px;
+        background:#2563eb; color:#fff; font-weight:700; font-size:13px; cursor:pointer;
     }
     .stp-table { position:relative; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; background:#fff; }
     .stp-gridlines { position:absolute; left:292px; right:12px; top:0; bottom:0; pointer-events:none; z-index:2; }
@@ -100,9 +110,11 @@
 
         <details class="stp-filters-toggle">
             <summary>🔧 Filters</summary>
+            <div class="stp-filters-backdrop"></div>
             <div class="stp-filters-panel">
+                <div class="stp-filters-panel-title">🔧 ตัวกรอง</div>
                 <label>Category
-                    <select name="category">
+                    <select name="category" class="stp-select2">
                         <option value="">ทั้งหมด</option>
                         {% for c in categories %}
                         <option value="{{ c.pk }}" {% if f_category == c.pk|stringformat:"s" %}selected{% endif %}>{{ c.name }}</option>
@@ -117,7 +129,7 @@
                     </select>
                 </label>
                 <label>Supplier
-                    <select name="supplier">
+                    <select name="supplier" class="stp-select2">
                         <option value="">ทั้งหมด</option>
                         {% for s in suppliers %}
                         <option value="{{ s.pk }}" {% if f_supplier == s.pk|stringformat:"s" %}selected{% endif %}>{{ s.company_name }}</option>
@@ -125,7 +137,7 @@
                     </select>
                 </label>
                 <label>Tag (เลือกได้หลายอัน)
-                    <select name="tag" multiple size="4">
+                    <select name="tag" multiple class="stp-select2">
                         {% for t in tags %}
                         <option value="{{ t.pk }}" {% if t.pk|stringformat:"s" in f_tag %}selected{% endif %}>{{ t.name }}</option>
                         {% endfor %}
@@ -140,12 +152,41 @@
                         <option value="1001-plus" {% if f_price_range == '1001-plus' %}selected{% endif %}>มากกว่า 1,000 บาท</option>
                     </select>
                 </label>
+                <button type="submit" class="stp-filters-apply">แสดงผล</button>
             </div>
         </details>
 
         <button type="submit">แสดงผล</button>
     </form>
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var $ = window.django ? django.jQuery : window.jQuery;
+    if (!$ || !$.fn.select2) return;
+
+    var $details = $('.stp-filters-toggle');
+    var initialized = false;
+
+    function initSelect2() {
+        if (initialized) return;
+        initialized = true;
+        $details.find('select.stp-select2').each(function () {
+            $(this).select2({
+                width: '100%',
+                placeholder: 'ทั้งหมด',
+                allowClear: !this.multiple,
+                dropdownParent: $details.find('.stp-filters-panel'),
+            });
+        });
+    }
+
+    // เปิด Select2 หลัง <details> เปิดจริง (ตอนซ่อนอยู่ select2 คำนวณความกว้างไม่ได้)
+    $details[0].addEventListener('toggle', function () {
+        if (this.open) initSelect2();
+    });
+});
+</script>
 
 <div class="stp-print-header">📅 Timeline Stock &middot; {{ start_date|date:'d/m/Y' }} - {{ end_date|date:'d/m/Y' }}{% if q %} &middot; ค้นหา "{{ q }}"{% endif %}</div>
 
