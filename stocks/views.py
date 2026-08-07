@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import os
+from decimal import Decimal
 from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
 from django.http import HttpResponse, JsonResponse
@@ -259,20 +260,17 @@ def purchase_quotation_price_api(request):
     except (Product.DoesNotExist, ValueError):
         return JsonResponse({})
 
-    price = None
-    source = None
+    existing_price = Decimal('0')
     if supplier_id:
         ps = ProductSupplier.objects.filter(product_id=product_id, supplier_id=supplier_id).first()
         if ps and ps.latest_buy_price:
-            price = ps.latest_buy_price
-            source = 'supplier'
-    if price is None:
-        price = product.buy_price or 0
-        source = 'standard'
+            existing_price = ps.latest_buy_price
+
+    suggested_price = existing_price if existing_price else (product.buy_price or 0)
 
     return JsonResponse({
-        'price': str(price),
-        'source': source,
+        'existing_price': str(existing_price),
+        'suggested_price': str(suggested_price),
         'product_name': product.name,
     })
 
@@ -290,22 +288,19 @@ def sales_quotation_price_api(request):
     except (Product.DoesNotExist, ValueError):
         return JsonResponse({})
 
-    price = None
-    source = None
+    existing_price = Decimal('0')
     if customer_id:
         contract = CustomerProductContract.objects.filter(
             customer_id=customer_id, product_id=product_id
         ).first()
         if contract and contract.contract_price:
-            price = contract.contract_price
-            source = 'contract'
-    if price is None:
-        price = product.sale_price or 0
-        source = 'standard'
+            existing_price = contract.contract_price
+
+    suggested_price = existing_price if existing_price else (product.sale_price or 0)
 
     return JsonResponse({
-        'price': str(price),
-        'source': source,
+        'existing_price': str(existing_price),
+        'suggested_price': str(suggested_price),
         'product_name': product.name,
     })
 

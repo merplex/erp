@@ -35,6 +35,15 @@
     }
     .stp-filters-panel label { display:flex; flex-direction:column; gap:3px; font-size:12px; color:#64748b; }
     .stp-filters-panel select { padding:5px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:13px; color:#1e293b; }
+    .stp-filters-panel select[multiple] {
+        min-width:220px; min-height:96px; padding:4px;
+    }
+    .stp-filters-panel select[multiple] option {
+        padding:4px 6px; border-radius:4px;
+    }
+    .stp-filters-panel select[multiple] option:checked {
+        background:#2563eb; color:#fff;
+    }
     .stp-table { position:relative; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; background:#fff; }
     .stp-gridlines { position:absolute; left:292px; right:12px; top:0; bottom:0; pointer-events:none; z-index:2; }
     .stp-gridline { position:absolute; top:0; bottom:0; width:1px; background:#e2e8f0; }

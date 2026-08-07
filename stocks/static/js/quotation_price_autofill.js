@@ -14,7 +14,8 @@
         function fetchAndFillPrice($row, productId) {
             if (!productId) return;
             var $priceInput = $row.find('input[name$="-new_price"]');
-            if (!$priceInput.length) return;
+            var $currentPriceCell = $row.find('.field-current_price_display .readonly');
+            if (!$priceInput.length && !$currentPriceCell.length) return;
 
             var params = { product_id: productId };
             var url;
@@ -29,8 +30,12 @@
             $priceInput.css('opacity', 0.5);
             $.get(url, params)
                 .done(function (data) {
-                    if (data && data.price !== undefined) {
-                        $priceInput.val(data.price);
+                    if (!data) return;
+                    if (data.existing_price !== undefined) {
+                        $currentPriceCell.text(data.existing_price);
+                    }
+                    if (data.suggested_price !== undefined) {
+                        $priceInput.val(data.suggested_price);
                     }
                 })
                 .always(function () {
