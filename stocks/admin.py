@@ -263,6 +263,106 @@ class DocumentLockMixin:
             response.content = response.content.replace(b'</body>', script.encode() + b'</body>', 1)
         return response
 
+class DetailedHistoryMixin:
+    """
+    ปกติ Django log ("ประวัติ"/History) จะบอกแค่ *ชื่อ field* ที่ถูกแก้ (เช่น
+    "Changed latest_buy_price") ไม่บอกว่าแก้จากค่าอะไรเป็นค่าอะไร — mixin นี้
+    เขียน change_message ใหม่ให้มีค่าเดิม → ค่าใหม่ครบ ทั้ง field บนฟอร์มหลัก
+    และทุก inline (เช่น ราคา supplier ใน A4, บาร์โค้ด, ราคาสัญญาลูกค้า)
+    """
+
+    def _fmt_value(self, value):
+        if value in (None, ''):
+            return '(ว่าง)'
+        if isinstance(value, bool):
+            return 'ใช่' if value else 'ไม่ใช่'
+        return str(value)
+
+    def _field_diffs(self, form, field_names):
+        lines = []
+        for field_name in field_names:
+            if field_name not in form.fields:
+                continue
+            old_val = form.initial.get(field_name)
+            new_val = getattr(form.instance, field_name, None)
+            # initial ของ FK field เก็บเป็น pk ดิบ ๆ แปลงเป็น object ก่อน เพื่อ str() อ่านง่าย
+            field = form.fields[field_name]
+            if hasattr(field, 'queryset') and old_val is not None and not hasattr(old_val, 'pk'):
+                try:
+                    old_val = field.queryset.model.objects.filter(pk=old_val).first() or old_val
+                except Exception:
+                    pass
+            old_s, new_s = self._fmt_value(old_val), self._fmt_value(new_val)
+            if old_s == new_s:
+                continue
+            label = field.label or field_name
+            lines.append(f"{label}: {old_s} → {new_s}")
+        return lines
+
+    def construct_change_message(self, request, form, formsets, add=False):
+        if add:
+            return super().construct_change_message(request, form, formsets, add)
+
+        messages = []
+        if form.changed_data:
+            diffs = self._field_diffs(form, form.changed_data)
+            if diffs:
+                messages.append("แก้ไข: " + "; ".join(diffs))
+
+        for formset in (formsets or []):
+            for obj in formset.new_objects:
+                messages.append(f"เพิ่ม {obj._meta.verbose_name}: {obj}")
+
+            if formset.changed_objects:
+                form_by_pk = {f.instance.pk: f for f in formset.forms if f.instance.pk}
+                for changed_object, changed_fields in formset.changed_objects:
+                    matched_form = form_by_pk.get(changed_object.pk)
+                    diffs = self._field_diffs(matched_form, changed_fields) if matched_form else []
+                    detail = "; ".join(diffs) if diffs else ", ".join(changed_fields)
+                    messages.append(f"แก้ไข {changed_object._meta.verbose_name} ({changed_object}): {detail}")
+
+            for obj in formset.deleted_objects:
+                messages.append(f"ลบ {obj._meta.verbose_name}: {obj}")
+
+        if not messages:
+            return super().construct_change_message(request, form, formsets, add)
+        return "\n".join(messages)
+
+
+class PurchaseOrderTagsFilter(AutocompleteSelectMultipleFilter):
+    """
+    Filter 'By tag ของสินค้าในใบ' สำหรับ PurchaseOrder/FinanceReport — ใช้ Exists()
+    แทนการ .filter(items__product__tags__in=...) ตรงๆ เพราะ join แบบนั้นจะไปชน join
+    เดิมที่ annotate(Sum('items__...')) ใช้อยู่แล้ว (ใน FinanceReportAdmin) ทำให้ยอดรวม
+    เงินพองขึ้นถ้า item ตัวเดียวมีหลาย tag ตรงกับตัวกรองพร้อมกัน — Exists() ปลอดภัยกว่า
+    เพราะเป็นแค่เงื่อนไข boolean ไม่เพิ่ม join ให้ query หลัก
+    """
+    def queryset(self, request, queryset):
+        value = self.value()
+        ids = value if isinstance(value, (list, tuple)) else ([value] if value else [])
+        ids = [v for v in ids if v not in EMPTY_VALUES]
+        if not ids:
+            return queryset
+        from django.db.models import Exists, OuterRef
+        from .models import PurchaseItem
+        sub = PurchaseItem.objects.filter(purchase_order=OuterRef('pk'), product__tags__id__in=ids)
+        return queryset.filter(Exists(sub))
+
+
+class SalesOrderTagsFilter(AutocompleteSelectMultipleFilter):
+    """เหมือน PurchaseOrderTagsFilter แต่ฝั่งขาย (SalesOrder/IncomeReport)"""
+    def queryset(self, request, queryset):
+        value = self.value()
+        ids = value if isinstance(value, (list, tuple)) else ([value] if value else [])
+        ids = [v for v in ids if v not in EMPTY_VALUES]
+        if not ids:
+            return queryset
+        from django.db.models import Exists, OuterRef
+        from .models import SalesItem
+        sub = SalesItem.objects.filter(sales_order=OuterRef('pk'), product__tags__id__in=ids)
+        return queryset.filter(Exists(sub))
+
+
 class ProductOnlyFilter(admin.SimpleListFilter):
     title = 'ประเภทรายการ' # หัวข้อบนแถบ Filter
     parameter_name = 'is_product'
@@ -887,7 +987,7 @@ def color_diff(diff):
 # --- Admin Registrations ---
 
 @admin.register(Supplier)
-class SupplierAdmin(DocumentLockMixin, UnfoldModelAdmin):
+class SupplierAdmin(DetailedHistoryMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('company_name', 'contact_person', 'type')
     search_fields = ('company_name', 'contact_person')
     inlines = [SupplierProductInline]
@@ -1101,7 +1201,7 @@ def build_product_history_rows(product):
 
 
 @admin.register(Product)
-class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
+class ProductAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'min_stock', 'unit','get_total_stock_value', 'has_bom', 'created_by')
     list_filter = (
         ('category', AutocompleteSelectMultipleFilter),
@@ -1367,12 +1467,13 @@ class BOMAdmin(DocumentLockMixin, UnfoldModelAdmin):
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 @admin.register(PurchaseOrder)
-class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
+class PurchaseOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('po_number', 'supplier', 'order_date', 'status', 'get_diff')
     list_filter = (
         ('status', MultipleChoicesDropdownFilter),
         ('order_date', DjangoDateRangeFilter),
         ('supplier', AutocompleteSelectMultipleFilter),
+        ('items__product__tags', PurchaseOrderTagsFilter),
     )
     list_filter_submit = True
     search_fields = ('po_number', 'invoice_no_supplier', 'items__product__name',
@@ -1526,7 +1627,8 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin
         super().save_model(request, obj, form, change)
 
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related('supplier').prefetch_related('items', 'receipt_logs')
+        # .distinct() กัน PO ซ้ำแถวเวลา filter ผ่าน items__product__tags (join หลายชั้น)
+        return super().get_queryset(request).select_related('supplier').prefetch_related('items', 'receipt_logs').distinct()
 
     def get_diff(self, obj):
         ordered = sum(i.quantity_ordered for i in obj.items.all())
@@ -1537,12 +1639,13 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin
         js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js', 'js/purchase_order_supplier_filter.js', 'js/purchase_item_price_autofill.js')
 
 @admin.register(SalesOrder)
-class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
+class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('so_number', 'customer', 'order_date', 'status', 'vat_percent','get_diff')
     list_filter = (
         ('status', MultipleChoicesDropdownFilter),
         ('order_date', DjangoDateRangeFilter),
         ('customer', AutocompleteSelectMultipleFilter),
+        ('items__product__tags', SalesOrderTagsFilter),
     )
     list_filter_submit = True
     search_fields = ('so_number', 'po_no_customer', 'customer__company_name',
@@ -1554,7 +1657,8 @@ class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     actions = ['mark_as_completed', 'export_to_excel']
 
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related('customer').prefetch_related('items', 'delivery_logs')
+        # .distinct() กัน SO ซ้ำแถวเวลา filter ผ่าน items__product__tags (join หลายชั้น)
+        return super().get_queryset(request).select_related('customer').prefetch_related('items', 'delivery_logs').distinct()
 
     def get_urls(self):
         custom_urls = [
@@ -2112,6 +2216,7 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     list_filter = (
         ('category', AutocompleteSelectMultipleFilter),
         ('suppliers', AutocompleteSelectMultipleFilter),
+        ('tags', AutocompleteSelectMultipleFilter),
         ProductOnlyFilter,
         BuyPriceRangeFilter,
     )
@@ -2159,12 +2264,13 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             t=Sum(Greatest(F('actual_qty_to_use') - F('used_so_far'), Value(0, output_field=DecimalField())))
         ).values('t')
 
+        # .distinct() กัน row ซ้ำเวลา filter ผ่าน tags/suppliers (M2M join)
         return qs.annotate(
             _pending_in=Coalesce(Subquery(pending_in_sq, output_field=DecimalField()), Value(0), output_field=DecimalField()),
             _pending_out=Coalesce(Subquery(pending_out_sq, output_field=DecimalField()), Value(0), output_field=DecimalField()),
             _pending_receipt=Coalesce(Subquery(pending_receipt_sq, output_field=DecimalField()), Value(0), output_field=DecimalField()),
             _pending_usage=Coalesce(Subquery(pending_usage_sq, output_field=DecimalField()), Value(0), output_field=DecimalField()),
-        )
+        ).distinct()
 
     def _net(self, obj):
         p_in = int(obj._pending_in or 0)
@@ -2755,6 +2861,7 @@ class FinanceReportAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin
         ('order_date', DjangoDateRangeFilter),
         ('payment_status', MultipleChoicesDropdownFilter),
         ('supplier', AutocompleteSelectMultipleFilter),
+        ('items__product__tags', PurchaseOrderTagsFilter),
     )
     list_filter_submit = True
     # ✅ 3. ในหน้า Detail ก็เปลี่ยน fields
@@ -2901,6 +3008,7 @@ class IncomeReportAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin)
         ('payment_status', MultipleChoicesDropdownFilter),
         ('status', MultipleChoicesDropdownFilter),
         ('customer', AutocompleteSelectMultipleFilter),
+        ('items__product__tags', SalesOrderTagsFilter),
     )
     list_filter_submit = True
     search_fields = ('so_number', 'customer__company_name')
@@ -3243,14 +3351,14 @@ class CustomerProductContractInline(UnfoldTabularInline):
         js = ('js/contract_barcode_autofill.js',)
 
 @admin.register(Customer)
-class CustomerAdmin(DocumentLockMixin, UnfoldModelAdmin):
+class CustomerAdmin(DetailedHistoryMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('company_name', 'contact_person', 'phone')
     search_fields = ('company_name', 'contact_person', 'phone')
     inlines = [CustomerProductContractInline]
 
 # --- 3. ส่วนหน้าจัดการสัญญาโดยเฉพาะ (T2. ราคาสัญญา&DC/Rebate) ---
 @admin.register(CustomerProductContract)
-class CustomerProductContractAdmin(DocumentLockMixin, UnfoldModelAdmin):
+class CustomerProductContractAdmin(DetailedHistoryMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ['customer', 'barcode_display', 'product', 'contract_price', 'dc_percent', 'rebate_percent', 'display_product_tags']
     readonly_fields = ['display_product_tags', 'product', 'barcode_unit_detail']
     # ไม่ใช้ list_editable → ไม่มี spinner, คอลัมน์แคบลง

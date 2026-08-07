@@ -254,6 +254,9 @@ class ProductSupplier(models.Model):
     latest_buy_price = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name="ทุนล่าสุดจากเจ้านี้")
     class Meta: unique_together = ('product', 'supplier')
 
+    def __str__(self):
+        return f"{self.supplier} - {self.product}"
+
 @receiver(post_save, sender=ProductSupplier)
 @receiver(post_delete, sender=ProductSupplier)
 def recalc_product_cost_on_supplier_change(sender, instance, **kwargs):
