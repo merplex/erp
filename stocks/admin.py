@@ -1174,22 +1174,33 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
 
         # 🎯 2. จัดการระบบ Autocomplete สำหรับ PO (ล็อคตาม Supplier)
         if 'autocomplete' in request.path:
-            referer = request.META.get('HTTP_REFERER', '')
-            if 'purchaseorder' in referer:
-                import re
-                match = re.search(r'purchaseorder/(\d+)/change/', referer)
-                if match:
-                    po_id = match.group(1)
-                    from .models import PurchaseOrder
-                    from django.db.models import Q
-                    try:
-                        po = PurchaseOrder.objects.get(pk=po_id)
-                        if po.supplier:
-                            queryset = queryset.filter(
-                                Q(product_suppliers__supplier=po.supplier) | Q(is_product=False)
-                            )
-                    except PurchaseOrder.DoesNotExist: pass
-        
+            from django.db.models import Q
+            supplier_id = request.GET.get('supplier_id', '').strip()
+
+            # ✅ วิธีหลัก: JS (purchase_order_supplier_filter.js) ส่ง supplier_id ของ supplier
+            # ที่กำลังเลือกอยู่ในหน้ามาให้ตรงๆ ทำงานได้ทั้งหน้า "เพิ่มใหม่" (ยังไม่มี PO id)
+            # และหน้าแก้ไข — ต่างจากวิธีเดิมที่ parse HTTP_REFERER ซึ่งใช้ไม่ได้เลยตอนเพิ่มใหม่
+            if supplier_id:
+                queryset = queryset.filter(
+                    Q(product_suppliers__supplier_id=supplier_id) | Q(is_product=False)
+                )
+            else:
+                # ↩️ fallback เดิม เผื่อ JS โหลดไม่ทัน/ถูกปิด — ใช้ได้เฉพาะหน้าแก้ไข PO ที่มีอยู่แล้ว
+                referer = request.META.get('HTTP_REFERER', '')
+                if 'purchaseorder' in referer:
+                    import re
+                    match = re.search(r'purchaseorder/(\d+)/change/', referer)
+                    if match:
+                        po_id = match.group(1)
+                        from .models import PurchaseOrder
+                        try:
+                            po = PurchaseOrder.objects.get(pk=po_id)
+                            if po.supplier:
+                                queryset = queryset.filter(
+                                    Q(product_suppliers__supplier=po.supplier) | Q(is_product=False)
+                                )
+                        except PurchaseOrder.DoesNotExist: pass
+
         return queryset, use_distinct
 
 
@@ -1521,7 +1532,7 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin
         return color_diff(received - ordered)
 
     class Media:
-        js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js')
+        js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js', 'js/purchase_order_supplier_filter.js')
 
 @admin.register(SalesOrder)
 class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
