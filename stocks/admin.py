@@ -56,7 +56,7 @@ from decimal import Decimal
 from unfold.contrib.filters.admin import RangeDateFilter as DjangoDateRangeFilter
 from unfold.contrib.filters.admin import RangeDateTimeFilter as DjangoDateTimeRangeFilter
 from unfold.contrib.filters.admin import (
-    MultipleRelatedDropdownFilter,
+    AutocompleteSelectMultipleFilter,
     MultipleChoicesDropdownFilter,
     BooleanRadioFilter,
 )
@@ -889,6 +889,7 @@ def color_diff(diff):
 @admin.register(Supplier)
 class SupplierAdmin(DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('company_name', 'contact_person', 'type')
+    search_fields = ('company_name', 'contact_person')
     inlines = [SupplierProductInline]
 
 class ProductBarcodeAdmin(ExportToExcelMixin, UnfoldModelAdmin):
@@ -896,7 +897,7 @@ class ProductBarcodeAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     search_fields = ['code', 'product__name','product__tags__name']
     list_display = ('code', 'product', 'conversion_factor', 'unit_name', 'get_forecast_stock')
     list_filter = (
-        ('product__tags', MultipleRelatedDropdownFilter), # กรองตามกลุ่มสินค้าที่หน้า A4
+        ('product__tags', AutocompleteSelectMultipleFilter), # กรองตามกลุ่มสินค้าที่หน้า A4
     )
     list_filter_submit = True
     actions = ['export_to_excel']
@@ -1103,11 +1104,11 @@ def build_product_history_rows(product):
 class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'min_stock', 'unit','get_total_stock_value', 'has_bom', 'created_by')
     list_filter = (
-        ('category', MultipleRelatedDropdownFilter),
+        ('category', AutocompleteSelectMultipleFilter),
         ('is_product', BooleanRadioFilter),
-        ('tags', MultipleRelatedDropdownFilter),
+        ('tags', AutocompleteSelectMultipleFilter),
         ('has_bom', BooleanRadioFilter),
-        ('suppliers', MultipleRelatedDropdownFilter),
+        ('suppliers', AutocompleteSelectMultipleFilter),
     )
     list_filter_submit = True
     search_fields = ('name', 'barcodes__code','tags__name')
@@ -1343,7 +1344,7 @@ class ProductAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
 @admin.register(BOM)
 class BOMAdmin(DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('name', 'product', 'total_cost_display', 'sale_price', 'unit', 'production_time', 'created_by')
-    list_filter = (('product__category', MultipleRelatedDropdownFilter),)
+    list_filter = (('product__category', AutocompleteSelectMultipleFilter),)
     list_filter_submit = True
     autocomplete_fields = ['product']
     search_fields = ['name', 'product__name', 'product__code', 'product__barcodes__code']
@@ -1371,11 +1372,12 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin
     list_filter = (
         ('status', MultipleChoicesDropdownFilter),
         ('order_date', DjangoDateRangeFilter),
-        ('supplier', MultipleRelatedDropdownFilter),
+        ('supplier', AutocompleteSelectMultipleFilter),
     )
     list_filter_submit = True
     search_fields = ('po_number', 'invoice_no_supplier', 'items__product__name',
     'items__product__barcodes__code', 'supplier__company_name')
+    autocomplete_fields = ['supplier']
     inlines = [PurchaseItemInline, PurchaseReceiptLogInline]
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
     readonly_fields = ('created_by', 'status')
@@ -1540,11 +1542,12 @@ class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_filter = (
         ('status', MultipleChoicesDropdownFilter),
         ('order_date', DjangoDateRangeFilter),
-        ('customer', MultipleRelatedDropdownFilter),
+        ('customer', AutocompleteSelectMultipleFilter),
     )
     list_filter_submit = True
     search_fields = ('so_number', 'po_no_customer', 'customer__company_name',
         'items__product__barcodes__code')
+    autocomplete_fields = ['customer']
     inlines = [SalesItemInline, SalesDeliveryLogInline, SalesPaymentInline]
     readonly_fields = ('created_by', 'status') # ล็อค status ให้ระบบจัดการออโต้
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
@@ -1883,7 +1886,7 @@ class ProductionOrderAdmin(DocumentLockMixin, UnfoldModelAdmin):
     list_filter = (
         ('status', MultipleChoicesDropdownFilter),
         ('order_date', DjangoDateRangeFilter),
-        ('product', MultipleRelatedDropdownFilter),
+        ('product', AutocompleteSelectMultipleFilter),
     )
     list_filter_submit = True
     search_fields = ('pd_number', 'product__name')
@@ -2107,8 +2110,8 @@ class BuyPriceRangeFilter(admin.SimpleListFilter):
 class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     list_display = ('name', 'category', 'stock_quantity', 'min_stock', 'get_pending_in', 'get_pending_out', 'get_pending_prod', 'get_available', 'buy_price', 'get_total_inventory_value')
     list_filter = (
-        ('category', MultipleRelatedDropdownFilter),
-        ('suppliers', MultipleRelatedDropdownFilter),
+        ('category', AutocompleteSelectMultipleFilter),
+        ('suppliers', AutocompleteSelectMultipleFilter),
         ProductOnlyFilter,
         BuyPriceRangeFilter,
     )
@@ -2751,7 +2754,7 @@ class FinanceReportAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin
     list_filter = (
         ('order_date', DjangoDateRangeFilter),
         ('payment_status', MultipleChoicesDropdownFilter),
-        ('supplier', MultipleRelatedDropdownFilter),
+        ('supplier', AutocompleteSelectMultipleFilter),
     )
     list_filter_submit = True
     # ✅ 3. ในหน้า Detail ก็เปลี่ยน fields
@@ -2897,7 +2900,7 @@ class IncomeReportAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin)
         ('order_date', DjangoDateRangeFilter),
         ('payment_status', MultipleChoicesDropdownFilter),
         ('status', MultipleChoicesDropdownFilter),
-        ('customer', MultipleRelatedDropdownFilter),
+        ('customer', AutocompleteSelectMultipleFilter),
     )
     list_filter_submit = True
     search_fields = ('so_number', 'customer__company_name')
@@ -3252,8 +3255,8 @@ class CustomerProductContractAdmin(DocumentLockMixin, UnfoldModelAdmin):
     readonly_fields = ['display_product_tags', 'product', 'barcode_unit_detail']
     # ไม่ใช้ list_editable → ไม่มี spinner, คอลัมน์แคบลง
     list_filter = [
-        ('customer', MultipleRelatedDropdownFilter),
-        ('product__tags', MultipleRelatedDropdownFilter),
+        ('customer', AutocompleteSelectMultipleFilter),
+        ('product__tags', AutocompleteSelectMultipleFilter),
     ]
     list_filter_submit = True
     fields = ['customer', 'barcode', 'product', 'barcode_unit_detail', 'display_product_tags', 'contract_price', 'dc_percent', 'rebate_percent']
@@ -3306,7 +3309,7 @@ class StockAdjustmentAdmin(UnfoldModelAdmin):
     list_display = ['created_at', 'product', 'adjustment_type', 'quantity', 'adjustment_value', 'reason']
     list_filter = [
         ('adjustment_type', MultipleChoicesDropdownFilter),
-        ('product', MultipleRelatedDropdownFilter),
+        ('product', AutocompleteSelectMultipleFilter),
     ]
     list_filter_submit = True
     autocomplete_fields = ['product']
@@ -3320,9 +3323,9 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     )
     list_filter = (
         ('sales_items__sales_order__delivery_logs__shipped_date', RangeDateTimeFilter),
-        ('category', MultipleRelatedDropdownFilter),
-        ('tags', MultipleRelatedDropdownFilter),
-        ('sales_items__sales_order__customer', MultipleRelatedDropdownFilter), # Path: salesitem -> sales_order -> customer
+        ('category', AutocompleteSelectMultipleFilter),
+        ('tags', AutocompleteSelectMultipleFilter),
+        ('sales_items__sales_order__customer', AutocompleteSelectMultipleFilter), # Path: salesitem -> sales_order -> customer
     )
     list_filter_submit = True
     search_fields = ('name', 'barcodes__code', 'sales_items__sales_order__customer__company_name') # Path: customer__company_name
@@ -3557,7 +3560,7 @@ class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         ('is_revenue_confirmed', BooleanRadioFilter),
         ('is_dc_confirmed', BooleanRadioFilter),
         ('is_rebate_confirmed', BooleanRadioFilter),
-        ('sales_order__customer', MultipleRelatedDropdownFilter),
+        ('sales_order__customer', AutocompleteSelectMultipleFilter),
     )
     list_filter_submit = True
     
@@ -3776,7 +3779,7 @@ class InternationalPurchaseTrackingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     list_display = ('po_number', 'supplier', 'status', 'payment_status', 'display_tracking_table','arrived_date')
     list_filter = (
         ('status', MultipleChoicesDropdownFilter),
-        ('supplier', MultipleRelatedDropdownFilter),
+        ('supplier', AutocompleteSelectMultipleFilter),
         ('order_date', DjangoDateRangeFilter),
     )
     list_filter_submit = True
@@ -4080,7 +4083,7 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     list_display = ('contract', 'period_start', 'period_end', 'payout_date', 'total_sales_amount', 'rebate_amount', 'status', 'ref_invoice')
     list_filter = (
         ('status', MultipleChoicesDropdownFilter),
-        ('contract__customer', MultipleRelatedDropdownFilter),
+        ('contract__customer', AutocompleteSelectMultipleFilter),
     )
     list_filter_submit = True
     search_fields = ('contract__contract_name', 'contract__customer__company_name', 'ref_invoice')
@@ -4114,7 +4117,7 @@ class PurchaseQuotationItemInline(UnfoldTabularInline):
 class PurchaseQuotationAdmin(UnfoldModelAdmin):
     list_display = ('pq_number', 'supplier', 'quote_date', 'item_count', 'created_by')
     list_filter = (
-        ('supplier', MultipleRelatedDropdownFilter),
+        ('supplier', AutocompleteSelectMultipleFilter),
         ('quote_date', DjangoDateRangeFilter),
     )
     list_filter_submit = True
@@ -4184,7 +4187,7 @@ class SalesQuotationItemInline(UnfoldTabularInline):
 class SalesQuotationAdmin(UnfoldModelAdmin):
     list_display = ('sq_number', 'customer', 'quote_date', 'item_count', 'created_by')
     list_filter = (
-        ('customer', MultipleRelatedDropdownFilter),
+        ('customer', AutocompleteSelectMultipleFilter),
         ('quote_date', DjangoDateRangeFilter),
     )
     list_filter_submit = True

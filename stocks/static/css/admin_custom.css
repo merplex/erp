@@ -21,6 +21,28 @@ input[type="checkbox"][id$="-DELETE"]:checked {
     border-color: #dc2626 !important;
 }
 
+/* ── Radio filter (เช่น "เป็นสินค้ามีสต๊อก", "มี BOM") → จุดที่เลือกอยู่มองไม่เห็น
+   เพราะ Tailwind checked:bg-primary-600 / checked:after:bg-white ไม่ถูก apply ในบางเคส
+   บังคับด้วย plain CSS ให้เห็นชัดเจนแทน ────────────────────────────────────── */
+#changelist-filter input[type="radio"] {
+    position: relative;
+}
+#changelist-filter input[type="radio"]:checked {
+    background-color: #2563eb !important;
+    border-color: #2563eb !important;
+}
+#changelist-filter input[type="radio"]:checked::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 6px;
+    height: 6px;
+    border-radius: 9999px;
+    background-color: #fff !important;
+    transform: translate(-50%, -50%);
+}
+
 /* ── Autocomplete (Select2) ให้เต็มความกว้าง + text กึ่งกลางแนวตั้ง ── */
 .select2-container {
     width: 100% !important;
