@@ -210,6 +210,7 @@ UNFOLD = {
                 "items": [
                     {"title": "ใบสั่งซื้อ (B1)",        "icon": "shopping_cart",  "link": "/admin/stocks/purchaseorder/"},
                     {"title": "ติดตามนำเข้า (B4)",      "icon": "local_shipping", "link": "/admin/stocks/internationalpurchasetracking/"},
+                    {"title": "ใบเสนอราคาซื้อ (B5)",    "icon": "request_quote",  "link": "/admin/stocks/purchasequotation/"},
                     {"title": "สรุปรายจ่าย (C2)",        "icon": "summarize",      "link": "/admin/stocks/financereport/"},
                 ],
             },
@@ -218,6 +219,7 @@ UNFOLD = {
                 "collapsible": True,
                 "items": [
                     {"title": "ใบสั่งขาย (B2)",         "icon": "receipt_long",   "link": "/admin/stocks/salesorder/"},
+                    {"title": "ใบเสนอราคาขาย (B6)",     "icon": "request_quote",  "link": "/admin/stocks/salesquotation/"},
                     {"title": "สรุปรายรับ (C3)",         "icon": "payments",       "link": "/admin/stocks/incomereport/"},
                     {"title": "รายงานยอดขาย (C5)",       "icon": "bar_chart",      "link": "/admin/stocks/salesreport/"},
                     {"title": "บัญชี DC/Rebate (C6)",   "icon": "account_balance","link": "/admin/stocks/shipmentaccounting/"},

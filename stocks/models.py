@@ -1486,3 +1486,77 @@ def recalc_payout_on_item_change(sender, instance, **kwargs):
         instance.payout.recalculate_totals()
     except RebatePayout.DoesNotExist:
         pass
+
+
+# ============================================================
+# B5. ใบเสนอราคาซื้อ (Purchase Quotation)
+# ============================================================
+class PurchaseQuotation(models.Model):
+    pq_number = models.CharField(max_length=50, unique=True, editable=False)
+    supplier = models.ForeignKey('Supplier', on_delete=models.CASCADE, verbose_name="ผู้จำหน่าย")
+    quote_date = models.DateField(default=datetime.date.today, db_index=True, verbose_name="วันที่ใบเสนอราคา")
+    notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True)
+
+    def save(self, *args, **kwargs):
+        if not self.pq_number:
+            self.pq_number = generate_number('PQ', PurchaseQuotation, 'pq_number')
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.pq_number
+
+    class Meta:
+        verbose_name = "ใบเสนอราคาซื้อ"
+        verbose_name_plural = "B5. ใบเสนอราคาซื้อ (Purchase Quotation)"
+
+
+class PurchaseQuotationItem(models.Model):
+    quotation = models.ForeignKey(PurchaseQuotation, on_delete=models.CASCADE, related_name='items')
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้า")
+    new_price = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name="ราคาซื้อใหม่")
+
+    def __str__(self):
+        return f"{self.product.name} @ {self.new_price}"
+
+    class Meta:
+        unique_together = ('quotation', 'product')
+
+
+# ============================================================
+# B6. ใบเสนอราคาขาย (Sales Quotation)
+# ============================================================
+class SalesQuotation(models.Model):
+    sq_number = models.CharField(max_length=50, unique=True, editable=False)
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, verbose_name="ลูกค้า")
+    quote_date = models.DateField(default=datetime.date.today, db_index=True, verbose_name="วันที่ใบเสนอราคา")
+    notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True)
+
+    def save(self, *args, **kwargs):
+        if not self.sq_number:
+            self.sq_number = generate_number('SQ', SalesQuotation, 'sq_number')
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.sq_number
+
+    class Meta:
+        verbose_name = "ใบเสนอราคาขาย"
+        verbose_name_plural = "B6. ใบเสนอราคาขาย (Sales Quotation)"
+
+
+class SalesQuotationItem(models.Model):
+    quotation = models.ForeignKey(SalesQuotation, on_delete=models.CASCADE, related_name='items')
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้า")
+    barcode = models.ForeignKey('ProductBarcode', on_delete=models.SET_NULL, null=True, blank=True, verbose_name="บาร์โค้ด (ถ้าระบุ)")
+    new_price = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name="ราคาขายใหม่")
+
+    def __str__(self):
+        return f"{self.product.name} @ {self.new_price}"
+
+    class Meta:
+        unique_together = ('quotation', 'product')
+        pass

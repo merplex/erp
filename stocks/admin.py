@@ -4021,4 +4021,124 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     list_display_links = ('contract',)
     ordering = ('-payout_date',)
     inlines = [RebatePayoutItemInline]
+
+
+# ============================================================
+# B5. ใบเสนอราคาซื้อ (Purchase Quotation)
+# ============================================================
+class PurchaseQuotationItemInline(UnfoldTabularInline):
+    model = PurchaseQuotationItem
+    autocomplete_fields = ['product']
+    extra = 1
+    fields = ['product', 'new_price']
+
+
+@admin.register(PurchaseQuotation)
+class PurchaseQuotationAdmin(UnfoldModelAdmin):
+    list_display = ('pq_number', 'supplier', 'quote_date', 'item_count', 'created_by')
+    list_filter = ('supplier', ('quote_date', DjangoDateRangeFilter))
+    list_filter_submit = True
+    search_fields = ('pq_number', 'supplier__company_name', 'items__product__name')
+    readonly_fields = ('created_by',)
+    inlines = [PurchaseQuotationItemInline]
+    actions = ['sync_to_supplier_price']
+
+    class Media:
+        js = ('js/quotation_price_autofill.js',)
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related('items')
+
+    def item_count(self, obj):
+        return obj.items.count()
+    item_count.short_description = "จำนวนรายการ"
+
+    def save_model(self, request, obj, form, change):
+        if not obj.pk and not obj.created_by_id:
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+
+    @admin.action(description="💰 อัพเดทราคาสัญญาซื้อ (ลงในราคา Supplier)")
+    def sync_to_supplier_price(self, request, queryset):
+        created, updated = 0, 0
+        for quotation in queryset.prefetch_related('items__product'):
+            for item in quotation.items.all():
+                obj, is_created = ProductSupplier.objects.get_or_create(
+                    product=item.product,
+                    supplier=quotation.supplier,
+                    defaults={'latest_buy_price': item.new_price},
+                )
+                if is_created:
+                    created += 1
+                else:
+                    obj.latest_buy_price = item.new_price
+                    obj.save(update_fields=['latest_buy_price'])
+                    updated += 1
+        self.message_user(
+            request,
+            f"อัพเดทราคาสัญญาซื้อสำเร็จ — เพิ่มใหม่ {created} รายการ, อัพเดทราคา {updated} รายการ"
+        )
+
+
+# ============================================================
+# B6. ใบเสนอราคาขาย (Sales Quotation)
+# ============================================================
+class SalesQuotationItemInline(UnfoldTabularInline):
+    model = SalesQuotationItem
+    autocomplete_fields = ['product', 'barcode']
+    extra = 1
+    fields = ['product', 'barcode', 'new_price']
+
+
+@admin.register(SalesQuotation)
+class SalesQuotationAdmin(UnfoldModelAdmin):
+    list_display = ('sq_number', 'customer', 'quote_date', 'item_count', 'created_by')
+    list_filter = ('customer', ('quote_date', DjangoDateRangeFilter))
+    list_filter_submit = True
+    search_fields = ('sq_number', 'customer__company_name', 'items__product__name')
+    readonly_fields = ('created_by',)
+    inlines = [SalesQuotationItemInline]
+    actions = ['sync_to_customer_contract']
+
+    class Media:
+        js = ('js/quotation_price_autofill.js',)
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related('items')
+
+    def item_count(self, obj):
+        return obj.items.count()
+    item_count.short_description = "จำนวนรายการ"
+
+    def save_model(self, request, obj, form, change):
+        if not obj.pk and not obj.created_by_id:
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+
+    @admin.action(description="💰 อัพเดทราคาสัญญาขาย (ลงในสัญญาลูกค้า)")
+    def sync_to_customer_contract(self, request, queryset):
+        created, updated = 0, 0
+        for quotation in queryset.prefetch_related('items__product', 'items__barcode'):
+            for item in quotation.items.all():
+                contract = CustomerProductContract.objects.filter(
+                    customer=quotation.customer,
+                    product=item.product,
+                ).first()
+                if contract:
+                    contract.contract_price = item.new_price
+                    contract.save(update_fields=['contract_price'])
+                    updated += 1
+                else:
+                    barcode = item.barcode or item.product.barcodes.first()
+                    CustomerProductContract.objects.create(
+                        customer=quotation.customer,
+                        product=item.product,
+                        barcode=barcode,
+                        contract_price=item.new_price,
+                    )
+                    created += 1
+        self.message_user(
+            request,
+            f"อัพเดทราคาสัญญาขายสำเร็จ — เพิ่มใหม่ {created} รายการ, อัพเดทราคา {updated} รายการ"
+        )
     actions = ['export_to_excel']

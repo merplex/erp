@@ -247,6 +247,70 @@ def barcode_info_api(request):
 
 
 @staff_member_required
+def purchase_quotation_price_api(request):
+    """API: ราคาซื้อล่าสุดของ product นี้จาก supplier นี้ (ใช้ prefill ช่อง new_price ในใบเสนอราคาซื้อ)"""
+    from .models import Product, ProductSupplier
+    supplier_id = request.GET.get('supplier_id', '').strip()
+    product_id = request.GET.get('product_id', '').strip()
+    if not product_id:
+        return JsonResponse({})
+    try:
+        product = Product.objects.get(pk=product_id)
+    except (Product.DoesNotExist, ValueError):
+        return JsonResponse({})
+
+    price = None
+    source = None
+    if supplier_id:
+        ps = ProductSupplier.objects.filter(product_id=product_id, supplier_id=supplier_id).first()
+        if ps and ps.latest_buy_price:
+            price = ps.latest_buy_price
+            source = 'supplier'
+    if price is None:
+        price = product.buy_price or 0
+        source = 'standard'
+
+    return JsonResponse({
+        'price': str(price),
+        'source': source,
+        'product_name': product.name,
+    })
+
+
+@staff_member_required
+def sales_quotation_price_api(request):
+    """API: ราคาขายล่าสุดของ product นี้ให้ customer นี้ (ใช้ prefill ช่อง new_price ในใบเสนอราคาขาย)"""
+    from .models import Product, CustomerProductContract
+    customer_id = request.GET.get('customer_id', '').strip()
+    product_id = request.GET.get('product_id', '').strip()
+    if not product_id:
+        return JsonResponse({})
+    try:
+        product = Product.objects.get(pk=product_id)
+    except (Product.DoesNotExist, ValueError):
+        return JsonResponse({})
+
+    price = None
+    source = None
+    if customer_id:
+        contract = CustomerProductContract.objects.filter(
+            customer_id=customer_id, product_id=product_id
+        ).first()
+        if contract and contract.contract_price:
+            price = contract.contract_price
+            source = 'contract'
+    if price is None:
+        price = product.sale_price or 0
+        source = 'standard'
+
+    return JsonResponse({
+        'price': str(price),
+        'source': source,
+        'product_name': product.name,
+    })
+
+
+@staff_member_required
 def contract_update_barcode_api(request):
     """API: อัปเดต barcode ของ CustomerProductContract แบบ AJAX (ไม่ reload หน้า)"""
     if request.method != 'POST':
