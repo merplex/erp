@@ -1532,7 +1532,7 @@ class PurchaseOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin
         return color_diff(received - ordered)
 
     class Media:
-        js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js', 'js/purchase_order_supplier_filter.js')
+        js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js', 'js/purchase_order_supplier_filter.js', 'js/purchase_item_price_autofill.js')
 
 @admin.register(SalesOrder)
 class SalesOrderAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
