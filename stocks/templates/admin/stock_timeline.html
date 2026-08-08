@@ -3,12 +3,6 @@
 
 {% block extrahead %}
 {{ block.super }}
-<link rel="stylesheet" href="{% static 'admin/css/vendor/select2/select2.min.css' %}">
-{# หน้านี้ไม่ได้ผ่าน ModelAdmin form เลย เพจอื่นๆ ถึงมี jQuery ให้อัตโนมัติ (มากับ Media
-   ของฟอร์ม) แต่หน้านี้ไม่มี ต้องโหลดเองตรงนี้ ก่อน select2 ไม่งั้น select2 หาไม่เจอเงียบๆ #}
-<script src="{% static 'admin/js/vendor/jquery/jquery.min.js' %}"></script>
-<script src="{% static 'admin/js/jquery.init.js' %}"></script>
-<script src="{% static 'admin/js/vendor/select2/select2.full.min.js' %}"></script>
 {% endblock %}
 
 {% block content %}
@@ -52,8 +46,13 @@
     .stp-filters-panel-title { font-size:15px; font-weight:700; color:#1e293b; margin-bottom:4px; }
     .stp-filters-panel label { display:flex; flex-direction:column; gap:5px; font-size:12px; font-weight:600; color:#64748b; }
     .stp-filters-panel select { padding:5px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:13px; color:#1e293b; }
-    .stp-filters-panel .select2-container { width:100% !important; }
-    .stp-filters-panel .select2-selection { min-height:36px !important; border-color:#cbd5e1 !important; }
+    .stp-filters-panel select[multiple] { min-height:180px; }
+    .stp-filters-panel select[multiple] option { padding:4px 6px; border-radius:4px; }
+    .stp-filters-panel select[multiple] option:checked { background:#2563eb; color:#fff; }
+    .stp-search-box {
+        padding:6px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:13px;
+        margin-bottom:4px;
+    }
     .stp-filters-apply {
         margin-top:auto; padding:9px 14px; border:none; border-radius:6px;
         background:#2563eb; color:#fff; font-weight:700; font-size:13px; cursor:pointer;
@@ -118,7 +117,8 @@
             <div class="stp-filters-panel">
                 <div class="stp-filters-panel-title">🔧 ตัวกรอง</div>
                 <label>Category
-                    <select name="category" class="stp-select2">
+                    <input type="text" class="stp-search-box" data-filter-target="stp-select-category" placeholder="พิมพ์ค้นหา...">
+                    <select name="category" id="stp-select-category">
                         <option value="">ทั้งหมด</option>
                         {% for c in categories %}
                         <option value="{{ c.pk }}" {% if f_category == c.pk|stringformat:"s" %}selected{% endif %}>{{ c.name }}</option>
@@ -133,15 +133,17 @@
                     </select>
                 </label>
                 <label>Supplier
-                    <select name="supplier" class="stp-select2">
+                    <input type="text" class="stp-search-box" data-filter-target="stp-select-supplier" placeholder="พิมพ์ค้นหา...">
+                    <select name="supplier" id="stp-select-supplier">
                         <option value="">ทั้งหมด</option>
                         {% for s in suppliers %}
                         <option value="{{ s.pk }}" {% if f_supplier == s.pk|stringformat:"s" %}selected{% endif %}>{{ s.company_name }}</option>
                         {% endfor %}
                     </select>
                 </label>
-                <label>Tag (เลือกได้หลายอัน)
-                    <select name="tag" multiple class="stp-select2">
+                <label>Tag (เลือกได้หลายอัน — กด Ctrl/Cmd ค้างเพื่อเลือกหลายอัน)
+                    <input type="text" class="stp-search-box" data-filter-target="stp-select-tag" placeholder="พิมพ์ค้นหา...">
+                    <select name="tag" multiple id="stp-select-tag">
                         {% for t in tags %}
                         <option value="{{ t.pk }}" {% if t.pk|stringformat:"s" in f_tag %}selected{% endif %}>{{ t.name }}</option>
                         {% endfor %}
@@ -165,29 +167,43 @@
 </div>
 
 <script>
+// ค้นหาใน <select> แบบไม่พึ่ง library ภายนอก (หน้านี้ไม่ผ่าน ModelAdmin form
+// เลยไม่มี jQuery/Select2 ติดมาให้อัตโนมัติเหมือนหน้า admin อื่น) — พิมพ์ในกล่องค้นหา
+// ด้านบน select แต่ละตัว แล้ว JS จะสร้าง <option> ใหม่เหลือแค่ตัวที่ตรงคำค้น
+// (จำค่าที่เลือกไว้แล้วด้วย ถึงพิมพ์กรองไปมาหลายรอบก็ไม่หลุด)
 document.addEventListener('DOMContentLoaded', function () {
-    var $ = window.django ? django.jQuery : window.jQuery;
-    if (!$ || !$.fn.select2) return;
+    document.querySelectorAll('.stp-search-box').forEach(function (input) {
+        var select = document.getElementById(input.dataset.filterTarget);
+        if (!select) return;
 
-    var $details = $('.stp-filters-toggle');
-    var initialized = false;
+        var allOptions = Array.prototype.map.call(select.options, function (opt) {
+            return { value: opt.value, text: opt.text };
+        });
+        var selectedValues = {};
+        Array.prototype.forEach.call(select.selectedOptions, function (opt) {
+            selectedValues[opt.value] = true;
+        });
 
-    function initSelect2() {
-        if (initialized) return;
-        initialized = true;
-        $details.find('select.stp-select2').each(function () {
-            $(this).select2({
-                width: '100%',
-                placeholder: 'ทั้งหมด',
-                allowClear: !this.multiple,
-                dropdownParent: $details.find('.stp-filters-panel'),
+        select.addEventListener('change', function () {
+            selectedValues = {};
+            Array.prototype.forEach.call(select.selectedOptions, function (opt) {
+                selectedValues[opt.value] = true;
             });
         });
-    }
 
-    // เปิด Select2 หลัง <details> เปิดจริง (ตอนซ่อนอยู่ select2 คำนวณความกว้างไม่ได้)
-    $details[0].addEventListener('toggle', function () {
-        if (this.open) initSelect2();
+        input.addEventListener('input', function () {
+            var term = input.value.trim().toLowerCase();
+            select.innerHTML = '';
+            allOptions.forEach(function (opt) {
+                if (opt.value === '' || opt.text.toLowerCase().indexOf(term) !== -1) {
+                    var el = document.createElement('option');
+                    el.value = opt.value;
+                    el.text = opt.text;
+                    el.selected = !!selectedValues[opt.value];
+                    select.appendChild(el);
+                }
+            });
+        });
     });
 });
 </script>

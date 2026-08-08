@@ -239,6 +239,7 @@ UNFOLD = {
                 "collapsible": True,
                 "items": [
                     {"title": "ตารางวางแผนสต็อก (C1)", "icon": "event_note",     "link": "/admin/stocks/stockplanning/"},
+                    {"title": "ปฏิทินวางแผนสต็อก",     "icon": "calendar_month", "link": "/admin/stocks/stockplanning/timeline/"},
                     {"title": "ใบสั่งผลิต (B3)",        "icon": "factory",        "link": "/admin/stocks/productionorder/"},
                     {"title": "สูตรการผลิต (A5)",        "icon": "science",        "link": "/admin/stocks/bom/"},
                 ],
