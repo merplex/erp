@@ -1202,7 +1202,7 @@ def build_product_history_rows(product):
 
 @admin.register(Product)
 class ProductAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
-    list_display = ('name', 'display_tags', 'get_latest_barcode', 'buy_price', 'get_production_cost', 'sale_price', 'stock_quantity', 'min_stock', 'unit','get_total_stock_value', 'has_bom', 'created_by')
+    list_display = ('name', 'display_tags', 'get_latest_barcode', 'get_buy_price_display', 'get_production_cost', 'sale_price', 'stock_quantity', 'min_stock', 'unit','get_total_stock_value', 'has_bom', 'created_by')
     list_filter = (
         ('category', AutocompleteSelectMultipleFilter),
         ('is_product', BooleanRadioFilter),
@@ -1213,18 +1213,19 @@ class ProductAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, 
     list_filter_submit = True
     search_fields = ('name', 'barcodes__code','tags__name')
     inlines = [ProductBarcodeInline, ProductSupplierInline,PendingPurchaseInline, PendingProductionInline, PendingSaleInline]
-    readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at', 'auto_cost', 'buy_price', 'sale_price')
+    readonly_fields = ('created_by', 'updated_by', 'created_at', 'updated_at', 'auto_cost', 'buy_price', 'cost_source', 'sale_price')
     actions = ['export_to_excel', 'auto_fill_cost_price']
     fieldsets = (
         (None, {
             'fields': ('name', 'category', 'is_product', 'tags', 'has_bom', 'unit', 'stock_quantity', 'min_stock', 'production_lead_time', 'delivery_lead_time')
         }),
         ('💰 ต้นทุน & ราคาขาย', {
-            'fields': (('auto_cost', 'manual_buy_price'), ('buy_price', 'sale_price')),
+            'fields': (('auto_cost', 'manual_buy_price'), ('buy_price', 'cost_source'), ('sale_price',)),
             'description': (
                 '<b>ต้นทุนอัตโนมัติ</b>: คำนวณจาก Supplier ราคาสูงสุด +15% (อ่านอย่างเดียว อัปเดตเองเมื่อบันทึก) &nbsp;|&nbsp; '
-                '<b>ต้นทุนกำหนดเอง</b>: กรอกเพื่อ override — ถ้ามีค่า (&gt;0) ระบบจะใช้ค่านี้แทนอัตโนมัติ<br>'
-                '<b>ต้นทุนที่ใช้จริง</b>: ค่าที่ระบบนำไปคำนวณทุกที่ (อ่านอย่างเดียว)'
+                '<b>ต้นทุนกำหนดเอง</b>: กรอกเพื่อ override — ถ้ามีค่า (&gt;0) ระบบจะใช้ค่านี้แทนอัตโนมัติเสมอ<br>'
+                '<b>ต้นทุนที่ใช้จริง</b>: ถ้าไม่มีต้นทุนกำหนดเอง ระบบจะเทียบ "ต้นทุน BOM เฉลี่ย" (ถ้าติ๊กมี BOM) กับ "ต้นทุนอัตโนมัติ (Supplier+15%)" '
+                'แล้วเลือกค่าที่ <b>สูงกว่า</b> มาใช้เป็นต้นทุนจริง (อ่านอย่างเดียว) — ดูที่มาได้จากช่อง "ที่มาต้นทุน" ด้านข้าง'
             ),
         }),
         ('ข้อมูลระบบ', {
@@ -1321,6 +1322,13 @@ class ProductAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, 
         return mark_safe(html)
     display_tags.short_description = "แท็ก"
 
+    @admin.display(description='ราคาทุน (ใช้จริง)', ordering='buy_price')
+    def get_buy_price_display(self, obj):
+        price_str = f"{obj.buy_price:,.2f}"
+        if obj.cost_source == 'bom':
+            return format_html('{} <span style="color:#888;font-size:11px;">(จาก BOM)</span>', price_str)
+        return price_str
+
     # 🛠️ จุดที่แก้เพื่อเลิกล่ม: ดัก Error การจัดรูปแบบตัวเลข
     def get_production_cost(self, obj):
         try:
@@ -1381,6 +1389,8 @@ class ProductAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, 
         obj.updated_by = request.user
         super().save_model(request, obj, form, change)
 
+    COST_SOURCE_LABELS = {'manual': 'กำหนดเอง', 'bom': 'จาก BOM', 'supplier': 'อัตโนมัติจาก Supplier'}
+
     def save_related(self, request, form, formsets, change):
         super().save_related(request, form, formsets, change)
         obj = form.instance
@@ -1390,14 +1400,13 @@ class ProductAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, 
 
         # อ่านค่าล่าสุดจาก DB (หลัง inline ทุกตัว save เสร็จแล้ว — เผื่อ signal ของ ProductSupplier คำนวณไปแล้วรอบนึง)
         obj.refresh_from_db()
-        manual = obj.manual_buy_price or Decimal('0')
         changes = obj.recalc_cost_and_price()
 
         auto_filled = []
         if 'auto_cost' in changes:
             auto_filled.append(f"ต้นทุนอัตโนมัติ = {changes['auto_cost']:,.2f}")
         if 'buy_price' in changes:
-            src = "กำหนดเอง" if manual > 0 else "อัตโนมัติ"
+            src = self.COST_SOURCE_LABELS.get(obj.cost_source, 'อัตโนมัติ')
             auto_filled.append(f"ต้นทุนที่ใช้จริง ({src}) = {changes['buy_price']:,.2f}")
         if 'sale_price' in changes:
             auto_filled.append(f"ราคาขาย = {changes['sale_price']:,.2f}")

@@ -115,6 +115,12 @@ class Product(models.Model):
     buy_price = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name="ราคาทุน (ใช้จริง)")
     auto_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0, blank=True, verbose_name="ต้นทุนอัตโนมัติ (Supplier+15%)")
     manual_buy_price = models.DecimalField(max_digits=10, decimal_places=2, default=0, blank=True, verbose_name="ต้นทุน (กำหนดเอง)")
+    COST_SOURCE_CHOICES = [
+        ('manual', 'กำหนดเอง'),
+        ('bom', 'BOM'),
+        ('supplier', 'Supplier +15%'),
+    ]
+    cost_source = models.CharField(max_length=10, choices=COST_SOURCE_CHOICES, default='supplier', blank=True, verbose_name="ที่มาต้นทุน")
     sale_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, verbose_name="ราคาขาย")
     unit = models.CharField(max_length=50, default="ชิ้น", verbose_name="หน่วย")
     stock_quantity = models.IntegerField(default=0, verbose_name="สต็อกปัจจุบัน")
@@ -145,6 +151,19 @@ class Product(models.Model):
             return 0.0
         return 0.0
         # เติมตัวนี้เข้าไปครับ แอดมินถึงจะเห็นว่ามี BOM กี่ใบ
+    def _bom_unit_cost(self):
+        """ต้นทุน BOM แบบ Decimal เฉลี่ยจากทุกสูตรของสินค้านี้ (ใช้เทียบกับ Supplier+15% ใน recalc_cost_and_price)"""
+        if not self.has_bom:
+            return Decimal('0')
+        try:
+            boms = list(self.bom_formulas.all())
+            if not boms:
+                return Decimal('0')
+            total_sum = sum((bom.total_cost for bom in boms), Decimal('0'))
+            return (Decimal(total_sum) / len(boms)).quantize(Decimal('0.01'))
+        except Exception:
+            return Decimal('0')
+
     @property
     def bom_count(self):
         if not self.has_bom:
@@ -164,9 +183,12 @@ class Product(models.Model):
 
     def recalc_cost_and_price(self):
         """
-        คำนวณ auto_cost (supplier ราคาสูงสุด +15%), buy_price ที่ใช้จริง
-        (manual_buy_price ถ้ามี >0 ไม่งั้นใช้ auto_cost) และ sale_price
-        (max(buy_price*1.15, contract ต่ำสุด)) ใหม่ แล้วบันทึกถ้ามีค่าเปลี่ยน
+        คำนวณ auto_cost (supplier ราคาสูงสุด +15%), buy_price ที่ใช้จริง และ sale_price ใหม่ แล้วบันทึกถ้ามีค่าเปลี่ยน
+        ลำดับการเลือก buy_price:
+          1) manual_buy_price ถ้ามีค่า (>0) → ใช้ค่านี้เสมอ (cost_source='manual')
+          2) ไม่งั้นเทียบ ต้นทุน BOM เฉลี่ย (ถ้ามีสูตร) กับ auto_cost (Supplier ราคาสูงสุด +15%) แล้วใช้ค่าที่ "สูงกว่า"
+             (cost_source='bom' หรือ 'supplier' ตามค่าที่ถูกเลือก)
+        sale_price = max(buy_price*1.15, contract ต่ำสุด)
         คืนค่า dict {field: new_value} เฉพาะฟิลด์ที่เปลี่ยน (ว่างถ้าไม่เปลี่ยน/ไม่มี category)
         """
         if not self.pk or not self.category_id:
@@ -180,8 +202,18 @@ class Product(models.Model):
             if best_supplier else Decimal('0')
         )
 
+        bom_cost = self._bom_unit_cost()
+
         manual = self.manual_buy_price or Decimal('0')
-        new_buy = manual if manual > 0 else new_auto_cost
+        if manual > 0:
+            new_buy = manual
+            new_source = 'manual'
+        elif bom_cost > new_auto_cost:
+            new_buy = bom_cost
+            new_source = 'bom'
+        else:
+            new_buy = new_auto_cost
+            new_source = 'supplier'
 
         new_sale = self.sale_price
         if new_buy > 0:
@@ -197,6 +229,8 @@ class Product(models.Model):
             changes['auto_cost'] = new_auto_cost
         if new_buy != self.buy_price:
             changes['buy_price'] = new_buy
+        if new_source != self.cost_source:
+            changes['cost_source'] = new_source
         if new_sale != self.sale_price:
             changes['sale_price'] = new_sale
 
@@ -297,6 +331,18 @@ class BOMIngredient(models.Model):
     def subtotal(self): return self.material.buy_price * self.quantity
     @property
     def get_unit(self): return self.material.unit if self.material else "-"
+
+@receiver(post_save, sender=BOM)
+@receiver(post_delete, sender=BOM)
+def recalc_product_cost_on_bom_change(sender, instance, **kwargs):
+    """เมื่อสูตร BOM ถูกเพิ่ม/แก้ไข/ลบ ให้คำนวณต้นทุนสินค้าที่ผูกกับสูตรนี้ใหม่ (เทียบ BOM cost กับ Supplier+15%)"""
+    instance.product.recalc_cost_and_price()
+
+@receiver(post_save, sender=BOMIngredient)
+@receiver(post_delete, sender=BOMIngredient)
+def recalc_product_cost_on_bom_ingredient_change(sender, instance, **kwargs):
+    """เมื่อรายการวัตถุดิบในสูตร BOM ถูกแก้ไข/ลบ ให้คำนวณต้นทุนของสินค้าที่ใช้สูตรนี้ใหม่"""
+    instance.bom.product.recalc_cost_and_price()
 
 # 6. ระบบเอกสารสั่งซื้อ
 class PurchaseOrder(models.Model):
