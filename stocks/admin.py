@@ -2304,13 +2304,14 @@ class AdvanceOrderRuleForm(forms.ModelForm):
 @admin.register(AdvanceOrderRule)
 class AdvanceOrderRuleAdmin(UnfoldModelAdmin):
     form = AdvanceOrderRuleForm
-    list_display = ('order_type', 'product', 'quantity', 'frequency_days', 'next_run_date', 'end_date')
+    list_display = ('fo_number', 'order_type', 'product', 'quantity', 'frequency_days', 'next_run_date', 'end_date')
     list_filter = (('order_type', MultipleChoicesDropdownFilter),)
-    search_fields = ('product__name',)
+    search_fields = ('fo_number', 'product__name')
+    readonly_fields = ('fo_number',)
     # barcode_obj ไม่ใช้ autocomplete — ให้ JS (advance_order_rule_form.js) คุมตัวเลือกทั้งหมด
     # จำกัดเฉพาะบาร์โค้ดของสินค้าที่เลือกเท่านั้น (ผ่าน /api/product-barcodes/)
     autocomplete_fields = ['product', 'bom', 'supplier']
-    fields = ('order_type', 'product', 'barcode_obj', 'bom', 'supplier', 'quantity', 'frequency_days', 'end_date', 'next_run_date')
+    fields = ('fo_number', 'order_type', 'product', 'barcode_obj', 'bom', 'supplier', 'quantity', 'frequency_days', 'end_date', 'next_run_date')
 
     def get_changeform_initial_data(self, request):
         initial = super().get_changeform_initial_data(request)
@@ -2659,6 +2660,21 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             events_by_product[row['raw_material_id']].append(
                 (row['production_order__order_date'], -int(row['remaining']), ref)
             )
+
+        # FO: กฎสั่งซื้อ/สั่งผลิตล่วงหน้า (B7) ที่ยังไม่เกิดเป็น PO/PD จริง — โชว์แค่ "รอบถัดไป" ของแต่ละกฎ
+        # เป็นยอดคาดการณ์บนกราฟ Timeline เท่านั้น ไม่นับรวมในยอด "คาดการณ์ (Plan)" ของหน้า C1/รายการหลัก
+        fo_rules = AdvanceOrderRule.objects.filter(product_id__in=product_ids).exclude(
+            end_date__isnull=False, end_date__lt=F('next_run_date')
+        )
+        for rule in fo_rules:
+            product_obj = products_by_id[rule.product_id]
+            lead = (product_obj.delivery_lead_time if rule.order_type == 'PURCHASE' else product_obj.production_lead_time) or 0
+            event_date = rule.next_run_date + timedelta(days=lead)
+            ref = {
+                'label': f"FO {rule.fo_number}",
+                'url': f"/admin/stocks/advanceorderrule/{rule.pk}/change/",
+            }
+            events_by_product[rule.product_id].append((event_date, int(rule.quantity), ref))
 
         def fmt_qty(n):
             """ย่อเลขจำนวนมาก: 12,500 -> 12.5K, 3,200,000 -> 3.2M (ทศนิยม 1 ตำแหน่ง) — เอาไว้ให้ label ในกราฟไม่ยาวเกิน"""

@@ -1430,6 +1430,7 @@ class AdvanceOrderRule(models.Model):
     """กฎการสั่งซื้อ/สั่งผลิตล่วงหน้าแบบซ้ำ (ทุก N วัน จนถึงวันสิ้นสุด)"""
     ORDER_TYPE_CHOICES = [('PURCHASE', 'ใบสั่งซื้อ'), ('PRODUCTION', 'ใบสั่งผลิต')]
 
+    fo_number = models.CharField(max_length=50, unique=True, editable=False)
     order_type = models.CharField(max_length=10, choices=ORDER_TYPE_CHOICES, default='PURCHASE', verbose_name="ประเภท")
     product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้า")
 
@@ -1456,8 +1457,13 @@ class AdvanceOrderRule(models.Model):
         if self.barcode_obj_id and self.product_id and self.barcode_obj.product_id != self.product_id:
             raise ValidationError({'barcode_obj': f"❌ บาร์โค้ด '{self.barcode_obj}' ไม่ใช่ของสินค้า '{self.product}' กรุณาเลือกใหม่"})
 
+    def save(self, *args, **kwargs):
+        if not self.fo_number:
+            self.fo_number = generate_number('FO', AdvanceOrderRule, 'fo_number')
+        super().save(*args, **kwargs)
+
     def __str__(self):
-        return f"{self.get_order_type_display()} - {self.product} (ทุก {self.frequency_days} วัน)"
+        return f"{self.fo_number} - {self.get_order_type_display()} - {self.product} (ทุก {self.frequency_days} วัน)"
 
     class Meta:
         verbose_name_plural = "B7. ใบสั่งผลิต/ใบสั่งซื้อล่วงหน้า"
