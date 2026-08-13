@@ -2348,10 +2348,18 @@ class AdvanceOrderRuleAdmin(UnfoldModelAdmin):
 @admin.register(StockForecast)
 class StockForecastAdmin(UnfoldModelAdmin):
     list_display = ('name', 'category', 'stock_quantity', 'get_weekly', 'get_2weekly', 'get_monthly', 'get_3monthly', 'get_add_button')
-    search_fields = ('name', 'barcodes__code')
+    list_filter = (
+        ('category', AutocompleteSelectMultipleFilter),
+        ('suppliers', AutocompleteSelectMultipleFilter),
+        ('tags', AutocompleteSelectMultipleFilter),
+        BuyPriceRangeFilter,
+    )
+    list_filter_submit = True
+    search_fields = ('name', 'barcodes__code', 'tags__name')
     list_select_related = ('category',)
 
     def get_queryset(self, request):
+        # หน้านี้เป็นการคาดการณ์การใช้สินค้า จึงกรองเฉพาะ "สินค้าที่มีสต๊อกจริง" เสมอ (ไม่มีตัวเลือกปิด)
         return super().get_queryset(request).filter(is_product=True).distinct()
 
     def _forecast(self, obj, period_days):
