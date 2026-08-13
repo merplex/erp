@@ -93,7 +93,7 @@
           sel.add(new Option(o.text, key, false, key === currentKey));
           return;
         }
-        var effective = info.base_remaining - (consumed[key] || 0);
+        var effective = info.base_remaining - (consumed[key] || 0) * (info.factor || 1);
         if (effective <= 0 && key !== currentKey) {
           removedCount++;
           return; // ซ่อน

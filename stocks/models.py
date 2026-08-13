@@ -326,11 +326,28 @@ class BOM(models.Model):
 class BOMIngredient(models.Model):
     bom = models.ForeignKey(BOM, on_delete=models.CASCADE, related_name='ingredients')
     material = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="วัตถุดิบ")
+    barcode_obj = models.ForeignKey('ProductBarcode', null=True, blank=True, on_delete=models.SET_NULL, verbose_name="บาร์โค้ด/หน่วยวัตถุดิบ")
     quantity = models.DecimalField(max_digits=10, decimal_places=4, default=1.0000)
+
+    def clean(self):
+        if self.barcode_obj_id and self.material_id and self.barcode_obj.product_id != self.material_id:
+            raise ValidationError({
+                'barcode_obj': f"❌ บาร์โค้ด '{self.barcode_obj}' ไม่ใช่ของวัตถุดิบ '{self.material}' กรุณาเลือกใหม่"
+            })
+
     @property
-    def subtotal(self): return self.material.buy_price * self.quantity
+    def quantity_base(self):
+        """จำนวนที่แปลงเป็นหน่วยหลักของวัตถุดิบแล้ว (ใช้ตัดสต็อกจริง)"""
+        factor = self.barcode_obj.conversion_factor if self.barcode_obj else 1
+        return self.quantity * factor
+
     @property
-    def get_unit(self): return self.material.unit if self.material else "-"
+    def subtotal(self): return self.material.buy_price * self.quantity_base
+    @property
+    def get_unit(self):
+        if self.barcode_obj:
+            return self.barcode_obj.unit_display
+        return self.material.unit if self.material else "-"
 
 @receiver(post_save, sender=BOM)
 @receiver(post_delete, sender=BOM)
@@ -448,7 +465,9 @@ class PurchaseOrder(models.Model):
     def update_status(self):
         """เรียกเมื่อมีการเปลี่ยนแปลง Receipt Log"""
         total_ordered = self.items.aggregate(t=Sum('quantity_ordered'))['t'] or 0
-        total_received = self.receipt_logs.aggregate(t=Sum('quantity_received'))['t'] or 0
+        # ใช้ยอดสะสมระดับ PurchaseItem (เป็นชิ้นเสมอ) แทนการรวมดิบจาก receipt_logs
+        # เพราะ receipt_logs.quantity_received อาจกรอกเป็นหน่วยบาร์โค้ด (เช่น แพ็ค) ไม่ใช่ชิ้น
+        total_received = self.items.aggregate(t=Sum('quantity_received'))['t'] or 0
 
         if total_ordered > 0:
             if total_received >= total_ordered:
@@ -510,7 +529,9 @@ class PurchaseOrder(models.Model):
 class PurchaseItem(models.Model):
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
-    quantity_ordered = models.PositiveIntegerField(verbose_name="จำนวนที่สั่งซื้อ")
+    barcode_obj = models.ForeignKey('ProductBarcode', null=True, blank=True, on_delete=models.SET_NULL, verbose_name="บาร์โค้ด/หน่วยสั่งซื้อ")
+    quantity_unit = models.PositiveIntegerField(default=1, verbose_name="จำนวนที่สั่ง (ตามหน่วย)")
+    quantity_ordered = models.PositiveIntegerField(verbose_name="จำนวนรวม (ชิ้น)")
     quantity_received = models.PositiveIntegerField(default=0, verbose_name="รับสะสม")
     unit_price = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name="ราคา/หน่วย")
     
@@ -530,6 +551,15 @@ class PurchaseItem(models.Model):
         return self.quantity_ordered * self.unit_price
 
     def save(self, *args, **kwargs):
+        # 🎯 ถ้าเลือกบาร์โค้ด: ดึงสินค้าจากบาร์โค้ด + แปลงจำนวนเป็นหน่วยหลัก (ชิ้น)
+        # unit_price ไม่แปลง เพราะเป็นราคาต่อชิ้น (หน่วยหลัก) เสมอ ไม่ใช่ราคาต่อหน่วยบาร์โค้ด
+        if self.barcode_obj_id:
+            self.product = self.barcode_obj.product
+            factor = getattr(self.barcode_obj, 'conversion_factor', 1) or 1
+            self.quantity_ordered = self.quantity_unit * factor
+        else:
+            self.quantity_ordered = self.quantity_unit
+
         # 🔥 Logic: ถ้าไม่ได้ระบุราคา (ใส่ 0) ให้วิ่งไปดูราคาทุนจาก Supplier
         if self.unit_price == 0:
             try:
@@ -562,12 +592,19 @@ class PurchasePaymentLog(models.Model):
 class PurchaseReceiptLog(models.Model):
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='receipt_logs')
     product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้าที่รับ")
-    quantity_received = models.PositiveIntegerField(verbose_name="จำนวนที่รับครั้งนี้")
+    barcode_obj = models.ForeignKey('ProductBarcode', null=True, blank=True, on_delete=models.SET_NULL, verbose_name="บาร์โค้ด/หน่วยที่รับ")
+    quantity_received = models.PositiveIntegerField(verbose_name="จำนวนที่รับครั้งนี้ (ตามหน่วยที่เลือก)")
     supplier_invoice = models.CharField(max_length=100, blank=True, verbose_name="เลข Invoice/ใบส่งของ Supplier")
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     received_date = models.DateTimeField(auto_now_add=True, verbose_name="วันเวลาที่บันทึก")
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
     def save(self, *args, **kwargs):
+        if self.barcode_obj_id and not self.product_id:
+            self.product = self.barcode_obj.product
+
+        # factor = จำนวนชิ้นต่อหน่วยบาร์โค้ด (เช่น แพ็ค=6, ชิ้น=1)
+        factor = getattr(self.barcode_obj, 'conversion_factor', 1) or 1
+
         is_new = self.pk is None
         if is_new:
             diff = self.quantity_received
@@ -576,10 +613,11 @@ class PurchaseReceiptLog(models.Model):
             diff = self.quantity_received - old_qty
 
         if diff != 0:
-            self.product.stock_quantity += diff
+            diff_pieces = diff * factor
+            self.product.stock_quantity += diff_pieces
             self.product.save(update_fields=['stock_quantity'])
             item = PurchaseItem.objects.get(purchase_order=self.purchase_order, product=self.product)
-            item.quantity_received += diff
+            item.quantity_received += diff_pieces  # สะสมเป็นชิ้นเสมอ ให้ตรงกับ quantity_ordered
             item.save(update_fields=['quantity_received'])
 
         super().save(*args, **kwargs)
@@ -588,11 +626,14 @@ class PurchaseReceiptLog(models.Model):
 # --- ย้ายออกมานอก Class และจัดแนวแถวให้ตรงกัน ---
 @receiver(post_delete, sender=PurchaseReceiptLog)
 def handle_receipt_deletion(sender, instance, **kwargs):
-    instance.product.stock_quantity -= instance.quantity_received
+    factor = getattr(instance.barcode_obj, 'conversion_factor', 1) or 1
+    qty_pieces = instance.quantity_received * factor
+
+    instance.product.stock_quantity -= qty_pieces
     instance.product.save()
     try:
         item = PurchaseItem.objects.get(purchase_order=instance.purchase_order, product=instance.product)
-        item.quantity_received -= instance.quantity_received
+        item.quantity_received -= qty_pieces
         item.save()
     except:
         pass
@@ -936,15 +977,15 @@ class SalesDeliveryLog(models.Model):
             self.product.save()
 
         # 2. สมองกล: สะสมยอดส่งในใบ SO ตามผลต่าง
-        # quantity_shipped ใน SalesItem เป็น "หน่วยบาร์โค้ด" (ไม่ใช่ชิ้น)
-        # เพราะ sale_price = ราคาต่อหน่วยบาร์โค้ด → revenue = sale_price × quantity_shipped ถูกต้อง
+        # quantity_shipped ใน SalesItem ต้องเป็น "ชิ้น" เสมอ ให้ตรงกับ quantity_ordered
+        # (เดิมสะสมเป็นหน่วยบาร์โค้ดดิบๆ ทำให้ยอดค้างส่ง/สต็อกคาดการณ์ผิดเมื่อ factor != 1 — แก้แล้ว)
         qs = SalesItem.objects.filter(sales_order=self.sales_order, product=self.product)
         if self.barcode_obj_id:
             item = qs.filter(barcode_obj=self.barcode_obj).first() or qs.first()
         else:
             item = qs.first()
         if item and diff != 0:
-            item.quantity_shipped += diff  # หน่วยบาร์โค้ด
+            item.quantity_shipped += diff * factor  # ชิ้น
             item.save()
         # --- 🛑 [จบ LOGIC เดิม] ---
 
@@ -1017,7 +1058,7 @@ def handle_delivery_deletion(sender, instance, **kwargs):
             instance.product.save()
         except Exception:
             pass
-    # 2. หักยอดส่งสะสมใน SO (หน่วยบาร์โค้ด — ตรงกับ sale_price ต่อหน่วย)
+    # 2. หักยอดส่งสะสมใน SO (เป็นชิ้นเสมอ ให้ตรงกับ quantity_ordered)
     try:
         qs = SalesItem.objects.filter(sales_order=instance.sales_order, product=instance.product)
         if instance.barcode_obj_id:
@@ -1025,7 +1066,7 @@ def handle_delivery_deletion(sender, instance, **kwargs):
         else:
             item = qs.first()
         if item:
-            item.quantity_shipped -= instance.quantity_shipped  # หน่วยบาร์โค้ด
+            item.quantity_shipped -= qty_pieces  # ชิ้น
             item.save()
     except Exception:
         pass
@@ -1072,9 +1113,9 @@ class ProductionOrder(models.Model):
             self.material_usages.all().delete()
             
             # 🛑 2. เปลี่ยนจาก .items.all() เป็น .ingredients.all() ตามโค้ดเดิมของเปรม
-            for ing in self.bom.ingredients.all(): 
-                # สูตร: (ปริมาณใน BOM) * (จำนวนที่วางแผนผลิต)
-                total_needed = ing.quantity * self.quantity_planned
+            for ing in self.bom.ingredients.all():
+                # สูตร: (ปริมาณใน BOM แปลงเป็นหน่วยหลักแล้ว) * (จำนวนที่วางแผนผลิต)
+                total_needed = ing.quantity_base * self.quantity_planned
                 
                 ProductionMaterialUsage.objects.create(
                     production_order=self,
@@ -1112,8 +1153,8 @@ class ProductionOrder(models.Model):
                 ProductionMaterialUsage.objects.create(
                     production_order=self,
                     raw_material=ing.material, # ใช้ .material ตามโครงสร้างสูตร
-                    planned_qty=ing.quantity * self.quantity_planned,
-                    actual_qty_to_use=ing.quantity * self.quantity_planned
+                    planned_qty=ing.quantity_base * self.quantity_planned,
+                    actual_qty_to_use=ing.quantity_base * self.quantity_planned
                 )
     class Meta: verbose_name_plural = "B3. ใบสั่งผลิต (Productions)"
 
@@ -1168,7 +1209,7 @@ class ProductionLog(models.Model):
         bom = prod_order.bom or prod_order.product.bom_formulas.first()
         if bom:
             for ing in bom.ingredients.all():
-                ing.material.stock_quantity += (ing.quantity * self.quantity_finished)
+                ing.material.stock_quantity += (ing.quantity_base * self.quantity_finished)
                 ing.material.save()
 
         # 3. หักยอดผลิตสะสมคืน
@@ -1176,6 +1217,11 @@ class ProductionLog(models.Model):
         prod_order.save()
 
         super().delete(*args, **kwargs)
+
+class StockForecast(Product):
+    class Meta:
+        proxy = True
+        verbose_name_plural = "C0. คาดการณ์ Stock"
 
 class StockPlanning(Product):
     class Meta:
@@ -1379,7 +1425,63 @@ class ProductionMaterialUsage(models.Model):
                 actual_qty_to_use=total_needed, # ยอดที่ต้องใช้จริง (เริ่มต้นให้เท่ากัน)
                 used_so_far=0                  # เริ่มต้นยังไม่ตัดสต็อก
             )
-    
+
+class AdvanceOrderRule(models.Model):
+    """กฎการสั่งซื้อ/สั่งผลิตล่วงหน้าแบบซ้ำ (ทุก N วัน จนถึงวันสิ้นสุด)"""
+    ORDER_TYPE_CHOICES = [('PURCHASE', 'ใบสั่งซื้อ'), ('PRODUCTION', 'ใบสั่งผลิต')]
+
+    order_type = models.CharField(max_length=10, choices=ORDER_TYPE_CHOICES, default='PURCHASE', verbose_name="ประเภท")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้า")
+
+    # --- เฉพาะ PRODUCTION ---
+    barcode_obj = models.ForeignKey('ProductBarcode', null=True, blank=True, on_delete=models.SET_NULL, verbose_name="บาร์โค้ดที่จะผลิต")
+    bom = models.ForeignKey('BOM', null=True, blank=True, on_delete=models.SET_NULL, verbose_name="สูตรที่ใช้ผลิต")
+
+    # --- เฉพาะ PURCHASE ---
+    supplier = models.ForeignKey('Supplier', null=True, blank=True, on_delete=models.SET_NULL, verbose_name="ผู้จำหน่าย")
+
+    quantity = models.PositiveIntegerField(verbose_name="จำนวนต่อครั้ง")
+    frequency_days = models.PositiveIntegerField(verbose_name="ความถี่ (ทุกกี่วัน)")
+    end_date = models.DateField(null=True, blank=True, verbose_name="วันสิ้นสุด")
+    next_run_date = models.DateField(default=datetime.date.today, verbose_name="รอบถัดไป")
+
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def clean(self):
+        if self.order_type == 'PURCHASE' and not self.supplier_id:
+            raise ValidationError({'supplier': "❌ ใบสั่งซื้อล่วงหน้าต้องเลือกผู้จำหน่ายก่อน"})
+        if self.order_type == 'PRODUCTION' and not self.bom_id:
+            raise ValidationError({'bom': "❌ ใบสั่งผลิตล่วงหน้าต้องเลือกสูตรการผลิต (BOM) ก่อน"})
+        if self.barcode_obj_id and self.product_id and self.barcode_obj.product_id != self.product_id:
+            raise ValidationError({'barcode_obj': f"❌ บาร์โค้ด '{self.barcode_obj}' ไม่ใช่ของสินค้า '{self.product}' กรุณาเลือกใหม่"})
+
+    def __str__(self):
+        return f"{self.get_order_type_display()} - {self.product} (ทุก {self.frequency_days} วัน)"
+
+    class Meta:
+        verbose_name_plural = "B7. ใบสั่งผลิต/ใบสั่งซื้อล่วงหน้า"
+
+
+def run_due_advance_orders():
+    """สร้างใบสั่งซื้อ/ใบสั่งผลิตจริงจากกฎที่ถึงรอบแล้ว — เรียกจาก AdvanceOrderRunnerMiddleware"""
+    today = datetime.date.today()
+    due_rules = AdvanceOrderRule.objects.filter(next_run_date__lte=today).exclude(
+        end_date__isnull=False, end_date__lt=today
+    )
+    for rule in due_rules:
+        new_next_run = today + datetime.timedelta(days=rule.frequency_days)
+        # compare-and-swap: ชนะ race แล้วค่อยสร้างเอกสารจริง กัน request คู่ขนานสร้างซ้ำ
+        won = AdvanceOrderRule.objects.filter(pk=rule.pk, next_run_date=rule.next_run_date).update(next_run_date=new_next_run)
+        if not won:
+            continue
+
+        if rule.order_type == 'PURCHASE':
+            po = PurchaseOrder.objects.create(supplier=rule.supplier)
+            PurchaseItem.objects.create(purchase_order=po, product=rule.product, quantity_unit=rule.quantity, unit_price=0)
+        else:
+            ProductionOrder.objects.create(product=rule.product, bom=rule.bom, quantity_planned=rule.quantity)
+
 class InternationalPurchaseTracking(PurchaseOrder):
     class Meta:
         proxy = True

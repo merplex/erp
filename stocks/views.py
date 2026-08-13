@@ -248,6 +248,73 @@ def barcode_info_api(request):
 
 
 @staff_member_required
+def product_barcodes_api(request):
+    """API: บาร์โค้ดทั้งหมดของสินค้านี้ — ใช้จำกัดตัวเลือก barcode_obj ในฟอร์ม B7 ให้เห็นเฉพาะของสินค้าที่เลือก"""
+    from .models import ProductBarcode
+    product_id = request.GET.get('product_id', '').strip()
+    if not product_id:
+        return JsonResponse({'items': []})
+    barcodes = ProductBarcode.objects.filter(product_id=product_id).order_by('id')
+    return JsonResponse({
+        'items': [
+            {'id': b.pk, 'code': b.code, 'unit_name': b.unit_name or 'ชิ้น'}
+            for b in barcodes
+        ]
+    })
+
+
+@staff_member_required
+def product_bom_by_barcode_api(request):
+    """API: หา BOM ที่ตรงกับบาร์โค้ดที่เลือก (ชื่อ BOM == รหัสบาร์โค้ด) ใช้ logic เดียวกับ SalesItem.save()
+    ถ้าไม่เจอ fallback เป็น BOM ล่าสุดของสินค้านั้น"""
+    from .models import ProductBarcode, BOM
+    product_id = request.GET.get('product_id', '').strip()
+    barcode_id = request.GET.get('barcode_id', '').strip()
+    if not product_id:
+        return JsonResponse({})
+
+    bom = None
+    if barcode_id:
+        barcode = ProductBarcode.objects.filter(pk=barcode_id).first()
+        if barcode:
+            bom = BOM.objects.filter(product_id=product_id, name=barcode.code).first()
+    if not bom:
+        bom = BOM.objects.filter(product_id=product_id).order_by('-id').first()
+
+    if not bom:
+        return JsonResponse({})
+    return JsonResponse({'bom_id': bom.pk, 'bom_name': str(bom)})
+
+
+@staff_member_required
+def recommended_supplier_api(request):
+    """API: แนะนำ supplier สำหรับสินค้านี้ — เอา supplier จากใบสั่งซื้อล่าสุดที่มีสินค้านี้ก่อน
+    ถ้าไม่เคยสั่งซื้อมาก่อนเลย fallback เป็น supplier ที่ราคาต่ำสุด"""
+    from .models import PurchaseItem, ProductSupplier
+    product_id = request.GET.get('product_id', '').strip()
+    if not product_id:
+        return JsonResponse({})
+
+    latest_item = PurchaseItem.objects.filter(
+        product_id=product_id
+    ).exclude(purchase_order__status='Cancelled').select_related(
+        'purchase_order__supplier'
+    ).order_by('-purchase_order__order_date', '-id').first()
+
+    supplier = latest_item.purchase_order.supplier if latest_item and latest_item.purchase_order.supplier_id else None
+
+    if not supplier:
+        cheapest = ProductSupplier.objects.filter(
+            product_id=product_id, latest_buy_price__gt=0
+        ).select_related('supplier').order_by('latest_buy_price').first()
+        supplier = cheapest.supplier if cheapest else None
+
+    if not supplier:
+        return JsonResponse({})
+    return JsonResponse({'supplier_id': supplier.pk, 'supplier_name': supplier.company_name})
+
+
+@staff_member_required
 def purchase_quotation_price_api(request):
     """API: ราคาซื้อล่าสุดของ product นี้จาก supplier นี้ (ใช้ prefill ช่อง new_price ในใบเสนอราคาซื้อ)"""
     from .models import Product, ProductSupplier

@@ -649,9 +649,9 @@ class BOMIngredientForm(forms.ModelForm):
 class BOMIngredientInline(UnfoldTabularInline):
     model = BOMIngredient
     form = BOMIngredientForm # ✅ เอา Form ที่เราสร้างมาใส่ตรงนี้ครับ
-    fields = ('material', 'quantity', 'get_unit_display')
+    fields = ('material', 'barcode_obj', 'quantity', 'get_unit_display')
     readonly_fields = ('get_unit_display',)
-    autocomplete_fields = ['material']
+    autocomplete_fields = ['material', 'barcode_obj']
     extra = 1
     def get_unit_display(self, obj): return obj.get_unit
     get_unit_display.short_description = "หน่วย"
@@ -659,21 +659,23 @@ class BOMIngredientInline(UnfoldTabularInline):
 class PurchaseItemInline(UnfoldTabularInline):
     model = PurchaseItem
     # 🎯 เก็บความสามารถเดิมไว้: ช่วยให้ค้นหาชื่อสินค้าได้ไวขึ้น
-    autocomplete_fields = ['product'] 
+    autocomplete_fields = ['product', 'barcode_obj']
     extra = 0
-    
+
     # 🎯 จัดเรียงคอลัมน์ใหม่ตามที่เปรมต้องการ
     fields = [
-        'product', 
-        'quantity_ordered', 
-        'quantity_received', 
+        'barcode_obj',
+        'product',
+        'quantity_unit',
+        'quantity_ordered',
+        'quantity_received',
         'get_pending',     # ✅ คอลัมน์ "ขาดรับ"
-        'unit_price', 
+        'unit_price',
         'total_price'      # ✅ คอลัมน์ "ราคารวม"
     ]
-    
-    # 🎯 ป้องกันการแก้เลขที่ระบบควรคำนวณเอง
-    readonly_fields = ['quantity_received', 'get_pending', 'total_price']
+
+    # 🎯 ป้องกันการแก้เลขที่ระบบควรคำนวณเอง (quantity_ordered คำนวณอัตโนมัติจาก quantity_unit x หน่วยบาร์โค้ด)
+    readonly_fields = ['quantity_ordered', 'quantity_received', 'get_pending', 'total_price']
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "product":
@@ -726,7 +728,8 @@ class PurchaseItemInline(UnfoldTabularInline):
 class PurchaseReceiptLogInline(UnfoldTabularInline):
     model = PurchaseReceiptLog
     extra = 1
-    fields = ('product', 'supplier_invoice', 'quantity_received', 'user', 'notes', 'received_date')
+    autocomplete_fields = ['barcode_obj']
+    fields = ('barcode_obj', 'product', 'supplier_invoice', 'quantity_received', 'user', 'notes', 'received_date')
     readonly_fields = ('user', 'received_date')
 
     formfield_overrides = {
@@ -1027,7 +1030,7 @@ def build_product_history_rows(product):
     # 1. ซื้อเข้า — รับของตาม PO
     receipts = list(
         PurchaseReceiptLog.objects.filter(product=product)
-        .select_related('purchase_order', 'purchase_order__supplier')
+        .select_related('purchase_order', 'purchase_order__supplier', 'barcode_obj')
     )
     po_ids = [r.purchase_order_id for r in receipts]
     po_price_map = {
@@ -1036,15 +1039,18 @@ def build_product_history_rows(product):
     }
     for r in receipts:
         unit_price = po_price_map.get(r.purchase_order_id) or Decimal('0')
+        # unit_price เป็นราคาต่อชิ้น (หน่วยหลัก) เสมอ — ต้องแปลง quantity_received เป็นชิ้นก่อนคูณ
+        factor = getattr(r.barcode_obj, 'conversion_factor', 1) or 1
+        qty_pieces = r.quantity_received * factor
         rows.append({
             'date': r.received_date,
             'type': 'purchase',
             'type_label': '🛒 ซื้อเข้า (รับของ)',
             'ref_number': r.purchase_order.po_number,
             'ref_url': reverse('admin:stocks_purchaseorder_change', args=[r.purchase_order_id]),
-            'quantity': r.quantity_received,
+            'quantity': qty_pieces,
             'unit_price': unit_price,
-            'total_value': unit_price * r.quantity_received,
+            'total_value': unit_price * qty_pieces,
             'party': str(r.purchase_order.supplier) if r.purchase_order.supplier_id else '-',
             'note': r.notes,
         })
@@ -1198,6 +1204,64 @@ def build_product_history_rows(product):
         row['date'] = _normalize_history_date(row['date'])
     rows.sort(key=lambda r: r['date'], reverse=True)
     return rows
+
+
+# ── C0. คาดการณ์ Stock — คำนวณจากอัตราการใช้จริงในอดีต (ยอดขาย + ยอดใช้ผลิต) ──
+# หลักการ: แต่ละคอลัมน์ (weekly/2weekly/monthly/3monthly) ดูข้อมูลย้อนหลัง "4 เท่า" ของช่วงตัวเอง
+# (weekly ย้อน 4 สัปดาห์, monthly ย้อน 4 เดือน, ...) แล้วหารด้วยจำนวนช่วงที่มีข้อมูลจริง — ถ้าประวัติ
+# สินค้าไม่ยาวพอ (สินค้าใหม่) ก็หารด้วยจำนวนช่วงเท่าที่มีจริง หรือ "ขยายสัดส่วน" ขึ้นถ้ามีไม่ถึง 1 ช่วง
+_FORECAST_MAX_LOOKBACK_DAYS = 90 * 4  # เผื่อคอลัมน์ 3monthly (ย้อน 4x = 360 วัน) ซึ่งเป็นช่วงยาวสุด
+
+def _historical_usage_events(product, today):
+    """คืน list ของ (date, จำนวนที่ถูกใช้เป็นชิ้น) รวมทั้งยอดขายและยอดใช้ผลิต ย้อนหลังสูงสุด 360 วัน"""
+    cutoff = today - datetime.timedelta(days=_FORECAST_MAX_LOOKBACK_DAYS)
+    events = []
+
+    sales = SalesDeliveryLog.objects.filter(
+        product=product, shipped_date__date__gte=cutoff
+    ).select_related('barcode_obj')
+    for s in sales:
+        factor = getattr(s.barcode_obj, 'conversion_factor', 1) or 1
+        events.append((s.shipped_date.date(), s.quantity_shipped * factor))
+
+    # ยอดใช้ผลิต — ใช้ pattern เดียวกับ build_product_history_rows (usage_logs block ด้านบน)
+    usage_logs = (
+        ProductionLog.objects.filter(
+            production_order__material_usages__raw_material=product,
+            finished_date__date__gte=cutoff,
+        )
+        .select_related('production_order')
+        .prefetch_related('production_order__material_usages')
+        .distinct()
+    )
+    for log in usage_logs:
+        po = log.production_order
+        if not po.quantity_planned:
+            continue
+        usage = next((u for u in po.material_usages.all() if u.raw_material_id == product.pk), None)
+        if not usage:
+            continue
+        ratio = Decimal(str(log.quantity_finished)) / Decimal(str(po.quantity_planned))
+        events.append((log.finished_date.date(), usage.actual_qty_to_use * ratio))
+
+    return events
+
+
+def _forecast_for_period(events, today, period_days):
+    """หาค่าคาดการณ์เฉลี่ยต่อ 1 ช่วง (period_days วัน) จากประวัติย้อนหลัง 4 เท่าของช่วงนั้น"""
+    if not events:
+        return 0
+    lookback_target = period_days * 4
+    earliest = min(e[0] for e in events)
+    days_available = min((today - earliest).days, lookback_target)
+    if days_available <= 0:
+        return 0
+    window_start = today - datetime.timedelta(days=days_available)
+    total = sum(qty for d, qty in events if d >= window_start)
+    periods_covered = Decimal(days_available) / Decimal(period_days)
+    if periods_covered <= 0:
+        return 0
+    return int(round(total / periods_covered))
 
 
 @admin.register(Product)
@@ -1475,6 +1539,9 @@ class BOMAdmin(DocumentLockMixin, UnfoldModelAdmin):
             kwargs["queryset"] = Product.objects.filter(has_bom=True)
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
+    class Media:
+        js = ('js/barcode_autofill_generic.js',)
+
 @admin.register(PurchaseOrder)
 class PurchaseOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('po_number', 'supplier', 'order_date', 'status', 'get_diff')
@@ -1641,11 +1708,13 @@ class PurchaseOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockM
 
     def get_diff(self, obj):
         ordered = sum(i.quantity_ordered for i in obj.items.all())
-        received = sum(l.quantity_received for l in obj.receipt_logs.all())
+        # ใช้ยอดสะสมระดับ PurchaseItem (เป็นชิ้นเสมอ) ไม่ใช่ผลรวมดิบจาก receipt_logs
+        # เพราะ receipt_logs.quantity_received อาจกรอกเป็นหน่วยบาร์โค้ด (เช่น แพ็ค)
+        received = sum(i.quantity_received for i in obj.items.all())
         return color_diff(received - ordered)
 
     class Media:
-        js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js', 'js/purchase_order_supplier_filter.js', 'js/purchase_item_price_autofill.js')
+        js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js', 'js/purchase_order_supplier_filter.js', 'js/purchase_item_price_autofill.js', 'js/barcode_autofill_generic.js')
 
 @admin.register(SalesOrder)
 class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
@@ -1741,9 +1810,13 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
                 if item.barcode_obj_id:
                     key = str(item.barcode_obj_id)
                     name = f"{item.barcode_obj.code} \u2014 {item.product.name}"
+                    # base_remaining \u0e40\u0e1b\u0e47\u0e19\u0e0a\u0e34\u0e49\u0e19\u0e40\u0e2a\u0e21\u0e2d (quantity_ordered/quantity_shipped \u0e40\u0e1b\u0e47\u0e19\u0e0a\u0e34\u0e49\u0e19)
+                    # \u0e41\u0e15\u0e48\u0e0a\u0e48\u0e2d\u0e07 qty_field (quantity_shipped) \u0e43\u0e19\u0e41\u0e16\u0e27\u0e43\u0e2b\u0e21\u0e48\u0e01\u0e23\u0e2d\u0e01\u0e40\u0e1b\u0e47\u0e19\u0e2b\u0e19\u0e48\u0e27\u0e22\u0e1a\u0e32\u0e23\u0e4c\u0e42\u0e04\u0e49\u0e14
+                    # \u0e15\u0e49\u0e2d\u0e07\u0e2a\u0e48\u0e07 factor \u0e44\u0e1b\u0e43\u0e2b\u0e49 JS \u0e41\u0e1b\u0e25\u0e07\u0e01\u0e48\u0e2d\u0e19\u0e40\u0e17\u0e35\u0e22\u0e1a (\u0e14\u0e39 smart_delivery_inline.js)
                     remaining = max(0, item.quantity_ordered - item.quantity_shipped)
+                    factor = item.barcode_obj.conversion_factor or 1
                     if key not in items_data:
-                        items_data[key] = {'name': name, 'base_remaining': remaining}
+                        items_data[key] = {'name': name, 'base_remaining': remaining, 'factor': factor}
                     else:
                         items_data[key]['base_remaining'] += remaining
             safe_json = json.dumps({'type': 'delivery', 'form_prefix': 'delivery_logs',
@@ -2218,6 +2291,97 @@ class BuyPriceRangeFilter(admin.SimpleListFilter):
         if self.value() == '501-1000': return queryset.filter(buy_price__gt=500, buy_price__lte=1000)
         if self.value() == '1001-plus': return queryset.filter(buy_price__gt=1000)
         return queryset
+
+class AdvanceOrderRuleForm(forms.ModelForm):
+    class Meta:
+        model = AdvanceOrderRule
+        fields = '__all__'
+        widgets = {
+            'order_type': forms.RadioSelect,
+        }
+
+
+@admin.register(AdvanceOrderRule)
+class AdvanceOrderRuleAdmin(UnfoldModelAdmin):
+    form = AdvanceOrderRuleForm
+    list_display = ('order_type', 'product', 'quantity', 'frequency_days', 'next_run_date', 'end_date')
+    list_filter = (('order_type', MultipleChoicesDropdownFilter),)
+    search_fields = ('product__name',)
+    # barcode_obj ไม่ใช้ autocomplete — ให้ JS (advance_order_rule_form.js) คุมตัวเลือกทั้งหมด
+    # จำกัดเฉพาะบาร์โค้ดของสินค้าที่เลือกเท่านั้น (ผ่าน /api/product-barcodes/)
+    autocomplete_fields = ['product', 'bom', 'supplier']
+    fields = ('order_type', 'product', 'barcode_obj', 'bom', 'supplier', 'quantity', 'frequency_days', 'end_date', 'next_run_date')
+
+    def get_changeform_initial_data(self, request):
+        initial = super().get_changeform_initial_data(request)
+        product_id = request.GET.get('product')
+        if product_id:
+            initial['product'] = product_id
+            initial['order_type'] = 'PURCHASE'
+        return initial
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == 'barcode_obj':
+            # จำกัดตัวเลือกให้เห็นเฉพาะบาร์โค้ดของสินค้าที่เลือกไว้แล้วเท่านั้น (แก้ไข/prefill จาก ?product=)
+            # กรณีหน้าเพิ่มใหม่ที่ยังไม่รู้สินค้า ให้ว่างไว้ก่อน แล้วให้ JS เติมตัวเลือกให้เองหลังเลือกสินค้า
+            resolved = request.resolver_match
+            object_id = resolved.kwargs.get('object_id') if resolved else None
+            product_id = request.GET.get('product')
+            if object_id:
+                obj = self.get_object(request, object_id)
+                product_id = obj.product_id if obj else None
+            if product_id:
+                kwargs['queryset'] = ProductBarcode.objects.filter(product_id=product_id)
+            else:
+                kwargs['queryset'] = ProductBarcode.objects.none()
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+
+    class Media:
+        js = ('js/advance_order_rule_form.js',)
+
+
+@admin.register(StockForecast)
+class StockForecastAdmin(UnfoldModelAdmin):
+    list_display = ('name', 'category', 'stock_quantity', 'get_weekly', 'get_2weekly', 'get_monthly', 'get_3monthly', 'get_add_button')
+    search_fields = ('name', 'barcodes__code')
+    list_select_related = ('category',)
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).filter(is_product=True).distinct()
+
+    def _forecast(self, obj, period_days):
+        # cache เหตุการณ์ย้อนหลังไว้ที่ object เพราะ list_display เรียกทีละคอลัมน์ต่อแถวเดิม
+        # (ไม่งั้นจะ query ยอดขาย/ยอดใช้ผลิตซ้ำ 4 รอบต่อ 1 แถว)
+        if not hasattr(obj, '_forecast_events_cache'):
+            obj._forecast_events_cache = _historical_usage_events(obj, datetime.date.today())
+        return _forecast_for_period(obj._forecast_events_cache, datetime.date.today(), period_days)
+
+    @admin.display(description="weekly")
+    def get_weekly(self, obj):
+        return self._forecast(obj, 7)
+
+    @admin.display(description="2weekly")
+    def get_2weekly(self, obj):
+        return self._forecast(obj, 14)
+
+    @admin.display(description="monthly")
+    def get_monthly(self, obj):
+        return self._forecast(obj, 30)
+
+    @admin.display(description="3monthly")
+    def get_3monthly(self, obj):
+        return self._forecast(obj, 90)
+
+    @admin.display(description="+")
+    def get_add_button(self, obj):
+        url = reverse('admin:stocks_advanceorderrule_add') + f'?product={obj.pk}'
+        return format_html('<a href="{}" style="font-weight:bold; font-size:16px;">+</a>', url)
+
 
 @admin.register(StockPlanning)
 class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
@@ -3527,8 +3691,10 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             product=OuterRef('pk'),
             **{f"{k}": v for k, v in date_query.children}
         ).values('product').annotate(
+            # sale_price = ราคาต่อหน่วยบาร์โค้ด แต่ quantity_shipped สะสมเป็นชิ้นเสมอ
+            # (ดู SalesDeliveryLog.save) จึงต้องหารด้วย conversion_factor ก่อนคูณราคา
             total=Sum(
-                F('sale_price') * F('quantity_shipped'), # 🎯 คำนวณรายได้จากยอดส่งจริงเท่านั้น
+                F('sale_price') * F('quantity_shipped') / Coalesce(F('barcode_obj__conversion_factor'), Value(1)), # 🎯 คำนวณรายได้จากยอดส่งจริงเท่านั้น
                 output_field=DecimalField()
             )
         ).values('total')
@@ -3544,7 +3710,10 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                 BOMIngredient.objects.filter(
                     bom=OuterRef('bom')
                 ).values('bom').annotate(
-                    cost=Sum(F('material__buy_price') * F('quantity'), output_field=DecimalField())
+                    cost=Sum(
+                        F('material__buy_price') * F('quantity') * Coalesce(F('barcode_obj__conversion_factor'), Value(1)),
+                        output_field=DecimalField()
+                    )
                 ).values('cost')[:1]
             )
         ).values('product').annotate(
