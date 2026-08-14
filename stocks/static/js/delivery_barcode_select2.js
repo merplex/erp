@@ -341,29 +341,15 @@
         return $anchor;
     }
 
-    // ผูก <datalist> จากบาร์โค้ดที่ยังค้างส่งใน SO นี้ → ให้ input บาร์โค้ดกรองแบบพิมพ์บางส่วนได้
-    function buildBarcodeDatalist(items) {
-        if (!window.django) return;
-        var $ = django.jQuery;
-        var $dl = $('#delivery-barcode-datalist');
-        if (!$dl.length) {
-            $dl = $('<datalist id="delivery-barcode-datalist"></datalist>');
-            $('body').append($dl);
-        }
-        $dl.empty();
-        (items || []).forEach(function (i) {
-            $('<option>')
-                .val(i.barcode)
-                .text(i.product + ' (เหลือ ' + i.remaining + ' ' + (i.unit_name || 'ชิ้น') + ')')
-                .appendTo($dl);
-        });
-    }
-
     function renderPendingBar(items) {
         if (!window.django) return;
         var $ = django.jQuery;
 
-        buildBarcodeDatalist(items);
+        // ⚠️ ห้ามสร้าง/ล้าง <datalist id="delivery-barcode-datalist"> จาก items ของ endpoint นี้
+        // — endpoint นี้กรองเฉพาะรายการที่ "ยังส่งไม่ครบ" (remaining > 0) เท่านั้น ถ้า SO ไหน
+        // ส่งครบหมดแล้ว items จะว่างเปล่า แล้วมาล้าง datalist ที่ SalesOrderAdmin ฝังมาให้ตั้งแต่
+        // render หน้า (ซึ่งมีบาร์โค้ดครบทุกรายการใน SO ไม่ใช่แค่ที่ยังค้างส่ง) จนกลายเป็นว่าง เคยเจอ
+        // บั๊กนี้มาแล้ว — ปล่อยให้ datalist ที่ฝังมากับหน้าเป็นตัวหลักไปเลย ไม่ต้องมาสร้างซ้ำที่นี่
 
         var $existing = $('#delivery-pending-bar');
         if (!items || !items.length) {

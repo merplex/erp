@@ -1667,15 +1667,19 @@ class PurchaseOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockM
             smart_script = f'<script>window.SMART_INLINE_DATA={safe_json};</script>'
             # ⚠️ ต้องฉีดปุ่ม "เสร็จงาน" เข้า response.content ก่อน </body> โดยตรง (แบบเดียวกับ smart_script
             # ด้านบน) ห้ามฝังผ่าน context['title'] เพราะ Unfold ไม่การันตีว่า {{ title }} จะถูก echo ใน body
+            # 🎯 #submit-row ของ Unfold อยู่ "นอก" <form> จริง (เป็น sticky bar แยกต่างหาก) ปุ่มที่ยัดเข้าไป
+            # ต้องมี attribute form="{model}_form" กำกับด้วย ไม่งั้นกด submit แล้วจะไม่มี <form> ให้ผูก
+            # ทำให้กดแล้วไม่เกิดอะไรขึ้นเลย (ปุ่ม native ของ Unfold เองก็มี attribute นี้อยู่แล้ว)
+            form_id = f"{self.model._meta.model_name}_form"
             unlock_btn_html = ''
             if obj.status == 'Completed':
-                unlock_btn_html = '<input type="submit" value="🔓 ปลดล็อค (Unlock)" name="_unlock_order" style="background: #f59e0b; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">'
+                unlock_btn_html = f'<input type="submit" form="{form_id}" value="🔓 ปลดล็อค (Unlock)" name="_unlock_order" style="background: #f59e0b; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">'
             complete_btn_script = f"""
                 <script>
                     django.jQuery(document).ready(function() {{
                         var target = django.jQuery('#submit-row .flex-col-reverse');
                         if (!target.length) {{ target = django.jQuery('#submit-row'); }}
-                        var btn = '<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
+                        var btn = '<input type="submit" form="{form_id}" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
                         target.prepend(btn);
                         target.prepend('{unlock_btn_html}');
                     }});
@@ -1873,15 +1877,19 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
                 for v in items_data.values()
             )
             datalist_script = f'<datalist id="delivery-barcode-datalist">{datalist_options}</datalist>'
+            # 🎯 #submit-row ของ Unfold อยู่ "นอก" <form> จริง (เป็น sticky bar แยกต่างหาก) ปุ่มที่ยัดเข้าไป
+            # ต้องมี attribute form="{model}_form" กำกับด้วย ไม่งั้นกด submit แล้วจะไม่มี <form> ให้ผูก
+            # ทำให้กดแล้วไม่เกิดอะไรขึ้นเลย (ปุ่ม native ของ Unfold เองก็มี attribute นี้อยู่แล้ว)
+            form_id = f"{self.model._meta.model_name}_form"
             unlock_btn_html = ''
             if obj.status == 'Completed':
-                unlock_btn_html = '<input type="submit" value="🔓 ปลดล็อค (Unlock)" name="_unlock_order" style="background: #f59e0b; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">'
+                unlock_btn_html = f'<input type="submit" form="{form_id}" value="🔓 ปลดล็อค (Unlock)" name="_unlock_order" style="background: #f59e0b; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">'
             complete_btn_script = f"""
                 <script>
                     django.jQuery(document).ready(function() {{
                         var target = django.jQuery('#submit-row .flex-col-reverse');
                         if (!target.length) {{ target = django.jQuery('#submit-row'); }}
-                        var btn = '<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #218838; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
+                        var btn = '<input type="submit" form="{form_id}" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #218838; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
                         target.prepend(btn);
                         target.prepend('{unlock_btn_html}');
                     }});
