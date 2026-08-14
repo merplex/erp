@@ -1858,13 +1858,21 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
                     remaining = max(0, item.quantity_ordered - item.quantity_shipped)
                     factor = item.barcode_obj.conversion_factor or 1
                     if key not in items_data:
-                        items_data[key] = {'name': name, 'base_remaining': remaining, 'factor': factor}
+                        items_data[key] = {'name': name, 'code': item.barcode_obj.code, 'base_remaining': remaining, 'factor': factor}
                     else:
                         items_data[key]['base_remaining'] += remaining
             safe_json = json.dumps({'type': 'delivery', 'form_prefix': 'delivery_logs',
                                     'select_field': 'barcode_obj', 'qty_field': 'quantity_shipped',
                                     'items': items_data}).replace('</', '<\\/')
             smart_script = f'<script>window.SMART_INLINE_DATA={safe_json};</script>'
+            # \ud83c\udfaf datalist \u0e1a\u0e32\u0e23\u0e4c\u0e42\u0e04\u0e49\u0e14\u0e02\u0e2d\u0e07\u0e17\u0e38\u0e01\u0e23\u0e32\u0e22\u0e01\u0e32\u0e23\u0e43\u0e19 SO \u0e19\u0e35\u0e49 \u2014 \u0e1d\u0e31\u0e07\u0e21\u0e32\u0e1e\u0e23\u0e49\u0e2d\u0e21\u0e2b\u0e19\u0e49\u0e32\u0e40\u0e25\u0e22 (\u0e44\u0e21\u0e48\u0e15\u0e49\u0e2d\u0e07\u0e23\u0e2d fetch
+            # /api/pending-barcodes/ \u0e0b\u0e36\u0e48\u0e07\u0e17\u0e33\u0e07\u0e32\u0e19\u0e17\u0e35\u0e2b\u0e25\u0e31\u0e07\u0e41\u0e25\u0e30\u0e01\u0e23\u0e2d\u0e07\u0e40\u0e09\u0e1e\u0e32\u0e30\u0e23\u0e32\u0e22\u0e01\u0e32\u0e23\u0e17\u0e35\u0e48\u0e22\u0e31\u0e07\u0e2a\u0e48\u0e07\u0e44\u0e21\u0e48\u0e04\u0e23\u0e1a) \u0e40\u0e1e\u0e37\u0e48\u0e2d\u0e43\u0e2b\u0e49\u0e1e\u0e34\u0e21\u0e1e\u0e4c
+            # \u0e1a\u0e32\u0e23\u0e4c\u0e42\u0e04\u0e49\u0e14\u0e1a\u0e32\u0e07\u0e2a\u0e48\u0e27\u0e19\u0e43\u0e19\u0e0a\u0e48\u0e2d\u0e07 "Sales delivery logs" \u0e41\u0e25\u0e49\u0e27\u0e21\u0e35 suggestion \u0e43\u0e2b\u0e49\u0e40\u0e25\u0e37\u0e2d\u0e01\u0e44\u0e14\u0e49\u0e17\u0e31\u0e19\u0e17\u0e35\u0e17\u0e35\u0e48\u0e42\u0e2b\u0e25\u0e14\u0e2b\u0e19\u0e49\u0e32
+            datalist_options = ''.join(
+                format_html('<option value="{}">{}</option>', v['code'], v['name'])
+                for v in items_data.values()
+            )
+            datalist_script = f'<datalist id="delivery-barcode-datalist">{datalist_options}</datalist>'
             unlock_btn_html = ''
             if obj.status == 'Completed':
                 unlock_btn_html = '<input type="submit" value="🔓 ปลดล็อค (Unlock)" name="_unlock_order" style="background: #f59e0b; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">'
@@ -1906,7 +1914,7 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
             """
             response.render()
             response.content = response.content.replace(
-                b'</body>', (smart_script + complete_btn_script + print_btn_script).encode('utf-8') + b'</body>', 1
+                b'</body>', (smart_script + datalist_script + complete_btn_script + print_btn_script).encode('utf-8') + b'</body>', 1
             )
         return response
 
