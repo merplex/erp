@@ -91,7 +91,16 @@
         var qty = ($qtyInput.val() || '').trim();
         if (!qty) return;
 
-        var $idInput = $row.find('input[name$="-id"]');
+        // 🎯 BUG หลักที่ทำให้บันทึกซ้ำไม่รู้จบ: Unfold render ช่อง hidden "-id" ของแถวนี้ไว้คนละ
+        // <tbody> กับช่องที่มองเห็น (บาร์โค้ด/จำนวน/ฯลฯ) ไม่ได้อยู่ใน <tr> เดียวกัน — ถ้า scoped
+        // หาแค่ใน $row (.find) จะไม่เจอเลย ทำให้ logId เป็น null ตลอด ทุก auto-save เลยสร้างแถวใหม่
+        // ซ้ำไปเรื่อยๆ แทนที่จะ UPDATE แถวเดิม (ยืนยันจากการ debug จริงในหน้าที่ auto-save 6 ครั้ง
+        // ก็ได้ 6 แถวจริงในฐานข้อมูล) — แก้โดยดึง index ของแถวจาก name ของช่องบาร์โค้ด
+        // (เช่น "delivery_logs-5-barcode_code" → index 5) แล้วหา id field แบบ query ทั้งหน้าแทน
+        var nameMatch = ($barcodeInput.attr('name') || '').match(/-(\d+)-barcode_code$/);
+        var $idInput = nameMatch
+            ? django.jQuery('input[name="delivery_logs-' + nameMatch[1] + '-id"]')
+            : $row.find('input[name$="-id"]'); // fallback เผื่อโครงสร้างเปลี่ยนไปจากนี้
         var logId = $idInput.val() || null;
 
         var shippingNo  = ($row.find('input[name*="delivery_logs-"][name$="-shipping_no"]').val() || '').trim();
