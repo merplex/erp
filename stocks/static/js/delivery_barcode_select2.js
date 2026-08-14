@@ -219,10 +219,11 @@
         // ไม่ต้องพิมพ์บาร์โค้ดเต็มๆ ทุกครั้ง
         $barcodeInput.attr('list', 'delivery-barcode-datalist');
 
-        // auto-fill shipping_no + วันที่ส่งของ ทันทีที่ row ถูก setup (ถ้า row ก่อนมีค่าแล้ว)
-        autoFillShippingNo(row);
-        autoFillShippedDate(row);
-
+        // ⚠️ ห้าม auto-fill ทันทีตอน setup — ถ้า row นี้เป็นแถวว่างท้ายตารางที่ผู้ใช้ยังไม่ได้แตะเลย
+        // (ยังไม่เคย focus ช่องบาร์โค้ด) การยัดค่า shipping_no/shipped_date เข้าไปจะทำให้ Django
+        // มองว่า row นี้ "มีข้อมูล" แล้วบังคับ validate ช่องอื่น (บาร์โค้ด/จำนวน) ที่ยังว่างอยู่ ทำให้
+        // กด Save ทั้งหน้าไม่ผ่านทั้งที่ตั้งใจปล่อยแถวนี้ว่างไว้ — ต้อง fill เฉพาะตอนผู้ใช้เริ่มโฟกัส/พิมพ์
+        // ในแถวนั้นจริงๆ เท่านั้น (ดู event handler ด้านล่าง)
         var barcodeTimer = null;
 
         // focus → auto-fill อีกครั้ง (กรณี setup ก่อนที่ row ก่อนจะมีค่า)

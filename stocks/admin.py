@@ -1082,9 +1082,10 @@ def build_product_history_rows(product):
             'type_label': '📤 ขายออก (ส่งของ)',
             'ref_number': d.sales_order.so_number,
             'ref_url': reverse('admin:stocks_salesorder_change', args=[d.sales_order_id]),
-            'quantity': d.quantity_shipped,
+            # ✅ ส่งของ = สต๊อกออก ต้องเป็นค่าลบ (เทมเพลตใช้เครื่องหมายตัดสีแดง/เขียว)
+            'quantity': -d.quantity_shipped,
             'unit_price': unit_price,
-            'total_value': d.shipment_value,
+            'total_value': -d.shipment_value,
             'party': str(d.sales_order.customer) if d.sales_order.customer_id else '-',
             'note': d.notes,
         })
