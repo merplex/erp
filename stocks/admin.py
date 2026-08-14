@@ -1579,8 +1579,30 @@ class PurchaseOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockM
         custom_urls = [
             path('<int:object_id>/print/', self.admin_site.admin_view(self.print_view), name='stocks_purchaseorder_print'),
             path('<int:object_id>/print-receipt/', self.admin_site.admin_view(self.print_receipt_view), name='stocks_purchaseorder_print_receipt'),
+            path('<int:object_id>/unlock/', self.admin_site.admin_view(self.unlock_view), name='stocks_purchaseorder_unlock'),
         ]
         return custom_urls + super().get_urls()
+
+    def unlock_view(self, request, object_id):
+        # 🎯 ทำเป็น view แยกต่างหาก (ไม่ยัดปุ่มเข้าไปใน form ของ change_view) เพราะตอนสถานะ
+        # Completed ฟอร์มทั้งหน้าจะถูก render แบบ readonly ล้วนๆ (has_change_permission เป็น False
+        # ตอน GET) ไม่มี <input> จริงให้ submit เลย ถ้ายัดปุ่ม submit เข้าไปในฟอร์มนั้นจะโดน Django
+        # เช็ค required fields (Customer, VAT ฯลฯ) แล้ว error "This field is required." ทั้งที่ไม่ได้
+        # จะแก้ field พวกนั้นเลย — เลี่ยงปัญหานี้โดยไม่ผ่าน form validation ของ change_view เลย
+        from django.core.exceptions import PermissionDenied
+        from django.http import Http404
+        if not self.has_view_or_change_permission(request):
+            raise PermissionDenied
+        obj = self.get_object(request, object_id)
+        if obj is None:
+            raise Http404("ไม่พบใบสั่งซื้อนี้")
+        if obj.status == 'Completed':
+            obj.status = 'Partially Received'
+            obj.save(update_fields=['status'])
+            self.message_user(request,
+                f"🔓 ปลดล็อคใบสั่งซื้อ {obj.po_number} แล้ว แก้ไขรายการรับของได้ตามปกติ — "
+                f"ถ้าแก้เสร็จแล้วยอดรับยังครบเหมือนเดิม ระบบจะปิดงานให้อัตโนมัติ")
+        return HttpResponseRedirect(reverse('admin:stocks_purchaseorder_change', args=[obj.pk]))
 
     def print_view(self, request, object_id):
         from django.core.exceptions import PermissionDenied
@@ -1625,18 +1647,6 @@ class PurchaseOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockM
             obj.save()
             self.message_user(request, f"ปิดงานใบสั่งซื้อ {obj.po_number} เรียบร้อยแล้ว")
             return HttpResponseRedirect(".")
-        if "_unlock_order" in request.POST:
-            if obj.status == 'Completed':
-                # ปลดล็อคชั่วคราวเพื่อแก้ไขรายการรับของ — ไม่เรียก update_status() ตรงนี้
-                # เพราะยอดยังครบอยู่ จะถูกคำนวณกลับเป็น Completed ทันที ต้องรอให้แก้ไข
-                # รายการรับของก่อน (save/delete ของ PurchaseReceiptLog จะเรียก update_status()
-                # ให้เองแล้วปิดงานอัตโนมัติถ้ายอดยังครบเหมือนเดิม)
-                obj.status = 'Partially Received'
-                obj.save(update_fields=['status'])
-                self.message_user(request,
-                    f"🔓 ปลดล็อคใบสั่งซื้อ {obj.po_number} แล้ว แก้ไขรายการรับของได้ตามปกติ — "
-                    f"ถ้าแก้เสร็จแล้วยอดรับยังครบเหมือนเดิม ระบบจะปิดงานให้อัตโนมัติ")
-            return HttpResponseRedirect(".")
         return super().response_change(request, obj)
 
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
@@ -1667,13 +1677,17 @@ class PurchaseOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockM
             smart_script = f'<script>window.SMART_INLINE_DATA={safe_json};</script>'
             # ⚠️ ต้องฉีดปุ่ม "เสร็จงาน" เข้า response.content ก่อน </body> โดยตรง (แบบเดียวกับ smart_script
             # ด้านบน) ห้ามฝังผ่าน context['title'] เพราะ Unfold ไม่การันตีว่า {{ title }} จะถูก echo ใน body
-            # 🎯 #submit-row ของ Unfold อยู่ "นอก" <form> จริง (เป็น sticky bar แยกต่างหาก) ปุ่มที่ยัดเข้าไป
-            # ต้องมี attribute form="{model}_form" กำกับด้วย ไม่งั้นกด submit แล้วจะไม่มี <form> ให้ผูก
-            # ทำให้กดแล้วไม่เกิดอะไรขึ้นเลย (ปุ่ม native ของ Unfold เองก็มี attribute นี้อยู่แล้ว)
+            # 🎯 #submit-row ของ Unfold อยู่ "นอก" <form> จริง (เป็น sticky bar แยกต่างหาก) ปุ่ม submit ที่ยัด
+            # เข้าไปต้องมี attribute form="{model}_form" กำกับด้วย ไม่งั้นกดแล้วไม่มี <form> ให้ผูก (กดแล้ว
+            # ไม่เกิดอะไรขึ้นเลย) — ใช้ได้กับปุ่ม "เสร็จงาน" เพราะตอนนั้นฟอร์มยัง render แบบแก้ไขได้ปกติ
+            # แต่ใช้กับปุ่ม "ปลดล็อค" ไม่ได้ เพราะตอนสถานะ Completed ทั้งฟอร์ม render แบบ readonly ล้วนๆ
+            # (ไม่มี input จริงให้ Customer/VAT ฯลฯ) submit ทั้งฟอร์มแล้วจะโดน required-field error แทน
+            # เลยทำปุ่มปลดล็อคเป็นลิงก์ไปหา view แยกต่างหาก (unlock_view) ที่ไม่ผ่านการ validate ฟอร์มเลย
             form_id = f"{self.model._meta.model_name}_form"
+            unlock_url = reverse('admin:stocks_purchaseorder_unlock', args=[obj.pk])
             unlock_btn_html = ''
             if obj.status == 'Completed':
-                unlock_btn_html = f'<input type="submit" form="{form_id}" value="🔓 ปลดล็อค (Unlock)" name="_unlock_order" style="background: #f59e0b; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">'
+                unlock_btn_html = f'<a href="{unlock_url}" style="display:inline-block; background: #f59e0b; color: white; height: 35px; line-height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold; text-decoration: none;">🔓 ปลดล็อค (Unlock)</a>'
             complete_btn_script = f"""
                 <script>
                     django.jQuery(document).ready(function() {{
@@ -1776,8 +1790,30 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
         custom_urls = [
             path('<int:object_id>/print/', self.admin_site.admin_view(self.print_view), name='stocks_salesorder_print'),
             path('<int:object_id>/print-delivery/', self.admin_site.admin_view(self.print_delivery_view), name='stocks_salesorder_print_delivery'),
+            path('<int:object_id>/unlock/', self.admin_site.admin_view(self.unlock_view), name='stocks_salesorder_unlock'),
         ]
         return custom_urls + super().get_urls()
+
+    def unlock_view(self, request, object_id):
+        # 🎯 ทำเป็น view แยกต่างหาก (ไม่ยัดปุ่มเข้าไปใน form ของ change_view) เพราะตอนสถานะ
+        # Completed ฟอร์มทั้งหน้าจะถูก render แบบ readonly ล้วนๆ (has_change_permission เป็น False
+        # ตอน GET) ไม่มี <input> จริงให้ submit เลย ถ้ายัดปุ่ม submit เข้าไปในฟอร์มนั้นจะโดน Django
+        # เช็ค required fields (Customer, VAT ฯลฯ) แล้ว error "This field is required." ทั้งที่ไม่ได้
+        # จะแก้ field พวกนั้นเลย — เลี่ยงปัญหานี้โดยไม่ผ่าน form validation ของ change_view เลย
+        from django.core.exceptions import PermissionDenied
+        from django.http import Http404
+        if not self.has_view_or_change_permission(request):
+            raise PermissionDenied
+        obj = self.get_object(request, object_id)
+        if obj is None:
+            raise Http404("ไม่พบใบสั่งขายนี้")
+        if obj.status == 'Completed':
+            obj.status = 'Shipped'
+            obj.save(update_fields=['status'])
+            self.message_user(request,
+                f"🔓 ปลดล็อคใบสั่งขาย {obj.so_number} แล้ว แก้ไขรายการส่งของได้ตามปกติ — "
+                f"ถ้าแก้เสร็จแล้วยอดส่งยังครบเหมือนเดิม ระบบจะปิดงานให้อัตโนมัติ")
+        return HttpResponseRedirect(reverse('admin:stocks_salesorder_change', args=[obj.pk]))
 
     def print_view(self, request, object_id):
         from django.core.exceptions import PermissionDenied
@@ -1822,18 +1858,6 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
             obj.save()
             self.message_user(request, f"ปิดงานใบสั่งขาย {obj.so_number} เรียบร้อยแล้ว")
             return HttpResponseRedirect(".")
-        if "_unlock_order" in request.POST:
-            if obj.status == 'Completed':
-                # ปลดล็อคชั่วคราวเพื่อแก้ไขรายการส่งของ — ไม่เรียก update_status() ตรงนี้
-                # เพราะยอดยังครบอยู่ จะถูกคำนวณกลับเป็น Completed ทันที ต้องรอให้แก้ไข
-                # รายการส่งของก่อน (save ของ SalesDeliveryLog จะเรียก update_status() ให้เอง
-                # แล้วปิดงานอัตโนมัติถ้ายอดส่งยังครบเหมือนเดิม)
-                obj.status = 'Shipped'
-                obj.save(update_fields=['status'])
-                self.message_user(request,
-                    f"🔓 ปลดล็อคใบสั่งขาย {obj.so_number} แล้ว แก้ไขรายการส่งของได้ตามปกติ — "
-                    f"ถ้าแก้เสร็จแล้วยอดส่งยังครบเหมือนเดิม ระบบจะปิดงานให้อัตโนมัติ")
-            return HttpResponseRedirect(".")
         return super().response_change(request, obj)
 
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
@@ -1877,13 +1901,17 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
                 for v in items_data.values()
             )
             datalist_script = f'<datalist id="delivery-barcode-datalist">{datalist_options}</datalist>'
-            # 🎯 #submit-row ของ Unfold อยู่ "นอก" <form> จริง (เป็น sticky bar แยกต่างหาก) ปุ่มที่ยัดเข้าไป
-            # ต้องมี attribute form="{model}_form" กำกับด้วย ไม่งั้นกด submit แล้วจะไม่มี <form> ให้ผูก
-            # ทำให้กดแล้วไม่เกิดอะไรขึ้นเลย (ปุ่ม native ของ Unfold เองก็มี attribute นี้อยู่แล้ว)
+            # 🎯 #submit-row ของ Unfold อยู่ "นอก" <form> จริง (เป็น sticky bar แยกต่างหาก) ปุ่ม submit ที่ยัด
+            # เข้าไปต้องมี attribute form="{model}_form" กำกับด้วย ไม่งั้นกดแล้วไม่มี <form> ให้ผูก (กดแล้ว
+            # ไม่เกิดอะไรขึ้นเลย) — ใช้ได้กับปุ่ม "เสร็จงาน" เพราะตอนนั้นฟอร์มยัง render แบบแก้ไขได้ปกติ
+            # แต่ใช้กับปุ่ม "ปลดล็อค" ไม่ได้ เพราะตอนสถานะ Completed ทั้งฟอร์ม render แบบ readonly ล้วนๆ
+            # (ไม่มี input จริงให้ Customer/VAT ฯลฯ) submit ทั้งฟอร์มแล้วจะโดน required-field error แทน
+            # เลยทำปุ่มปลดล็อคเป็นลิงก์ไปหา view แยกต่างหาก (unlock_view) ที่ไม่ผ่านการ validate ฟอร์มเลย
             form_id = f"{self.model._meta.model_name}_form"
+            unlock_url = reverse('admin:stocks_salesorder_unlock', args=[obj.pk])
             unlock_btn_html = ''
             if obj.status == 'Completed':
-                unlock_btn_html = f'<input type="submit" form="{form_id}" value="🔓 ปลดล็อค (Unlock)" name="_unlock_order" style="background: #f59e0b; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">'
+                unlock_btn_html = f'<a href="{unlock_url}" style="display:inline-block; background: #f59e0b; color: white; height: 35px; line-height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold; text-decoration: none;">🔓 ปลดล็อค (Unlock)</a>'
             complete_btn_script = f"""
                 <script>
                     django.jQuery(document).ready(function() {{
@@ -2083,10 +2111,8 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
         if obj:
             # 🔒 เปลี่ยนจากเช็ก Confirmation เป็นเช็กสถานะใบสั่งขาย
             if obj.status == 'Completed':
-                # ✅ ยกเว้นปุ่ม "ปลดล็อค (Unlock)" ให้กดได้แม้ปิดงานแล้ว ไม่งั้นจะกดปุ่มไม่ได้เลย
-                if request.method == 'POST' and '_unlock_order' in request.POST:
-                    return True
-                return False # ล็อคเฉพาะตอนกด "เสร็จงาน/ปิดงาน" เท่านั้น
+                return False # ล็อคเฉพาะตอนกด "เสร็จงาน/ปิดงาน" เท่านั้น — ปุ่ม "ปลดล็อค" ไม่ผ่านเส้นทางนี้
+                             # (เป็นลิงก์ไป unlock_view แยกต่างหาก ใช้ has_view_or_change_permission แทน)
         return super().has_change_permission(request, obj)
     class Media:
         js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js', 'js/delivery_barcode_select2.js', 'js/sales_item_barcode_autofill.js')
