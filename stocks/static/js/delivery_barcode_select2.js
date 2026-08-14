@@ -102,6 +102,8 @@
             ? django.jQuery('input[name="delivery_logs-' + nameMatch[1] + '-id"]')
             : $row.find('input[name$="-id"]'); // fallback เผื่อโครงสร้างเปลี่ยนไปจากนี้
         var logId = $idInput.val() || null;
+        // 🔍 DEBUG ชั่วคราว — เอาออกทีหลังเมื่อยืนยันแก้บั๊กซ้ำได้จริงแล้ว
+        console.log('[autoSaveRow] barcodeName=', $barcodeInput.attr('name'), 'idxMatch=', nameMatch && nameMatch[1], 'idInputCount=', $idInput.length, 'logId(before send)=', logId);
 
         var shippingNo  = ($row.find('input[name*="delivery_logs-"][name$="-shipping_no"]').val() || '').trim();
         var notes       = ($row.find('input[name*="delivery_logs-"][name$="-notes"]').val() || '').trim();
@@ -130,10 +132,13 @@
             $row.data('saving', false);
             pendingAutoSaves--;
             if (result.success) {
+                // 🔍 DEBUG ชั่วคราว
+                console.log('[autoSaveRow] response log_id=', result.log_id, '| idInput value BEFORE set=', $idInput.val(), '| idInputCount=', $idInput.length);
                 // อัปเดต id hidden field → กด Save ใหญ่จะ UPDATE ไม่ใช่ CREATE ซ้ำ
                 if (!$idInput.val()) {
                     $idInput.val(result.log_id);
                 }
+                console.log('[autoSaveRow] idInput value AFTER set=', $idInput.val());
                 // ล้าง error เก่า (เช่น "ไม่พบบาร์โค้ดนี้ในระบบ" / "This field is required."
                 // ที่ค้างมาจากการกด Save หน้าเต็มครั้งก่อน) ไม่งั้นจะค้างคาอยู่ทั้งที่ auto-save
                 // รอบนี้สำเร็จแล้ว ทำให้ดูเหมือนขัดแย้งกันเอง (บันทึกแล้ว แต่ก็ยัง error)
