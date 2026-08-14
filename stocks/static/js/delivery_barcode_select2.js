@@ -55,6 +55,13 @@
                         rem > 0 ? ('คงเหลือ: ' + rem + ' ' + unit) : 'ส่งครบแล้ว (0)',
                         rem > 0 ? '#16a34a' : '#dc2626'
                     );
+                    // ✅ เลือกบาร์โค้ดที่มีอยู่จริงในใบสั่งขายนี้แล้วเท่านั้น ถึงค่อย auto-fill
+                    // เลขใบขนส่ง/วันที่ส่งของจากแถวก่อนหน้าให้ — ถ้ายังไม่เลือกอะไรเลยจะไม่ auto-fill
+                    var row = $input.closest('tr')[0];
+                    if (row) {
+                        autoFillShippingNo(row);
+                        autoFillShippedDate(row);
+                    }
                     if (callback) callback(true);
                 } else {
                     $input.css('border-color', '#dc2626');
@@ -219,18 +226,12 @@
         // ไม่ต้องพิมพ์บาร์โค้ดเต็มๆ ทุกครั้ง
         $barcodeInput.attr('list', 'delivery-barcode-datalist');
 
-        // ⚠️ ห้าม auto-fill ทันทีตอน setup — ถ้า row นี้เป็นแถวว่างท้ายตารางที่ผู้ใช้ยังไม่ได้แตะเลย
-        // (ยังไม่เคย focus ช่องบาร์โค้ด) การยัดค่า shipping_no/shipped_date เข้าไปจะทำให้ Django
-        // มองว่า row นี้ "มีข้อมูล" แล้วบังคับ validate ช่องอื่น (บาร์โค้ด/จำนวน) ที่ยังว่างอยู่ ทำให้
-        // กด Save ทั้งหน้าไม่ผ่านทั้งที่ตั้งใจปล่อยแถวนี้ว่างไว้ — ต้อง fill เฉพาะตอนผู้ใช้เริ่มโฟกัส/พิมพ์
-        // ในแถวนั้นจริงๆ เท่านั้น (ดู event handler ด้านล่าง)
+        // ⚠️ ไม่ auto-fill shipping_no/shipped_date จนกว่าจะ "เลือกบาร์โค้ดที่ถูกต้องแล้ว" จริงๆ
+        // (ดูใน checkBarcode ด้านบน — auto-fill จะทำงานตรงนั้นตอน data.valid เท่านั้น) ไม่ใช่แค่
+        // คลิกโฟกัสช่องเฉยๆ หรือกำลังพิมพ์อยู่ ไม่งั้นแถวว่างท้ายตารางที่ผู้ใช้ยังไม่ได้เลือกอะไรเลย
+        // จะถูกยัดค่าเข้าไป ทำให้ Django มองว่า row นี้ "มีข้อมูล" แล้วบังคับ validate ช่องอื่น
+        // (บาร์โค้ด/จำนวน) ที่ยังว่างอยู่ กด Save ทั้งหน้าไม่ผ่านทั้งที่ตั้งใจปล่อยแถวนี้ว่างไว้
         var barcodeTimer = null;
-
-        // focus → auto-fill อีกครั้ง (กรณี setup ก่อนที่ row ก่อนจะมีค่า)
-        $barcodeInput.on('focus', function () {
-            autoFillShippingNo(row);
-            autoFillShippedDate(row);
-        });
 
         // ออกจากกล่อง barcode → validate + ลอง save (ถ้ามี qty แล้ว)
         $barcodeInput.on('blur', function () {
@@ -240,10 +241,8 @@
             });
         });
 
-        // พิมพ์ใน barcode → validate หลัง 600ms + auto-fill
+        // พิมพ์ใน barcode → validate หลัง 600ms (auto-fill จะตามมาเองถ้า valid ดูใน checkBarcode)
         $barcodeInput.on('input', function () {
-            autoFillShippingNo(row);
-            autoFillShippedDate(row);
             clearTimeout(barcodeTimer);
             barcodeTimer = setTimeout(function () {
                 checkBarcode($barcodeInput, null);
