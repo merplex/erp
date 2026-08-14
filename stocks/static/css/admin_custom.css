@@ -91,6 +91,28 @@ input[type="checkbox"][id$="-DELETE"]:checked {
     width: 100% !important;
 }
 
+/* ── ซ่อนปุ่มลูกศรขึ้น/ลง (spinner) ของ input[type=number] ──────────
+   ปุ่มนี้ทับขอบขวาของกล่อง ทำให้เลขจำนวนมากๆ (เช่น 7 หลัก) แสดงไม่ครบ
+   พอเอาออก ตัวกล่องจะได้พื้นที่เต็ม และตอนพิมพ์เกินขอบ ตัวเลขจะเลื่อน
+   ไปทางซ้ายตามเคอร์เซอร์เอง (พฤติกรรมปกติของ input เมื่อไม่มี spinner บัง) ── */
+input[type="number"] {
+    -moz-appearance: textfield;
+}
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+/* ── ช่องวันที่ (vDateField/vTimeField ของ Unfold) กว้างเกินความจำเป็น ──
+   ย่อให้พอดีกับ "YYYY-MM-DD" / "HH:MM" แทนที่จะยืดเต็มคอลัมน์ ── */
+input.vDateField {
+    max-width: 130px !important;
+}
+input.vTimeField {
+    max-width: 90px !important;
+}
+
 /* ── Input / Textarea ให้มีกรอบ ──────────────────────── */
 .change-form fieldset input[type="text"],
 .change-form fieldset input[type="number"],

@@ -138,6 +138,10 @@ USE_I18N = True
 
 USE_TZ = True
 
+# ✅ ใส่ตัวคั่นหลักพัน/หลักล้าน (comma) ให้ตัวเลขที่แสดงผลในหน้า Admin ทั้งหมด
+# (จำนวน, ราคา ฯลฯ ที่เป็น readonly field / list_display) เช่น 118000 -> 118,000
+USE_THOUSAND_SEPARATOR = True
+
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
@@ -170,6 +174,7 @@ UNFOLD = {
     ],
     "SCRIPTS": [
         lambda request: static("js/date_range_picker.js"),
+        lambda request: static("js/input_hover_scroll.js"),
     ],
     "SITE_TITLE": "Meebun ERP",
     "SITE_HEADER": "Meebun ERP",

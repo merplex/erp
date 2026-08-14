@@ -21,6 +21,13 @@
         $hint.text(text).css('color', color).show();
     }
 
+    // ล้าง error message ของ Django (errorlist สีแดงจากการกด Save หน้าเต็ม) ในแถวนี้
+    function clearRowServerErrors($row) {
+        $row.find('.errorlist').remove();
+        $row.find('.errors').removeClass('errors');
+        $row.find('input, select, textarea').css('border-color', '');
+    }
+
     // ทำ barcode input เป็น readonly หลัง save
     function lockBarcodeInput($input) {
         $input.prop('readonly', true).css({
@@ -103,6 +110,10 @@
                 if (!$idInput.val()) {
                     $idInput.val(result.log_id);
                 }
+                // ล้าง error เก่า (เช่น "ไม่พบบาร์โค้ดนี้ในระบบ" / "This field is required."
+                // ที่ค้างมาจากการกด Save หน้าเต็มครั้งก่อน) ไม่งั้นจะค้างคาอยู่ทั้งที่ auto-save
+                // รอบนี้สำเร็จแล้ว ทำให้ดูเหมือนขัดแย้งกันเอง (บันทึกแล้ว แต่ก็ยัง error)
+                clearRowServerErrors($row);
                 // ล็อค barcode
                 lockBarcodeInput($barcodeInput);
                 // อัปเดต remaining
@@ -112,6 +123,8 @@
                     '✓ บันทึกแล้ว' + (rem > 0 ? ' — คงเหลือ: ' + rem + ' ' + unit : ' — ส่งครบแล้ว'),
                     rem > 0 ? '#16a34a' : '#2563eb'
                 );
+                // รีเฟรชแถบ "ค้างส่ง" ให้ตรงกับยอดล่าสุด (ไม่งั้นจะค้างข้อมูลเก่าตั้งแต่โหลดหน้า)
+                loadPendingBar();
             } else if (result.errors) {
                 if (result.errors.barcode_code) {
                     $barcodeInput.css('border-color', '#dc2626');
@@ -174,6 +187,10 @@
         if (!$barcodeInput.length) return;
 
         $row.data('barcode-setup', true);
+
+        // ผูก datalist ของบาร์โค้ดในใบสั่งขายนี้ → พิมพ์แค่บางส่วน (เช่น 4 หลัก) ก็กรองแล้วเลือกได้เลย
+        // ไม่ต้องพิมพ์บาร์โค้ดเต็มๆ ทุกครั้ง
+        $barcodeInput.attr('list', 'delivery-barcode-datalist');
 
         // auto-fill shipping_no ทันทีที่ row ถูก setup (ถ้า row ก่อนมีค่าแล้ว)
         autoFillShippingNo(row);
@@ -294,9 +311,29 @@
         return $anchor;
     }
 
+    // ผูก <datalist> จากบาร์โค้ดที่ยังค้างส่งใน SO นี้ → ให้ input บาร์โค้ดกรองแบบพิมพ์บางส่วนได้
+    function buildBarcodeDatalist(items) {
+        if (!window.django) return;
+        var $ = django.jQuery;
+        var $dl = $('#delivery-barcode-datalist');
+        if (!$dl.length) {
+            $dl = $('<datalist id="delivery-barcode-datalist"></datalist>');
+            $('body').append($dl);
+        }
+        $dl.empty();
+        (items || []).forEach(function (i) {
+            $('<option>')
+                .val(i.barcode)
+                .text(i.product + ' (เหลือ ' + i.remaining + ' ' + (i.unit_name || 'ชิ้น') + ')')
+                .appendTo($dl);
+        });
+    }
+
     function renderPendingBar(items) {
         if (!window.django) return;
         var $ = django.jQuery;
+
+        buildBarcodeDatalist(items);
 
         var $existing = $('#delivery-pending-bar');
         if (!items || !items.length) {

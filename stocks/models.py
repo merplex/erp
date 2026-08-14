@@ -851,7 +851,7 @@ class SalesItem(models.Model):
         max_digits=10, 
         decimal_places=2, 
         default=0.00, 
-        verbose_name="ราคาขายต่อหน่วย"
+        verbose_name="ราคาขาย"
     )
 
     quantity_shipped = models.PositiveIntegerField(default=0, verbose_name="ส่งสะสม")

@@ -662,6 +662,11 @@ class PurchaseItemInline(UnfoldTabularInline):
     autocomplete_fields = ['product', 'barcode_obj']
     extra = 0
 
+    # 🎯 กล่อง "ราคา/หน่วย" แสดงแค่ ~5 หลักก็พอ ไม่ต้องยืดเต็มคอลัมน์
+    formfield_overrides = {
+        models.DecimalField: {'widget': forms.NumberInput(attrs={'style': 'width: 90px;'})},
+    }
+
     # 🎯 จัดเรียงคอลัมน์ใหม่ตามที่เปรมต้องการ
     fields = [
         'barcode_obj',
@@ -735,6 +740,8 @@ class PurchaseReceiptLogInline(UnfoldTabularInline):
     formfield_overrides = {
         models.CharField: {'widget': TextInput(attrs={'style': 'width: 120px;', 'placeholder': 'เลขใบส่งของ'})},
         models.TextField: {'widget': TextInput(attrs={'style': 'width: 200px;', 'placeholder': 'หมายเหตุ'})},
+        # 🎯 กล่อง "รับสะสม" ให้ยาวพอสำหรับ 7 หลัก เท่ากับตอนเปิดรายการสั่งซื้อ
+        models.PositiveIntegerField: {'widget': forms.NumberInput(attrs={'style': 'width: 110px;'})},
     }
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
@@ -786,6 +793,11 @@ class SalesItemInline(UnfoldTabularInline):
     model = SalesItem
     autocomplete_fields = ['barcode_obj', 'product', 'bom']
     extra = 1
+
+    # 🎯 กล่อง "ราคาขาย" แสดงแค่ ~5 หลักก็พอ ไม่ต้องยืดเต็มคอลัมน์
+    formfield_overrides = {
+        models.DecimalField: {'widget': forms.NumberInput(attrs={'style': 'width: 90px;'})},
+    }
 
     def _is_locked(self, so):
         return so is not None and so.status in ('Completed', 'Cancelled')
@@ -920,6 +932,8 @@ class SalesDeliveryLogInline(UnfoldTabularInline):
     formfield_overrides = {
         models.CharField: {'widget': TextInput(attrs={'style': 'width: 120px;', 'placeholder': 'เลขใบส่งของ'})},
         models.TextField: {'widget': TextInput(attrs={'style': 'width: 200px;', 'placeholder': 'หมายเหตุ'})},
+        # 🎯 กล่อง "จำนวน" ให้ยาวพอสำหรับ 7 หลัก เท่ากับตอนเปิดรายการสั่งขาย
+        models.PositiveIntegerField: {'widget': forms.NumberInput(attrs={'style': 'width: 110px;'})},
     }
 
     def get_queryset(self, request):
