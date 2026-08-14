@@ -3,6 +3,12 @@
 
     var soId = (window.location.pathname.match(/\/(\d+)\/change\//) || [])[1];
 
+    // จำนวน auto-save (AJAX) ที่กำลังยิงค้างอยู่ — ใช้กันไม่ให้กดปุ่ม Save หลักของหน้า
+    // (ที่ submit ทั้งฟอร์มแบบปกติ) หลุดออกไปก่อนที่ auto-save จะอัปเดต hidden id field เสร็จ
+    // ไม่งั้นแถวเดียวกันจะถูกสร้างซ้ำ 2 รายการ (อันจาก auto-save มีชื่อผู้บันทึก, อันจาก
+    // Save ปกติไม่มี เพราะ user เป็น readonly field ไม่ได้ถูกตั้งค่าตรงนั้น)
+    var pendingAutoSaves = 0;
+
     // ดึง CSRF token
     function getCsrf() {
         var m = document.cookie.match(/csrftoken=([^;]+)/);
@@ -93,6 +99,7 @@
         var shippedDate = ($row.find('input[name*="delivery_logs-"][name$="-shipped_date"]').val() || '').trim();
 
         $row.data('saving', true);
+        pendingAutoSaves++;
         fetch('/api/delivery-log/save/', {
             method: 'POST',
             headers: {
@@ -112,6 +119,7 @@
         .then(function (r) { return r.json(); })
         .then(function (result) {
             $row.data('saving', false);
+            pendingAutoSaves--;
             if (result.success) {
                 // อัปเดต id hidden field → กด Save ใหญ่จะ UPDATE ไม่ใช่ CREATE ซ้ำ
                 if (!$idInput.val()) {
@@ -143,6 +151,7 @@
         })
         .catch(function (err) {
             $row.data('saving', false);
+            pendingAutoSaves--;
             console.error('Autosave error:', err);
         });
     }
@@ -458,5 +467,39 @@
             });
         }
     });
+
+    // ⚠️ กันกด Save/Save and continue editing หลุดออกไปก่อน auto-save (blur) ที่พึ่งยิงจะเสร็จ
+    // ไม่งั้นแถวเดียวกันจะถูกสร้างซ้ำ 2 รายการในฐานข้อมูล (ดูคอมเมนต์ตรง pendingAutoSaves ด้านบน)
+    // ต้องดักที่ document ช่วง capture phase เพื่อให้ทำงานก่อน listener อื่นๆ ของหน้า (เช่น
+    // ตัวกันกด submit ซ้ำใน smart_delivery_inline.js)
+    document.addEventListener('submit', function (e) {
+        if (pendingAutoSaves <= 0) return;
+        var form = e.target;
+        if (!(form instanceof HTMLFormElement)) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        var submitter = e.submitter; // ปุ่มที่ถูกกด (Save / Save and continue editing / ...)
+        var waited = 0;
+        var maxWaitMs = 8000;
+        var check = setInterval(function () {
+            waited += 100;
+            if (pendingAutoSaves > 0 && waited < maxWaitMs) return;
+            clearInterval(check);
+            // ใส่ name/value ของปุ่มที่กดไว้กลับเข้าไป เพราะ requestSubmit() แบบไม่ระบุปุ่ม
+            // จะไม่ส่งค่านี้ ทำให้ Django ไม่รู้ว่าจะ redirect ไปหน้าไหนหลังบันทึก
+            if (submitter && submitter.name) {
+                var hidden = document.createElement('input');
+                hidden.type = 'hidden';
+                hidden.name = submitter.name;
+                hidden.value = submitter.value;
+                form.appendChild(hidden);
+            }
+            if (form.requestSubmit) {
+                form.requestSubmit();
+            } else {
+                form.submit();
+            }
+        }, 100);
+    }, true);
 
 }());

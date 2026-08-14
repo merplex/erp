@@ -2116,7 +2116,11 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
                              # (เป็นลิงก์ไป unlock_view แยกต่างหาก ใช้ has_view_or_change_permission แทน)
         return super().has_change_permission(request, obj)
     class Media:
-        js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js', 'js/delivery_barcode_select2.js', 'js/sales_item_barcode_autofill.js')
+        # ⚠️ delivery_barcode_select2.js ต้องโหลดก่อน smart_delivery_inline.js เสมอ — ตัวมันดักจับ
+        # submit event ของฟอร์มหลักไว้ก่อน (เพื่อรอ auto-save ที่ยังค้างอยู่ให้เสร็จก่อนค่อยปล่อยให้
+        # submit จริง) ถ้าโหลดสลับกัน ตัวกันกด submit ซ้ำใน smart_delivery_inline.js จะบล็อคการ
+        # re-submit ทีหลังของมันไปด้วย (เพราะ set flag "submitted" ไปแล้วตั้งแต่รอบแรก)
+        js = ('js/admin_sum_selected.js', 'js/delivery_barcode_select2.js', 'js/smart_delivery_inline.js', 'js/sales_item_barcode_autofill.js')
 
 class ProductionMaterialUsageInline(UnfoldTabularInline):
     model = ProductionMaterialUsage
