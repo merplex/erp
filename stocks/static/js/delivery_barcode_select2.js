@@ -479,19 +479,30 @@
         e.preventDefault();
         e.stopImmediatePropagation();
         var submitter = e.submitter; // ปุ่มที่ถูกกด (Save / Save and continue editing / ...)
+
+        // แสดงให้เห็นชัดว่ากำลังรอ auto-save ที่ค้างอยู่ ไม่ใช่ปุ่มค้าง/หน้าพัง —
+        // จะขึ้นแค่แป๊บเดียวเท่าที่ auto-save ใช้จริง (เช็คทุก 100ms พอเสร็จก็ submit ทันที
+        // ไม่ต้องรอครบเวลา) 2500ms คือเพดานกันไว้เฉยๆ เผื่อ network ค้างจริงๆ เท่านั้น
+        var originalValue = submitter ? submitter.value : null;
+        if (submitter) {
+            submitter.disabled = true;
+            submitter.value = '⏳ กำลังบันทึก...';
+        }
+
         var waited = 0;
-        var maxWaitMs = 8000;
+        var maxWaitMs = 2500;
         var check = setInterval(function () {
             waited += 100;
             if (pendingAutoSaves > 0 && waited < maxWaitMs) return;
             clearInterval(check);
-            // ใส่ name/value ของปุ่มที่กดไว้กลับเข้าไป เพราะ requestSubmit() แบบไม่ระบุปุ่ม
-            // จะไม่ส่งค่านี้ ทำให้ Django ไม่รู้ว่าจะ redirect ไปหน้าไหนหลังบันทึก
+            // ใส่ name/value ของปุ่มที่กดไว้กลับเข้าไป (ค่าดั้งเดิม ไม่ใช่ "กำลังบันทึก...")
+            // เพราะ requestSubmit() แบบไม่ระบุปุ่มจะไม่ส่งค่านี้ ทำให้ Django ไม่รู้ว่าจะ
+            // redirect ไปหน้าไหนหลังบันทึก
             if (submitter && submitter.name) {
                 var hidden = document.createElement('input');
                 hidden.type = 'hidden';
                 hidden.name = submitter.name;
-                hidden.value = submitter.value;
+                hidden.value = originalValue;
                 form.appendChild(hidden);
             }
             if (form.requestSubmit) {
