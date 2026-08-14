@@ -175,6 +175,33 @@
         if (prevVal) $snInput.val(prevVal);
     }
 
+    // แถวที่มีอยู่แล้วตั้งแต่เปิดหน้า (มี -id ไม่ว่าง = บันทึกไว้จากรอบก่อนหน้าแล้ว)
+    // ใช้กันไม่ให้ copy วันที่ส่งของเก่าข้ามรอบมาโดยไม่ตั้งใจ
+    function markPreexistingRows() {
+        if (!window.django) return;
+        var $ = django.jQuery;
+        $('input[name*="delivery_logs-"][name$="-id"]').each(function () {
+            if (($(this).val() || '').trim()) {
+                $(this).closest('tr').data('deliveryPreexisting', true);
+            }
+        });
+    }
+
+    // copy วันที่ส่งของจาก row ก่อนหน้า ถ้า row ปัจจุบันยังว่าง
+    // — แต่ copy ได้เฉพาะจาก row ที่ "เพิ่มใหม่ในรอบนี้" เท่านั้น (ไม่ copy จาก row เก่าที่บันทึก
+    // ไว้ตั้งแต่รอบก่อนหน้า) กันพลาดกรอกวันที่ผิดตอนเปิดเอกสารเก่ามาเพิ่มรายการส่งของใหม่
+    function autoFillShippedDate(row) {
+        if (!window.django) return;
+        var $ = django.jQuery;
+        var $dateInput = $(row).find('input[name*="delivery_logs-"][name$="-shipped_date"]');
+        if (!$dateInput.length || $dateInput.val().trim()) return; // มีค่าแล้ว ไม่ copy
+        var prevRow = getPrevDeliveryRow(row);
+        if (!prevRow) return;
+        if ($(prevRow).data('deliveryPreexisting')) return; // row ก่อนหน้าเป็นของเก่า ต้องกรอกเองก่อน
+        var prevVal = $(prevRow).find('input[name*="delivery_logs-"][name$="-shipped_date"]').val().trim();
+        if (prevVal) $dateInput.val(prevVal);
+    }
+
     function setupRow(row) {
         if (!row || !window.django) return;
         var $ = django.jQuery;
@@ -192,14 +219,16 @@
         // ไม่ต้องพิมพ์บาร์โค้ดเต็มๆ ทุกครั้ง
         $barcodeInput.attr('list', 'delivery-barcode-datalist');
 
-        // auto-fill shipping_no ทันทีที่ row ถูก setup (ถ้า row ก่อนมีค่าแล้ว)
+        // auto-fill shipping_no + วันที่ส่งของ ทันทีที่ row ถูก setup (ถ้า row ก่อนมีค่าแล้ว)
         autoFillShippingNo(row);
+        autoFillShippedDate(row);
 
         var barcodeTimer = null;
 
-        // focus → auto-fill shipping_no อีกครั้ง (กรณี setup ก่อนที่ row ก่อนจะมีค่า)
+        // focus → auto-fill อีกครั้ง (กรณี setup ก่อนที่ row ก่อนจะมีค่า)
         $barcodeInput.on('focus', function () {
             autoFillShippingNo(row);
+            autoFillShippedDate(row);
         });
 
         // ออกจากกล่อง barcode → validate + ลอง save (ถ้ามี qty แล้ว)
@@ -210,9 +239,10 @@
             });
         });
 
-        // พิมพ์ใน barcode → validate หลัง 600ms + auto-fill shipping_no
+        // พิมพ์ใน barcode → validate หลัง 600ms + auto-fill
         $barcodeInput.on('input', function () {
             autoFillShippingNo(row);
+            autoFillShippedDate(row);
             clearTimeout(barcodeTimer);
             barcodeTimer = setTimeout(function () {
                 checkBarcode($barcodeInput, null);
@@ -409,6 +439,9 @@
     }
 
     document.addEventListener('DOMContentLoaded', function () {
+        // ต้องทำก่อน initAllRows เสมอ เพื่อจับสถานะ "แถวเก่าที่บันทึกไว้แล้วตั้งแต่ก่อนเปิดหน้านี้"
+        // ไว้ก่อนที่ auto-fill วันที่จะเริ่มทำงาน
+        markPreexistingRows();
         setTimeout(initAllRows, 300);
         setTimeout(loadPendingBar, 500);
 

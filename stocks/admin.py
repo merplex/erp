@@ -1625,6 +1625,18 @@ class PurchaseOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockM
             obj.save()
             self.message_user(request, f"ปิดงานใบสั่งซื้อ {obj.po_number} เรียบร้อยแล้ว")
             return HttpResponseRedirect(".")
+        if "_unlock_order" in request.POST:
+            if obj.status == 'Completed':
+                # ปลดล็อคชั่วคราวเพื่อแก้ไขรายการรับของ — ไม่เรียก update_status() ตรงนี้
+                # เพราะยอดยังครบอยู่ จะถูกคำนวณกลับเป็น Completed ทันที ต้องรอให้แก้ไข
+                # รายการรับของก่อน (save/delete ของ PurchaseReceiptLog จะเรียก update_status()
+                # ให้เองแล้วปิดงานอัตโนมัติถ้ายอดยังครบเหมือนเดิม)
+                obj.status = 'Partially Received'
+                obj.save(update_fields=['status'])
+                self.message_user(request,
+                    f"🔓 ปลดล็อคใบสั่งซื้อ {obj.po_number} แล้ว แก้ไขรายการรับของได้ตามปกติ — "
+                    f"ถ้าแก้เสร็จแล้วยอดรับยังครบเหมือนเดิม ระบบจะปิดงานให้อัตโนมัติ")
+            return HttpResponseRedirect(".")
         return super().response_change(request, obj)
 
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
@@ -1655,14 +1667,18 @@ class PurchaseOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockM
             smart_script = f'<script>window.SMART_INLINE_DATA={safe_json};</script>'
             # ⚠️ ต้องฉีดปุ่ม "เสร็จงาน" เข้า response.content ก่อน </body> โดยตรง (แบบเดียวกับ smart_script
             # ด้านบน) ห้ามฝังผ่าน context['title'] เพราะ Unfold ไม่การันตีว่า {{ title }} จะถูก echo ใน body
-            complete_btn_script = """
+            unlock_btn_html = ''
+            if obj.status == 'Completed':
+                unlock_btn_html = '<input type="submit" value="🔓 ปลดล็อค (Unlock)" name="_unlock_order" style="background: #f59e0b; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">'
+            complete_btn_script = f"""
                 <script>
-                    django.jQuery(document).ready(function() {
+                    django.jQuery(document).ready(function() {{
                         var target = django.jQuery('#submit-row .flex-col-reverse');
-                        if (!target.length) { target = django.jQuery('#submit-row'); }
+                        if (!target.length) {{ target = django.jQuery('#submit-row'); }}
                         var btn = '<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #28a745; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
                         target.prepend(btn);
-                    });
+                        target.prepend('{unlock_btn_html}');
+                    }});
                 </script>
             """
             # ปุ่มพิมพ์: แปะเข้าแถบหัวข้อ (h2) ของแต่ละ inline group โดยตรง (โครงสร้างเดียวกับที่ยืนยัน
@@ -1802,6 +1818,18 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
             obj.save()
             self.message_user(request, f"ปิดงานใบสั่งขาย {obj.so_number} เรียบร้อยแล้ว")
             return HttpResponseRedirect(".")
+        if "_unlock_order" in request.POST:
+            if obj.status == 'Completed':
+                # ปลดล็อคชั่วคราวเพื่อแก้ไขรายการส่งของ — ไม่เรียก update_status() ตรงนี้
+                # เพราะยอดยังครบอยู่ จะถูกคำนวณกลับเป็น Completed ทันที ต้องรอให้แก้ไข
+                # รายการส่งของก่อน (save ของ SalesDeliveryLog จะเรียก update_status() ให้เอง
+                # แล้วปิดงานอัตโนมัติถ้ายอดส่งยังครบเหมือนเดิม)
+                obj.status = 'Shipped'
+                obj.save(update_fields=['status'])
+                self.message_user(request,
+                    f"🔓 ปลดล็อคใบสั่งขาย {obj.so_number} แล้ว แก้ไขรายการส่งของได้ตามปกติ — "
+                    f"ถ้าแก้เสร็จแล้วยอดส่งยังครบเหมือนเดิม ระบบจะปิดงานให้อัตโนมัติ")
+            return HttpResponseRedirect(".")
         return super().response_change(request, obj)
 
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
@@ -1837,14 +1865,18 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
                                     'select_field': 'barcode_obj', 'qty_field': 'quantity_shipped',
                                     'items': items_data}).replace('</', '<\\/')
             smart_script = f'<script>window.SMART_INLINE_DATA={safe_json};</script>'
-            complete_btn_script = """
+            unlock_btn_html = ''
+            if obj.status == 'Completed':
+                unlock_btn_html = '<input type="submit" value="🔓 ปลดล็อค (Unlock)" name="_unlock_order" style="background: #f59e0b; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">'
+            complete_btn_script = f"""
                 <script>
-                    django.jQuery(document).ready(function() {
+                    django.jQuery(document).ready(function() {{
                         var target = django.jQuery('#submit-row .flex-col-reverse');
-                        if (!target.length) { target = django.jQuery('#submit-row'); }
+                        if (!target.length) {{ target = django.jQuery('#submit-row'); }}
                         var btn = '<input type="submit" value="เสร็จงาน (Complete)" name="_complete_order" style="background: #218838; color: white; height: 35px; margin-right: 10px; border-radius: 4px; border: none; cursor: pointer; padding: 0 20px; font-weight: bold;">';
                         target.prepend(btn);
-                    });
+                        target.prepend('{unlock_btn_html}');
+                    }});
                 </script>
             """
             # ปุ่มพิมพ์: แปะเข้าแถบหัวข้อ (h2) ของแต่ละ inline group โดยตรง (ตรวจสอบโครงสร้างจริงของ
@@ -2035,6 +2067,9 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
         if obj:
             # 🔒 เปลี่ยนจากเช็ก Confirmation เป็นเช็กสถานะใบสั่งขาย
             if obj.status == 'Completed':
+                # ✅ ยกเว้นปุ่ม "ปลดล็อค (Unlock)" ให้กดได้แม้ปิดงานแล้ว ไม่งั้นจะกดปุ่มไม่ได้เลย
+                if request.method == 'POST' and '_unlock_order' in request.POST:
+                    return True
                 return False # ล็อคเฉพาะตอนกด "เสร็จงาน/ปิดงาน" เท่านั้น
         return super().has_change_permission(request, obj)
     class Media:
