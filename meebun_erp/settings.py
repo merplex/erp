@@ -136,6 +136,7 @@ COMPANY_NAME = os.environ.get('COMPANY_NAME', 'บริษัท มีบุ�
 COMPANY_ADDRESS = os.environ.get('COMPANY_ADDRESS', '1 ซอย บางบอน 4 ซอย 12 แขวงบางบอนเหนือ เขตบางบอน กรุงเทพฯ 10150')
 COMPANY_TAX_ID = os.environ.get('COMPANY_TAX_ID', '0105558001100')
 COMPANY_PHONE = os.environ.get('COMPANY_PHONE', '02-045-2943')
+COMPANY_MOBILE = os.environ.get('COMPANY_MOBILE', '062-824-1499')
 
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/

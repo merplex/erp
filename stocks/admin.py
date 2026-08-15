@@ -1973,6 +1973,8 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
     def print_delivery_view(self, request, object_id):
         from django.core.exceptions import PermissionDenied
         from django.http import Http404
+        from django.conf import settings
+        from .utils import thai_baht_text
         if not self.has_view_or_change_permission(request):
             raise PermissionDenied
         obj = self.get_object(request, object_id)
@@ -1983,6 +1985,7 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
         # มาด้วย เพื่อพิมพ์เฉพาะรอบนั้น — ถ้าไม่มี query param นี้ (เช่น เข้าจากปุ่มพิมพ์เดิมที่หัว
         # inline) ยังคง behavior เดิมคือโชว์ประวัติการส่งของทั้งหมด
         shipped_date_param = request.GET.get('shipped_date', '').strip()
+        batch_date = None
         if shipped_date_param:
             from django.utils.dateparse import parse_date, parse_datetime
             # รองรับทั้งรูปแบบวันที่ล้วน ("YYYY-MM-DD" จากลิงก์พิมพ์ของแต่ละรอบใน shipment panel)
@@ -1993,10 +1996,84 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
                 batch_date = batch_dt.date() if batch_dt else None
             if batch_date:
                 deliveries = deliveries.filter(shipped_date__date=batch_date)
+        deliveries = list(deliveries)
+
+        # 🎯 กลุ่มรายการตามบาร์โค้ด — เอกสารนี้เป็นใบส่งของ/ใบกำกับภาษี ต้องโชว์ทีละรายการสินค้า
+        # (ไม่ใช่ทีละแถวประวัติการบันทึก) เผื่อกรณีมีหลายแถวของบาร์โค้ดเดียวกันในช่วงที่พิมพ์
+        line_map = {}
+        line_order = []
+        for d in deliveries:
+            key = d.barcode_obj_id or f'product-{d.product_id}'
+            if key not in line_map:
+                unit_name = (d.barcode_obj.unit_name if d.barcode_obj else None) or 'ชิ้น'
+                line_map[key] = {
+                    'code': d.barcode_obj.code if d.barcode_obj else '-',
+                    'product_name': d.product.name if d.product else '-',
+                    'unit_name': unit_name,
+                    'qty': 0,
+                    'value': Decimal('0'),
+                }
+                line_order.append(key)
+            line_map[key]['qty'] += d.quantity_shipped
+            line_map[key]['value'] += d.shipment_value
+
+        line_items = []
+        for i, key in enumerate(line_order, start=1):
+            row = line_map[key]
+            unit_price = (row['value'] / row['qty']).quantize(Decimal('0.01')) if row['qty'] else Decimal('0')
+            line_items.append({
+                'no': i,
+                'code': row['code'],
+                'product_name': row['product_name'],
+                'unit_name': row['unit_name'],
+                'qty': row['qty'],
+                'unit_price': unit_price,
+                'line_total': row['value'],
+            })
+
+        subtotal = sum((row['value'] for row in line_map.values()), Decimal('0'))
+        vat_percent = obj.vat_percent or Decimal('0')
+        vat_amount = (subtotal * vat_percent / Decimal('100')).quantize(Decimal('0.01'))
+        grand_total = subtotal + vat_amount
+
+        if batch_date:
+            doc_date = batch_date
+        elif deliveries:
+            doc_date = deliveries[-1].shipped_date.date()
+        else:
+            doc_date = obj.order_date
+
+        due_date = deliveries[-1].payment_due_date if deliveries else None
+
+        salesperson = '-'
+        if obj.created_by_id:
+            salesperson = obj.created_by.get_full_name() or obj.created_by.username
+
         context = {
             **self.admin_site.each_context(request),
             'obj': obj,
             'deliveries': deliveries,
+            'line_items': line_items,
+            'subtotal': subtotal,
+            'vat_percent': vat_percent,
+            'vat_amount': vat_amount,
+            'grand_total': grand_total,
+            'amount_words': thai_baht_text(grand_total),
+            'doc_number': obj.so_number,
+            'doc_date': doc_date,
+            'credit_days': obj.customer.payment_term if obj.customer_id else 0,
+            'due_date': due_date,
+            'salesperson': salesperson,
+            'customer': obj.customer,
+            'company_name': settings.COMPANY_NAME,
+            'company_address': settings.COMPANY_ADDRESS,
+            'company_tax_id': settings.COMPANY_TAX_ID,
+            'company_phone': settings.COMPANY_PHONE,
+            'company_mobile': settings.COMPANY_MOBILE,
+            'copies': [
+                {'label': 'ต้นฉบับ (เอกสารออกเป็นชุด)', 'page_no': 1},
+                {'label': 'สำเนา (เอกสารออกเป็นชุด)', 'page_no': 2},
+            ],
             'title': f"ใบส่งสินค้า {obj.so_number}",
         }
         return TemplateResponse(request, 'admin/sales_delivery_print.html', context)

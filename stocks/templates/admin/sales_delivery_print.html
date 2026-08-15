@@ -1,50 +1,265 @@
-{% extends "admin/print_base.html" %}
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>ใบส่งสินค้า {{ obj.so_number }}</title>
+<style>
+    @page {
+        size: A4;
+        margin: 10mm 12mm;
+    }
+    * { box-sizing: border-box; }
+    body {
+        font-family: "Sarabun", "Tahoma", sans-serif;
+        color: #222;
+        margin: 0;
+        padding: 24px;
+        background: #f2f2f2;
+        font-size: 13px;
+    }
+    .toolbar {
+        max-width: 780px;
+        margin: 0 auto 12px auto;
+        text-align: right;
+    }
+    .toolbar button {
+        background: #17a2b8;
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        padding: 10px 24px;
+        font-size: 15px;
+        font-weight: bold;
+        cursor: pointer;
+    }
+    .toolbar button:hover { background: #138496; }
 
-{% block page_title %}ใบส่งสินค้า {{ obj.so_number }}{% endblock %}
-{% block doc_title %}ใบส่งสินค้า{% endblock %}
-{% block doc_number %}{{ obj.so_number }}{% endblock %}
+    .doc-page {
+        position: relative;
+        max-width: 780px;
+        margin: 0 auto 24px auto;
+        background: #fff;
+        box-shadow: 0 0 8px rgba(0,0,0,0.15);
+        padding: 32px 36px;
+        page-break-after: always;
+    }
+    .doc-page:last-child { page-break-after: auto; margin-bottom: 0; }
 
-{% block signatures %}
-<div><div class="line">ผู้ส่งของ</div></div>
-<div><div class="line">ผู้ตรวจสอบ</div></div>
-<div><div class="line">ผู้รับของ</div></div>
-{% endblock %}
+    .corner-badge {
+        position: absolute;
+        top: 0; right: 0;
+        width: 56px; height: 56px;
+        background: #1f6fb8;
+        clip-path: polygon(100% 0, 0 0, 100% 100%);
+    }
+    .corner-badge span {
+        position: absolute;
+        top: 6px; right: 6px;
+        color: #fff;
+        font-weight: 700;
+        font-size: 15px;
+    }
 
-{% block doc_body %}
-<div class="info-grid">
-    <div><span class="label">ลูกค้า:</span> {{ obj.customer.company_name }}</div>
-    <div><span class="label">อ้างอิงใบสั่งขาย:</span> {{ obj.so_number }}</div>
-    <div><span class="label">ที่อยู่จัดส่ง:</span> {{ obj.customer.address|default:"-" }}</div>
-    <div><span class="label">เบอร์โทร:</span> {{ obj.customer.phone|default:"-" }}</div>
-</div>
+    .header-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 24px;
+        margin-bottom: 4px;
+    }
+    .company-block { font-size: 12.5px; line-height: 1.5; }
+    .company-block .company-name { font-weight: 700; font-size: 13.5px; margin-bottom: 2px; }
 
-<h3>รายการส่งสินค้าทั้งหมด</h3>
-<table class="line-items">
-    <thead>
-        <tr>
-            <th>#</th>
-            <th>วันที่ส่งของ</th>
-            <th>บาร์โค้ด</th>
-            <th>สินค้า</th>
-            <th class="num">จำนวน</th>
-            <th>เลขใบขนส่ง/MB Invoice</th>
-            <th>หมายเหตุ</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for d in deliveries %}
-        <tr>
-            <td>{{ forloop.counter }}</td>
-            <td>{{ d.shipped_date|date:"d/m/Y H:i" }}</td>
-            <td>{{ d.barcode_obj.code|default:"-" }}</td>
-            <td>{{ d.product.name }}</td>
-            <td class="num">{{ d.quantity_shipped }}</td>
-            <td>{{ d.shipping_no|default:"-" }}</td>
-            <td>{{ d.notes|default:"-" }}</td>
-        </tr>
-        {% empty %}
-        <tr><td colspan="7" style="text-align:center; color:#999;">ยังไม่มีการส่งสินค้า</td></tr>
-        {% endfor %}
-    </tbody>
-</table>
-{% endblock %}
+    .doc-info-block table { border-collapse: collapse; }
+    .doc-info-block td { padding: 1px 0; font-size: 12.5px; white-space: nowrap; }
+    .doc-info-block td.lbl { color: #1f6fb8; padding-right: 14px; }
+    .doc-info-block td.val { font-weight: 600; }
+
+    .doc-title {
+        text-align: right;
+        margin: 10px 0 18px 0;
+    }
+    .doc-title .title-th {
+        color: #1f6fb8;
+        font-size: 19px;
+        font-weight: 700;
+    }
+    .doc-title .subtitle {
+        color: #1f6fb8;
+        font-size: 12px;
+        margin-top: 2px;
+    }
+
+    .section-label {
+        color: #1f6fb8;
+        font-weight: 700;
+        margin-bottom: 2px;
+    }
+    .customer-block { margin-bottom: 16px; font-size: 12.5px; line-height: 1.5; }
+
+    table.items-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12.5px;
+        margin-bottom: 14px;
+    }
+    table.items-table th {
+        border-bottom: 1px solid #999;
+        border-top: 1px solid #999;
+        padding: 6px 6px;
+        text-align: left;
+        font-weight: 700;
+        color: #444;
+    }
+    table.items-table td {
+        padding: 8px 6px;
+        border-bottom: 1px solid #eee;
+        vertical-align: top;
+    }
+    table.items-table th.num, table.items-table td.num { text-align: right; }
+    table.items-table td.barcode { color: #888; font-size: 11.5px; }
+
+    .totals-block {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 12px;
+    }
+    .totals-block table { border-collapse: collapse; font-size: 12.5px; }
+    .totals-block td { padding: 3px 0; }
+    .totals-block td.lbl { color: #1f6fb8; padding-right: 24px; text-align: right; }
+    .totals-block td.val { text-align: right; font-weight: 600; min-width: 110px; }
+    .totals-block tr.grand td { border-top: 1px solid #999; padding-top: 6px; font-weight: 700; }
+
+    .amount-words { margin-bottom: 18px; font-size: 12.5px; }
+
+    .notes-block { margin-bottom: 40px; font-size: 12.5px; }
+    .notes-block .section-label { margin-bottom: 4px; }
+
+    .signature-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 40px;
+        margin-top: 30px;
+        font-size: 12.5px;
+    }
+    .signature-row .sig-col { flex: 1; }
+    .signature-row .sig-namein { margin-bottom: 46px; }
+    .signature-row .sig-lines { display: flex; gap: 20px; }
+    .signature-row .sig-line {
+        flex: 1;
+        border-top: 1px solid #333;
+        text-align: center;
+        padding-top: 4px;
+        font-size: 11.5px;
+        color: #555;
+    }
+
+    @media print {
+        body { background: #fff; padding: 0; }
+        .toolbar { display: none; }
+        .doc-page { box-shadow: none; max-width: none; margin: 0; padding: 10mm 12mm; }
+    }
+</style>
+</head>
+<body>
+    <div class="toolbar">
+        <button onclick="window.print()">🖨️ พิมพ์ / บันทึกเป็น PDF</button>
+    </div>
+
+    {% for copy in copies %}
+    <div class="doc-page">
+        <div class="corner-badge"><span>{{ copy.page_no }}</span></div>
+
+        <div class="header-row">
+            <div class="company-block">
+                <div class="company-name">{{ company_name }}</div>
+                <div>{{ company_address }}</div>
+                <div>เลขประจำตัวผู้เสียภาษี {{ company_tax_id }}</div>
+                <div>โทร. {{ company_phone }}</div>
+                <div>เบอร์มือถือ {{ company_mobile }}</div>
+            </div>
+            <div class="doc-info-block">
+                <table>
+                    <tr><td class="lbl">เลขที่</td><td class="val">{{ doc_number }}</td></tr>
+                    <tr><td class="lbl">วันที่</td><td class="val">{{ doc_date|date:"d/m/Y" }}</td></tr>
+                    <tr><td class="lbl">เครดิต</td><td class="val">{{ credit_days }} วัน</td></tr>
+                    <tr><td class="lbl">ครบกำหนด</td><td class="val">{{ due_date|date:"d/m/Y"|default:"-" }}</td></tr>
+                    <tr><td class="lbl">ผู้ขาย</td><td class="val">{{ salesperson }}</td></tr>
+                </table>
+            </div>
+        </div>
+
+        <div class="doc-title">
+            <div class="title-th">ใบส่งสินค้า/ใบแจ้งหนี้/ใบกำกับภาษี</div>
+            <div class="subtitle">{{ copy.label }}</div>
+        </div>
+
+        <div class="customer-block">
+            <div class="section-label">ลูกค้า</div>
+            <div>{{ customer.company_name }}</div>
+            <div>{{ customer.address }}</div>
+        </div>
+
+        <table class="items-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>รายละเอียด</th>
+                    <th class="num">จำนวน</th>
+                    <th class="num">ราคาต่อหน่วย</th>
+                    <th class="num">ยอดรวม</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in line_items %}
+                <tr>
+                    <td>{{ item.no }}</td>
+                    <td>
+                        {{ item.product_name }}
+                        <div class="barcode">{{ item.code }}</div>
+                    </td>
+                    <td class="num">{{ item.qty }} {{ item.unit_name }}</td>
+                    <td class="num">{{ item.unit_price|floatformat:2 }}</td>
+                    <td class="num">{{ item.line_total|floatformat:2 }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="5" style="text-align:center; color:#999;">ยังไม่มีการส่งสินค้า</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <div class="totals-block">
+            <table>
+                <tr><td class="lbl">รวมเป็นเงิน</td><td class="val">{{ subtotal|floatformat:2 }} บาท</td></tr>
+                <tr><td class="lbl">ภาษีมูลค่าเพิ่ม {{ vat_percent|floatformat:0 }}%</td><td class="val">{{ vat_amount|floatformat:2 }} บาท</td></tr>
+                <tr class="grand"><td class="lbl">จำนวนเงินรวมทั้งสิ้น</td><td class="val">{{ grand_total|floatformat:2 }} บาท</td></tr>
+            </table>
+        </div>
+
+        <div class="amount-words">({{ amount_words }})</div>
+
+        <div class="notes-block">
+            <div class="section-label">หมายเหตุ</div>
+            <div>อ้างอิงเลขที่ใบสั่งซื้อ : {{ obj.po_no_customer|default:"-" }}</div>
+            {% if obj.notes %}<div>{{ obj.notes }}</div>{% endif %}
+        </div>
+
+        <div class="signature-row">
+            <div class="sig-col">
+                <div class="sig-namein">ในนาม {{ customer.company_name }}</div>
+                <div class="sig-lines">
+                    <div class="sig-line">ผู้รับสินค้า / บริการ</div>
+                    <div class="sig-line">วันที่</div>
+                </div>
+            </div>
+            <div class="sig-col">
+                <div class="sig-namein">ในนาม {{ company_name }}</div>
+                <div class="sig-lines">
+                    <div class="sig-line">ผู้อนุมัติ</div>
+                    <div class="sig-line">วันที่</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</body>
+</html>
