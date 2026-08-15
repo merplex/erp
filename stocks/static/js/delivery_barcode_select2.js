@@ -479,10 +479,14 @@
 
         observer.observe(document.body, { childList: true, subtree: true });
 
-        // formset:added เป็น safety net เพิ่มเติม
+        // formset:added เป็น safety net เพิ่มเติม — Unfold dispatch เป็น native CustomEvent
+        // (detail: {formsetName}) ไม่ได้แนบ row มาเป็น extra parameter แบบที่ Django admin เดิม
+        // เคยทำ ($row ที่เคยรับเป็น argument ที่ 2 เลยเป็น undefined เสมอ ทำให้ $row[0] throw error
+        // ทุกครั้งที่กด "Add another" — เจอจริงจาก console) เรียก initAllRows() ซ้ำแทนดีกว่า เพราะมี
+        // guard 'barcode-setup' กันไม่ให้ setup ซ้ำอยู่แล้ว ปลอดภัยกว่าไม่ต้องพึ่ง argument ที่ไม่มา
         if (window.django && django.jQuery) {
-            django.jQuery(document).on('formset:added', function (e, $row) {
-                setTimeout(function () { setupRow($row[0]); }, 150);
+            django.jQuery(document).on('formset:added', function () {
+                setTimeout(initAllRows, 150);
             });
         }
     });
@@ -514,6 +518,13 @@
             waited += 100;
             if (pendingAutoSaves > 0 && waited < maxWaitMs) return;
             clearInterval(check);
+            // 🔍 DEBUG ชั่วคราว — เช็คว่า id field ของทุกแถวมีค่าครบไหม ณ วินาทีที่กำลังจะ submit จริง
+            django.jQuery('input[name*="delivery_logs-"][name$="-barcode_code"]').each(function () {
+                var m = (this.name || '').match(/-(\d+)-barcode_code$/);
+                if (!m) return;
+                var idEl = document.querySelector('input[name="delivery_logs-' + m[1] + '-id"]');
+                console.log('[submit-check] idx=', m[1], 'barcode=', this.value, 'idField found=', !!idEl, 'idValue=', idEl ? idEl.value : 'N/A', 'inForm=', idEl ? form.contains(idEl) : null);
+            });
             // ใส่ name/value ของปุ่มที่กดไว้กลับเข้าไป (ค่าดั้งเดิม ไม่ใช่ "กำลังบันทึก...")
             // เพราะ requestSubmit() แบบไม่ระบุปุ่มจะไม่ส่งค่านี้ ทำให้ Django ไม่รู้ว่าจะ
             // redirect ไปหน้าไหนหลังบันทึก
