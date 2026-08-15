@@ -91,19 +91,27 @@
         var qty = ($qtyInput.val() || '').trim();
         if (!qty) return;
 
-        // 🎯 BUG หลักที่ทำให้บันทึกซ้ำไม่รู้จบ: Unfold render ช่อง hidden "-id" ของแถวนี้ไว้คนละ
-        // <tbody> กับช่องที่มองเห็น (บาร์โค้ด/จำนวน/ฯลฯ) ไม่ได้อยู่ใน <tr> เดียวกัน — ถ้า scoped
-        // หาแค่ใน $row (.find) จะไม่เจอเลย ทำให้ logId เป็น null ตลอด ทุก auto-save เลยสร้างแถวใหม่
-        // ซ้ำไปเรื่อยๆ แทนที่จะ UPDATE แถวเดิม (ยืนยันจากการ debug จริงในหน้าที่ auto-save 6 ครั้ง
-        // ก็ได้ 6 แถวจริงในฐานข้อมูล) — แก้โดยดึง index ของแถวจาก name ของช่องบาร์โค้ด
-        // (เช่น "delivery_logs-5-barcode_code" → index 5) แล้วหา id field แบบ query ทั้งหน้าแทน
+        // 🎯 BUG หลักที่ทำให้บันทึกซ้ำไม่รู้จบ: แถวที่เพิ่มแบบ dynamic (กด "Add another") ไม่มีช่อง
+        // hidden "-id" อยู่ใน DOM เลยสักที่เดียว — Unfold clone แค่ tbody ของช่องที่มองเห็น
+        // (บาร์โค้ด/จำนวน/ฯลฯ) จาก .empty-form template แต่ไม่ได้ clone tbody ของ hidden field
+        // (id/DELETE) มาด้วย (ยืนยันจาก debug จริง: idInputCount=0 เสมอสำหรับแถวที่เพิ่มใหม่)
+        // ผลคือ logId เป็น null ตลอดไม่ว่า auto-save จะสำเร็จไปแล้วกี่รอบ เพราะไม่มีที่เก็บค่า
+        // เลยส่ง POST แบบ "สร้างใหม่" ซ้ำทุกครั้งที่มีอะไรมา trigger (คลิกช่องอื่น, สลับหน้าต่างไป
+        // แอปอื่นแล้วกลับมาก็ทำให้ field ที่ focus อยู่ blur เหมือนกัน) — แก้โดยดึง index ของแถวจาก
+        // name ของช่องบาร์โค้ด (เช่น "delivery_logs-5-barcode_code" → index 5) แล้ว query หา id
+        // field ทั้งหน้า ถ้าไม่เจอเลย (แถวใหม่) ให้สร้างขึ้นเองแปะไว้ในแถว จะได้มีที่เก็บ log_id
+        // ไว้ใช้ครั้งต่อไป (ตอน submit ฟอร์มจริงก็จะถูกส่งไปด้วย เพราะอยู่ใน <form> เหมือนกัน)
         var nameMatch = ($barcodeInput.attr('name') || '').match(/-(\d+)-barcode_code$/);
         var $idInput = nameMatch
             ? django.jQuery('input[name="delivery_logs-' + nameMatch[1] + '-id"]')
             : $row.find('input[name$="-id"]'); // fallback เผื่อโครงสร้างเปลี่ยนไปจากนี้
+        if (nameMatch && $idInput.length === 0) {
+            $idInput = django.jQuery('<input type="hidden">')
+                .attr('name', 'delivery_logs-' + nameMatch[1] + '-id')
+                .attr('id', 'id_delivery_logs-' + nameMatch[1] + '-id');
+            $row.append($idInput);
+        }
         var logId = $idInput.val() || null;
-        // 🔍 DEBUG ชั่วคราว — เอาออกทีหลังเมื่อยืนยันแก้บั๊กซ้ำได้จริงแล้ว
-        console.log('[autoSaveRow] barcodeName=', $barcodeInput.attr('name'), 'idxMatch=', nameMatch && nameMatch[1], 'idInputCount=', $idInput.length, 'logId(before send)=', logId);
 
         var shippingNo  = ($row.find('input[name*="delivery_logs-"][name$="-shipping_no"]').val() || '').trim();
         var notes       = ($row.find('input[name*="delivery_logs-"][name$="-notes"]').val() || '').trim();
@@ -132,13 +140,10 @@
             $row.data('saving', false);
             pendingAutoSaves--;
             if (result.success) {
-                // 🔍 DEBUG ชั่วคราว
-                console.log('[autoSaveRow] response log_id=', result.log_id, '| idInput value BEFORE set=', $idInput.val(), '| idInputCount=', $idInput.length);
                 // อัปเดต id hidden field → กด Save ใหญ่จะ UPDATE ไม่ใช่ CREATE ซ้ำ
                 if (!$idInput.val()) {
                     $idInput.val(result.log_id);
                 }
-                console.log('[autoSaveRow] idInput value AFTER set=', $idInput.val());
                 // ล้าง error เก่า (เช่น "ไม่พบบาร์โค้ดนี้ในระบบ" / "This field is required."
                 // ที่ค้างมาจากการกด Save หน้าเต็มครั้งก่อน) ไม่งั้นจะค้างคาอยู่ทั้งที่ auto-save
                 // รอบนี้สำเร็จแล้ว ทำให้ดูเหมือนขัดแย้งกันเอง (บันทึกแล้ว แต่ก็ยัง error)

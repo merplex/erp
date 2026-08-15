@@ -22,8 +22,12 @@ from stocks.views import unlock_document_view, line_webhook_view, line_webhook2_
 
 urlpatterns = [
     path("", RedirectView.as_view(url="/admin/")),
-    path("admin/", admin.site.urls),
+    # ⚠️ ต้องอยู่ก่อน path("admin/", admin.site.urls) เสมอ — ตัวนั้น include() ทั้ง prefix
+    # "admin/" ไปให้ Django admin's resolver จัดการเองทั้งหมด ถ้า route นี้อยู่หลัง จะไม่มีทาง
+    # ถูก match เลย (Django admin เจอ "unlock-doc/" ไม่ตรง pattern ไหนของมันเอง ก็ 404 คืนไปเลย
+    # โดยไม่ทันมาถึง path นี้) ยืนยันจาก console จริงที่เห็น POST .../admin/unlock-doc/ 404 ตลอด
     path("admin/unlock-doc/", unlock_document_view),
+    path("admin/", admin.site.urls),
     path("api/barcode-remaining/", barcode_remaining_api),
     path("api/delivery-log/save/", delivery_log_autosave),
     path("api/pending-barcodes/", pending_barcodes_api),
