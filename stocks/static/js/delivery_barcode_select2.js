@@ -105,11 +105,26 @@
         var $idInput = nameMatch
             ? django.jQuery('input[name="delivery_logs-' + nameMatch[1] + '-id"]')
             : $row.find('input[name$="-id"]'); // fallback เผื่อโครงสร้างเปลี่ยนไปจากนี้
-        if (nameMatch && $idInput.length === 0) {
-            $idInput = django.jQuery('<input type="hidden">')
-                .attr('name', 'delivery_logs-' + nameMatch[1] + '-id')
-                .attr('id', 'id_delivery_logs-' + nameMatch[1] + '-id');
-            $row.append($idInput);
+        if (nameMatch) {
+            if ($idInput.length === 0) {
+                // ไม่เจอเลยสักตัว (แถวที่เพิ่มด้วย "Add another") → สร้างขึ้นเองแปะไว้ในแถว
+                $idInput = django.jQuery('<input type="hidden">')
+                    .attr('name', 'delivery_logs-' + nameMatch[1] + '-id')
+                    .attr('id', 'id_delivery_logs-' + nameMatch[1] + '-id');
+                $row.append($idInput);
+            } else if ($idInput.length > 1) {
+                // 🎯 เจอมากกว่า 1 ตัวที่ name เดียวกัน — ตอน submit จริง browser จะส่งไปทุกตัว
+                // เบราว์เซอร์/Django อ่านได้ค่าเดียว (ตัวหลังสุดใน DOM) ถ้าตัวนั้นดันว่างอยู่ (เช่น
+                // ช่องที่ Django render ไว้แต่แรกแล้วไม่เคยถูกอัปเดต) จะทับค่าที่ auto-save ตั้งไว้
+                // ถูกต้องแล้วให้กลายเป็นว่าง ทำให้ Django คิดว่าเป็นแถวใหม่ทั้งที่จริงมี id แล้ว
+                // (สงสัยว่าเป็นสาเหตุของบั๊ก double ตอนกด Save ที่ยังไม่หายขาด) — แก้โดยเก็บไว้แค่
+                // ตัวเดียว (ตัวที่มีค่าจริงถ้ามี ไม่งั้นเอาตัวแรก) แล้วลบตัวที่เหลือทิ้งให้หมด
+                var keepEl = $idInput.filter(function () { return this.value; }).get(0) || $idInput.get(0);
+                $idInput.each(function () {
+                    if (this !== keepEl) django.jQuery(this).remove();
+                });
+                $idInput = django.jQuery(keepEl);
+            }
         }
         var logId = $idInput.val() || null;
 
@@ -518,12 +533,20 @@
             waited += 100;
             if (pendingAutoSaves > 0 && waited < maxWaitMs) return;
             clearInterval(check);
-            // 🔍 DEBUG ชั่วคราว — เช็คว่า id field ของทุกแถวมีค่าครบไหม ณ วินาทีที่กำลังจะ submit จริง
+            // 🎯 เช็คซ้ำอีกรอบตอนจะ submit จริง (สุดท้ายสุด) เผื่อมีช่อง id ซ้ำชื่อกันเกิดขึ้นมาใหม่
+            // ระหว่างนี้ — ถ้ามีมากกว่า 1 ตัว เก็บไว้แค่ตัวที่มีค่าจริง ลบตัวที่เหลือทิ้งก่อน submit
+            // (browser จะส่งค่าของทุก input ที่ name ซ้ำกันไปหมด ถ้ามีตัวว่างปนไปด้วยจะเสี่ยงโดน
+            // อ่านทับค่าที่ถูกต้อง กลายเป็นสร้างแถวใหม่ซ้ำ)
             django.jQuery('input[name*="delivery_logs-"][name$="-barcode_code"]').each(function () {
                 var m = (this.name || '').match(/-(\d+)-barcode_code$/);
                 if (!m) return;
-                var idEl = document.querySelector('input[name="delivery_logs-' + m[1] + '-id"]');
-                console.log('[submit-check] idx=', m[1], 'barcode=', this.value, 'idField found=', !!idEl, 'idValue=', idEl ? idEl.value : 'N/A', 'inForm=', idEl ? form.contains(idEl) : null);
+                var $idEls = django.jQuery('input[name="delivery_logs-' + m[1] + '-id"]');
+                if ($idEls.length > 1) {
+                    var keepEl = $idEls.filter(function () { return this.value; }).get(0) || $idEls.get(0);
+                    $idEls.each(function () { if (this !== keepEl) django.jQuery(this).remove(); });
+                    $idEls = django.jQuery(keepEl);
+                }
+                console.log('[submit-check] idx=', m[1], 'barcode=', this.value, 'idCount=', $idEls.length, 'idValue=', $idEls.val(), 'inForm=', $idEls.length ? form.contains($idEls[0]) : null);
             });
             // ใส่ name/value ของปุ่มที่กดไว้กลับเข้าไป (ค่าดั้งเดิม ไม่ใช่ "กำลังบันทึก...")
             // เพราะ requestSubmit() แบบไม่ระบุปุ่มจะไม่ส่งค่านี้ ทำให้ Django ไม่รู้ว่าจะ
