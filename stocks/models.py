@@ -91,6 +91,7 @@ class Customer(models.Model):
     contact_person = models.CharField(max_length=255, verbose_name="ชื่อคนติดต่อ")
     address = models.TextField(verbose_name="ที่อยู่")
     phone = models.CharField(max_length=50, verbose_name="เบอร์โทร")
+    tax_id = models.CharField(max_length=20, blank=True, verbose_name="เลขประจำตัวผู้เสียภาษี")
     payment_term = models.IntegerField(default=30, verbose_name="Credit (วัน)")
     vat = models.DecimalField(max_digits=5, decimal_places=2, default=7.00)
     created_at = models.DateTimeField(auto_now_add=True, null=True)

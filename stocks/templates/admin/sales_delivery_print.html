@@ -197,6 +197,7 @@
             <div class="section-label">ลูกค้า</div>
             <div>{{ customer.company_name }}</div>
             <div>{{ customer.address }}</div>
+            {% if customer.tax_id %}<div>เลขประจำตัวผู้เสียภาษี {{ customer.tax_id }}</div>{% endif %}
         </div>
 
         <table class="items-table">

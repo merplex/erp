@@ -3927,8 +3927,8 @@ class CustomerProductContractInline(UnfoldTabularInline):
 
 @admin.register(Customer)
 class CustomerAdmin(DetailedHistoryMixin, DocumentLockMixin, UnfoldModelAdmin):
-    list_display = ('company_name', 'contact_person', 'phone')
-    search_fields = ('company_name', 'contact_person', 'phone')
+    list_display = ('company_name', 'contact_person', 'phone', 'tax_id')
+    search_fields = ('company_name', 'contact_person', 'phone', 'tax_id')
     inlines = [CustomerProductContractInline]
 
 # --- 3. ส่วนหน้าจัดการสัญญาโดยเฉพาะ (T2. ราคาสัญญา&DC/Rebate) ---
