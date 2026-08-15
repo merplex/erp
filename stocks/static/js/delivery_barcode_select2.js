@@ -506,14 +506,38 @@
         }
     });
 
+    // 🎯 สาเหตุจริงของบั๊ก double ตอนกด Save (ไม่ใช่แค่เรื่อง id field หาไม่เจอ/ซ้ำ): Django
+    // formset ปฏิบัติกับ form index ที่ "เกิน initial_form_count()" (คือจำนวนแถวที่มีอยู่จริง
+    // ตอนหน้าโหลดครั้งแรก) ว่าเป็น "extra form" เสมอ — และ extra form จะถูกสร้าง instance ใหม่
+    // เปล่าๆ ทุกครั้ง โดย "ไม่สนใจค่า -id ที่ส่งมาเลยแม้แต่น้อย" (ต่างจาก initial form ที่ query
+    // instance เดิมมาจาก -id ก่อนเสมอ) เพราะงั้นแถวที่เพิ่มใหม่ระหว่าง session นี้ (ไม่ว่าจะเป็น
+    // แถว extra=1 ว่างๆ ตอนโหลดหน้า หรือแถวที่กด "Add another" เพิ่มมา) ต่อให้ auto-save ผูก id
+    // ถูกต้องแค่ไหน พอกด Save ทั้งหน้า Django ก็จะสร้างแถวใหม่ซ้ำกับที่ auto-save สร้างไว้แล้วอยู่ดี
+    // ทางเดียวที่กันซ้ำได้จริงคือ "ไม่ส่ง field ของแถวที่ auto-save เก็บให้แล้วไปกับฟอร์มหลักเลย"
+    // (ปิดด้วย disabled — ต่างจาก readonly ตรงที่ disabled จะไม่ถูกรวมใน FormData ตอน submit)
+    function excludeAutoSavedRowsFromSubmit() {
+        django.jQuery('input[name*="delivery_logs-"][name$="-barcode_code"]').each(function () {
+            var $row = django.jQuery(this).closest('tr');
+            if ($row.data('deliveryPreexisting')) return; // initial form จริง ปล่อยให้ submit ปกติ
+            var m = (this.name || '').match(/-(\d+)-barcode_code$/);
+            if (!m) return;
+            var idEl = document.querySelector('input[name="delivery_logs-' + m[1] + '-id"]');
+            if (!idEl || !idEl.value) return; // ยังไม่เคย auto-save สำเร็จ ปล่อยให้ Django สร้างให้ตามปกติ
+            console.log('[exclude-from-submit] idx=', m[1], 'barcode=', this.value, 'log_id=', idEl.value, '→ ถอดออกจาก submit รอบนี้ (auto-save เก็บให้แล้ว)');
+            $row.find('input, select, textarea').prop('disabled', true);
+        });
+    }
+
     // ⚠️ กันกด Save/Save and continue editing หลุดออกไปก่อน auto-save (blur) ที่พึ่งยิงจะเสร็จ
     // ไม่งั้นแถวเดียวกันจะถูกสร้างซ้ำ 2 รายการในฐานข้อมูล (ดูคอมเมนต์ตรง pendingAutoSaves ด้านบน)
     // ต้องดักที่ document ช่วง capture phase เพื่อให้ทำงานก่อน listener อื่นๆ ของหน้า (เช่น
-    // ตัวกันกด submit ซ้ำใน smart_delivery_inline.js)
+    // ตัวกันกด submit ซ้ำใน smart_delivery_inline.js) — ต้องทำงานทุกครั้งที่ submit จริง ไม่ใช่แค่
+    // ตอนมี auto-save ค้างอยู่เท่านั้น (เดิมมี gate "pendingAutoSaves<=0 return" ทำให้ตอนกด Save
+    // ตอนที่ auto-save เสร็จไปแล้วพอดี โค้ดส่วน exclude ด้านบนไม่ทำงานเลย เจอบั๊ก double อยู่ดี)
     document.addEventListener('submit', function (e) {
-        if (pendingAutoSaves <= 0) return;
         var form = e.target;
         if (!(form instanceof HTMLFormElement)) return;
+        if (form.dataset.deliverySubmitReady === '1') return; // เตรียมพร้อมแล้ว ปล่อยให้ submit จริง
         e.preventDefault();
         e.stopImmediatePropagation();
         var submitter = e.submitter; // ปุ่มที่ถูกกด (Save / Save and continue editing / ...)
@@ -533,21 +557,9 @@
             waited += 100;
             if (pendingAutoSaves > 0 && waited < maxWaitMs) return;
             clearInterval(check);
-            // 🎯 เช็คซ้ำอีกรอบตอนจะ submit จริง (สุดท้ายสุด) เผื่อมีช่อง id ซ้ำชื่อกันเกิดขึ้นมาใหม่
-            // ระหว่างนี้ — ถ้ามีมากกว่า 1 ตัว เก็บไว้แค่ตัวที่มีค่าจริง ลบตัวที่เหลือทิ้งก่อน submit
-            // (browser จะส่งค่าของทุก input ที่ name ซ้ำกันไปหมด ถ้ามีตัวว่างปนไปด้วยจะเสี่ยงโดน
-            // อ่านทับค่าที่ถูกต้อง กลายเป็นสร้างแถวใหม่ซ้ำ)
-            django.jQuery('input[name*="delivery_logs-"][name$="-barcode_code"]').each(function () {
-                var m = (this.name || '').match(/-(\d+)-barcode_code$/);
-                if (!m) return;
-                var $idEls = django.jQuery('input[name="delivery_logs-' + m[1] + '-id"]');
-                if ($idEls.length > 1) {
-                    var keepEl = $idEls.filter(function () { return this.value; }).get(0) || $idEls.get(0);
-                    $idEls.each(function () { if (this !== keepEl) django.jQuery(this).remove(); });
-                    $idEls = django.jQuery(keepEl);
-                }
-                console.log('[submit-check] idx=', m[1], 'barcode=', this.value, 'idCount=', $idEls.length, 'idValue=', $idEls.val(), 'inForm=', $idEls.length ? form.contains($idEls[0]) : null);
-            });
+
+            excludeAutoSavedRowsFromSubmit();
+
             // ใส่ name/value ของปุ่มที่กดไว้กลับเข้าไป (ค่าดั้งเดิม ไม่ใช่ "กำลังบันทึก...")
             // เพราะ requestSubmit() แบบไม่ระบุปุ่มจะไม่ส่งค่านี้ ทำให้ Django ไม่รู้ว่าจะ
             // redirect ไปหน้าไหนหลังบันทึก
@@ -558,6 +570,7 @@
                 hidden.value = originalValue;
                 form.appendChild(hidden);
             }
+            form.dataset.deliverySubmitReady = '1';
             if (form.requestSubmit) {
                 form.requestSubmit();
             } else {
