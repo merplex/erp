@@ -126,6 +126,17 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 
+# ── ข้อมูลบริษัทผู้ขาย (โชว์บนหัวกระดาษเอกสารพิมพ์) ─────────────────────────
+# โค้ดชุดเดียวกันนี้ deploy แยกเป็น 2 โปรเจกต์ (2 บริษัทคนละราย) บน Railway —
+# erp-production = มีบุญพานิชย์, thaimung-production = ไทยมั่ง เฟอร์นิเจอร์ —
+# ต้องตั้งค่าจริงผ่าน environment variable แยกกันในแต่ละโปรเจกต์ ห้าม hardcode
+# ชื่อบริษัทใดบริษัทหนึ่งตายตัวในโค้ด/เทมเพลต (ค่า default ด้านล่างคือของมีบุญฯ
+# เพราะเป็นโปรเจกต์เดิม/หลัก — thaimung-production ต้องตั้ง env vars เหล่านี้เอง)
+COMPANY_NAME = os.environ.get('COMPANY_NAME', 'บริษัท มีบุญพานิชย์ จำกัด (สำนักงานใหญ่)')
+COMPANY_ADDRESS = os.environ.get('COMPANY_ADDRESS', '1 ซอย บางบอน 4 ซอย 12 แขวงบางบอนเหนือ เขตบางบอน กรุงเทพฯ 10150')
+COMPANY_TAX_ID = os.environ.get('COMPANY_TAX_ID', '0105558001100')
+COMPANY_PHONE = os.environ.get('COMPANY_PHONE', '02-045-2943')
+
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/
 

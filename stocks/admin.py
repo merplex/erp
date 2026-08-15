@@ -38,6 +38,7 @@ from django.core.exceptions import ValidationError
 from django.forms import TextInput
 from django.db import models # เพิ่มเพื่อรองรับ formfield_overrides
 from django.db.models import Subquery, OuterRef, Q, Sum, F, DecimalField, ExpressionWrapper, Case, When, IntegerField, Value
+from django.db.models.functions import TruncDate
 from django.db.models.functions import Coalesce, Greatest
 from django import forms # ✅ เพิ่มบรรทัดนี้ครับ ทำระบบ tag checkbox
 from django.utils.safestring import mark_safe # ✅ ต้องมีบรรทัดนี้ครับ
@@ -46,6 +47,7 @@ from django.http import HttpResponseRedirect
 from django.template import Template, RequestContext 
 from django.http import HttpResponse, HttpResponseRedirect
 from django.template.response import TemplateResponse
+from django.template.loader import render_to_string
 from django.urls import reverse, path # ✅ 3บรรทัดนี้ สำหรับระบบล็อคเอกสาร
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.admin.models import LogEntry
@@ -924,9 +926,16 @@ class SalesDeliveryLogForm(forms.ModelForm):
 
 
 class SalesDeliveryLogInline(UnfoldTabularInline):
+    # 🎯 แถวใหม่สร้างผ่าน "checklist ส่งของ" ที่หัวเอกสารเท่านั้นแล้ว (ดู SalesOrderAdmin.ship_batch_view)
+    # ไม่ใช้ปุ่ม "Add another" ของ inline นี้อีกต่อไป — เพราะ Django formset ปฏิบัติกับแถวที่เพิ่ม
+    # มาแบบ dynamic (ไม่ได้มีอยู่ตั้งแต่หน้าโหลดครั้งแรก) เป็น "extra form" เสมอ ไม่สนใจค่า -id ที่
+    # ส่งมาเลย ต่อให้ auto-save ผูก id ถูกต้องแค่ไหนก็ตาม พอกด Save ทั้งหน้า Django ก็ยังสร้างแถวใหม่
+    # ซ้ำกับที่ auto-save สร้างไว้แล้วอยู่ดี (ไล่ debug กับเปรมจนเจอ root cause นี้) — extra=0 +
+    # has_add_permission=False ตัดปัญหานี้ทั้งกระบวนตั้งแต่ต้นทาง ส่วนแก้ไข/ลบแถวที่มีอยู่แล้วยังทำ
+    # ได้ปกติ (initial form ตัวจริง Django query instance จาก -id ถูกต้องอยู่แล้ว ไม่มีปัญหานี้)
     model = SalesDeliveryLog
     form = SalesDeliveryLogForm
-    extra = 1
+    extra = 0
     fields = ('barcode_code', 'shipping_no', 'quantity_shipped', 'user', 'notes', 'shipped_date')
     readonly_fields = ('user',)
     formfield_overrides = {
@@ -960,8 +969,8 @@ class SalesDeliveryLogInline(UnfoldTabularInline):
         return None
 
     def has_add_permission(self, request, obj=None):
-        if self._lock_reason(obj): return False
-        return super().has_add_permission(request, obj)
+        # เพิ่มแถวใหม่ผ่าน checklist ส่งของที่หัวเอกสารเท่านั้น (ดูคอมเมนต์บนคลาส)
+        return False
 
     def has_change_permission(self, request, obj=None):
         if self._lock_reason(obj): return False
@@ -1792,8 +1801,112 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
             path('<int:object_id>/print/', self.admin_site.admin_view(self.print_view), name='stocks_salesorder_print'),
             path('<int:object_id>/print-delivery/', self.admin_site.admin_view(self.print_delivery_view), name='stocks_salesorder_print_delivery'),
             path('<int:object_id>/unlock/', self.admin_site.admin_view(self.unlock_view), name='stocks_salesorder_unlock'),
+            path('<int:object_id>/ship/', self.admin_site.admin_view(self.ship_batch_view), name='stocks_salesorder_ship'),
         ]
         return custom_urls + super().get_urls()
+
+    def ship_batch_view(self, request, object_id):
+        # 🎯 สร้าง/แก้ไข "รอบส่งของ" ทั้งชุดในคำขอเดียว — ไม่ผ่าน Django formset เลย (นั่นคือต้นตอ
+        # บั๊กบันทึกซ้ำเดิม: formset ปฏิบัติกับแถวที่เพิ่มมาแบบ dynamic เป็น "extra form" เสมอ ไม่
+        # สนใจค่า -id ที่ส่งมา) ใช้ ORM ธรรมดาสร้าง/แก้ SalesDeliveryLog ทีละแถวผ่าน .save() ปกติ
+        # เพื่อให้ side-effect เดิมทำงานครบ (ตัดสต็อก, สะสมยอดใน SalesItem, คำนวณ DC/Rebate/
+        # shipment_value ผ่าน sync_dc_rebate_from_contract())
+        from django.core.exceptions import PermissionDenied
+        from django.http import Http404, HttpResponseBadRequest
+        from django.utils.dateparse import parse_date, parse_datetime
+        from django.utils import timezone as tz
+
+        if request.method != 'POST':
+            return HttpResponseBadRequest('POST only')
+        if not self.has_view_or_change_permission(request):
+            raise PermissionDenied
+        obj = self.get_object(request, object_id)
+        if obj is None:
+            raise Http404("ไม่พบใบสั่งขายนี้")
+
+        action = request.POST.get('action', '')
+
+        def _parse_batch_date(raw):
+            raw = (raw or '').strip()
+            if not raw:
+                return None
+            d = parse_date(raw)
+            if d:
+                return tz.datetime(d.year, d.month, d.day, tzinfo=tz.get_current_timezone())
+            return parse_datetime(raw)
+
+        if action == 'create_batch':
+            ship_date = _parse_batch_date(request.POST.get('shipped_date'))
+            if not ship_date:
+                messages.error(request, "กรุณากรอกวันที่ส่งของก่อน")
+                return HttpResponseRedirect(reverse('admin:stocks_salesorder_change', args=[obj.pk]))
+
+            created_count = 0
+            for key, raw_qty in request.POST.items():
+                m = re.match(r'^ship_qty_(\d+)$', key)
+                if not m:
+                    continue
+                barcode_id = m.group(1)
+                if request.POST.get(f'ship_checked_{barcode_id}') != 'on':
+                    continue
+                try:
+                    qty = int(raw_qty)
+                except (TypeError, ValueError):
+                    continue
+                if qty <= 0:
+                    continue
+                try:
+                    barcode = ProductBarcode.objects.select_related('product').get(pk=barcode_id)
+                except ProductBarcode.DoesNotExist:
+                    continue
+                if not SalesItem.objects.filter(sales_order=obj, barcode_obj=barcode).exists():
+                    continue
+                log = SalesDeliveryLog(
+                    sales_order=obj,
+                    barcode_obj=barcode,
+                    product=barcode.product,
+                    quantity_shipped=qty,
+                    shipped_date=ship_date,
+                    user=request.user,
+                )
+                log.save()
+                created_count += 1
+
+            if created_count == 0:
+                messages.warning(request, "ไม่มีรายการที่ติ๊กไว้ (หรือจำนวนเป็น 0) — ไม่ได้บันทึกอะไรเลย")
+                return HttpResponseRedirect(reverse('admin:stocks_salesorder_change', args=[obj.pk]))
+
+            obj.update_status()
+            messages.success(request, f"✅ บันทึกรอบส่งของ {created_count} รายการ วันที่ {ship_date:%d/%m/%Y} แล้ว")
+
+            if request.POST.get('next') == 'print':
+                print_url = reverse('admin:stocks_salesorder_print_delivery', args=[obj.pk])
+                return HttpResponseRedirect(f"{print_url}?shipped_date={ship_date.isoformat()}")
+            return HttpResponseRedirect(reverse('admin:stocks_salesorder_change', args=[obj.pk]))
+
+        elif action == 'edit_batch_date':
+            old_date = _parse_batch_date(request.POST.get('old_date'))
+            new_date = _parse_batch_date(request.POST.get('new_date'))
+            if not old_date or not new_date:
+                messages.error(request, "วันที่ไม่ถูกต้อง")
+                return HttpResponseRedirect(reverse('admin:stocks_salesorder_change', args=[obj.pk]))
+
+            logs = SalesDeliveryLog.objects.filter(sales_order=obj, shipped_date__date=old_date.date())
+            updated_count = 0
+            for log in logs:
+                log.shipped_date = new_date
+                log.save()  # ผ่าน .save() ปกติ ไม่ bulk update — จะได้ recalc DC/Rebate/shipment_value ให้ด้วย
+                updated_count += 1
+
+            obj.update_status()
+            messages.success(request, f"✅ เปลี่ยนวันที่ส่งของรอบนี้ ({updated_count} รายการ) เป็น {new_date:%d/%m/%Y} แล้ว")
+
+            if request.POST.get('next') == 'print':
+                print_url = reverse('admin:stocks_salesorder_print_delivery', args=[obj.pk])
+                return HttpResponseRedirect(f"{print_url}?shipped_date={new_date.isoformat()}")
+            return HttpResponseRedirect(reverse('admin:stocks_salesorder_change', args=[obj.pk]))
+
+        return HttpResponseBadRequest('unknown action')
 
     def unlock_view(self, request, object_id):
         # 🎯 ทำเป็น view แยกต่างหาก (ไม่ยัดปุ่มเข้าไปใน form ของ change_view) เพราะตอนสถานะ
@@ -1840,10 +1953,25 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
         obj = self.get_object(request, object_id)
         if obj is None:
             raise Http404("ไม่พบใบสั่งขายนี้")
+        deliveries = obj.delivery_logs.all().order_by('shipped_date', 'id').select_related('product', 'barcode_obj')
+        # 🎯 กด "พิมพ์" จากรอบใดรอบหนึ่งใน shipment panel (ดู ship_batch_view) จะแนบ shipped_date
+        # มาด้วย เพื่อพิมพ์เฉพาะรอบนั้น — ถ้าไม่มี query param นี้ (เช่น เข้าจากปุ่มพิมพ์เดิมที่หัว
+        # inline) ยังคง behavior เดิมคือโชว์ประวัติการส่งของทั้งหมด
+        shipped_date_param = request.GET.get('shipped_date', '').strip()
+        if shipped_date_param:
+            from django.utils.dateparse import parse_date, parse_datetime
+            # รองรับทั้งรูปแบบวันที่ล้วน ("YYYY-MM-DD" จากลิงก์พิมพ์ของแต่ละรอบใน shipment panel)
+            # และรูปแบบ datetime เต็ม (จาก ship_batch_view หลังบันทึก/แก้ไขรอบแล้ว redirect มาพิมพ์)
+            batch_date = parse_date(shipped_date_param)
+            if not batch_date:
+                batch_dt = parse_datetime(shipped_date_param)
+                batch_date = batch_dt.date() if batch_dt else None
+            if batch_date:
+                deliveries = deliveries.filter(shipped_date__date=batch_date)
         context = {
             **self.admin_site.each_context(request),
             'obj': obj,
-            'deliveries': obj.delivery_logs.all().order_by('shipped_date', 'id').select_related('product', 'barcode_obj'),
+            'deliveries': deliveries,
             'title': f"ใบส่งสินค้า {obj.so_number}",
         }
         return TemplateResponse(request, 'admin/sales_delivery_print.html', context)
@@ -1875,33 +2003,69 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
                     f"🔒 เอกสารนี้ถูกล็อค ({', '.join(reasons)}) — ไม่สามารถเพิ่ม/แก้ไข/ลบรายการส่งของได้")
         response = super().render_change_form(request, context, add, change, form_url, obj)
         if obj and change:
-            items = SalesItem.objects.filter(sales_order=obj).order_by('id').select_related('product', 'barcode_obj')
-            items_data = {}
-            for item in items:
-                if item.barcode_obj_id:
-                    key = str(item.barcode_obj_id)
-                    name = f"{item.barcode_obj.code} \u2014 {item.product.name}"
-                    # base_remaining \u0e40\u0e1b\u0e47\u0e19\u0e0a\u0e34\u0e49\u0e19\u0e40\u0e2a\u0e21\u0e2d (quantity_ordered/quantity_shipped \u0e40\u0e1b\u0e47\u0e19\u0e0a\u0e34\u0e49\u0e19)
-                    # \u0e41\u0e15\u0e48\u0e0a\u0e48\u0e2d\u0e07 qty_field (quantity_shipped) \u0e43\u0e19\u0e41\u0e16\u0e27\u0e43\u0e2b\u0e21\u0e48\u0e01\u0e23\u0e2d\u0e01\u0e40\u0e1b\u0e47\u0e19\u0e2b\u0e19\u0e48\u0e27\u0e22\u0e1a\u0e32\u0e23\u0e4c\u0e42\u0e04\u0e49\u0e14
-                    # \u0e15\u0e49\u0e2d\u0e07\u0e2a\u0e48\u0e07 factor \u0e44\u0e1b\u0e43\u0e2b\u0e49 JS \u0e41\u0e1b\u0e25\u0e07\u0e01\u0e48\u0e2d\u0e19\u0e40\u0e17\u0e35\u0e22\u0e1a (\u0e14\u0e39 smart_delivery_inline.js)
-                    remaining = max(0, item.quantity_ordered - item.quantity_shipped)
-                    factor = item.barcode_obj.conversion_factor or 1
-                    if key not in items_data:
-                        items_data[key] = {'name': name, 'code': item.barcode_obj.code, 'base_remaining': remaining, 'factor': factor}
-                    else:
-                        items_data[key]['base_remaining'] += remaining
-            safe_json = json.dumps({'type': 'delivery', 'form_prefix': 'delivery_logs',
-                                    'select_field': 'barcode_obj', 'qty_field': 'quantity_shipped',
-                                    'items': items_data}).replace('</', '<\\/')
-            smart_script = f'<script>window.SMART_INLINE_DATA={safe_json};</script>'
-            # \ud83c\udfaf datalist \u0e1a\u0e32\u0e23\u0e4c\u0e42\u0e04\u0e49\u0e14\u0e02\u0e2d\u0e07\u0e17\u0e38\u0e01\u0e23\u0e32\u0e22\u0e01\u0e32\u0e23\u0e43\u0e19 SO \u0e19\u0e35\u0e49 \u2014 \u0e1d\u0e31\u0e07\u0e21\u0e32\u0e1e\u0e23\u0e49\u0e2d\u0e21\u0e2b\u0e19\u0e49\u0e32\u0e40\u0e25\u0e22 (\u0e44\u0e21\u0e48\u0e15\u0e49\u0e2d\u0e07\u0e23\u0e2d fetch
-            # /api/pending-barcodes/ \u0e0b\u0e36\u0e48\u0e07\u0e17\u0e33\u0e07\u0e32\u0e19\u0e17\u0e35\u0e2b\u0e25\u0e31\u0e07\u0e41\u0e25\u0e30\u0e01\u0e23\u0e2d\u0e07\u0e40\u0e09\u0e1e\u0e32\u0e30\u0e23\u0e32\u0e22\u0e01\u0e32\u0e23\u0e17\u0e35\u0e48\u0e22\u0e31\u0e07\u0e2a\u0e48\u0e07\u0e44\u0e21\u0e48\u0e04\u0e23\u0e1a) \u0e40\u0e1e\u0e37\u0e48\u0e2d\u0e43\u0e2b\u0e49\u0e1e\u0e34\u0e21\u0e1e\u0e4c
-            # \u0e1a\u0e32\u0e23\u0e4c\u0e42\u0e04\u0e49\u0e14\u0e1a\u0e32\u0e07\u0e2a\u0e48\u0e27\u0e19\u0e43\u0e19\u0e0a\u0e48\u0e2d\u0e07 "Sales delivery logs" \u0e41\u0e25\u0e49\u0e27\u0e21\u0e35 suggestion \u0e43\u0e2b\u0e49\u0e40\u0e25\u0e37\u0e2d\u0e01\u0e44\u0e14\u0e49\u0e17\u0e31\u0e19\u0e17\u0e35\u0e17\u0e35\u0e48\u0e42\u0e2b\u0e25\u0e14\u0e2b\u0e19\u0e49\u0e32
-            datalist_options = ''.join(
-                format_html('<option value="{}">{}</option>', v['code'], v['name'])
-                for v in items_data.values()
+            # Shipment panel: checklist for creating new delivery batches + list of past batches
+            # 🎯 group ตาม "วันที่" เท่านั้น (ไม่เอาเวลา) เพราะรายการเก่าก่อนเปลี่ยนมาใช้ checklist
+            # (ผ่านระบบ auto-save เดิม) มี shipped_date เป็นเวลาสุ่มไม่ตรงกันเป๊ะ ถ้า group ด้วย
+            # datetime ตรงๆ แต่ละแถวเก่าจะกลายเป็นคนละ "รอบ" หมด ยาวรกจนใช้งานไม่ได้
+            batch_dates = list(
+                SalesDeliveryLog.objects.filter(sales_order=obj)
+                .annotate(_d=TruncDate('shipped_date'))
+                .order_by('_d').values_list('_d', flat=True).distinct()
             )
-            datalist_script = f'<datalist id="delivery-barcode-datalist">{datalist_options}</datalist>'
+            batches = [
+                {'date': d, 'date_iso': d.isoformat(), 'date_only': d.strftime('%Y-%m-%d')}
+                for d in batch_dates
+            ]
+
+            sales_items = SalesItem.objects.filter(sales_order=obj).select_related('barcode_obj', 'product')
+            pending_map = {}
+            for item in sales_items:
+                if not item.barcode_obj_id:
+                    continue
+                factor = item.barcode_obj.conversion_factor or 1
+                ordered_pieces = item.quantity_ordered or 0
+                shipped_units = SalesDeliveryLog.objects.filter(
+                    sales_order=obj, barcode_obj=item.barcode_obj
+                ).aggregate(total=Sum('quantity_shipped'))['total'] or 0
+                remaining_pieces = ordered_pieces - shipped_units * factor
+                remaining = remaining_pieces // factor
+                if remaining > 0:
+                    key = item.barcode_obj_id
+                    if key not in pending_map:
+                        pending_map[key] = {
+                            'barcode_id': item.barcode_obj_id,
+                            'code': item.barcode_obj.code,
+                            'product_name': item.product.name if item.product else '-',
+                            'unit_name': item.barcode_obj.unit_name or 'ชิ้น',
+                            'qty': remaining,
+                        }
+                    else:
+                        pending_map[key]['qty'] += remaining
+
+            shipment_panel_html = render_to_string('admin/sales_shipment_panel.html', {
+                'batches': batches,
+                'pending_items': list(pending_map.values()),
+                'next_batch_no': len(batches) + 1,
+                'ship_url': reverse('admin:stocks_salesorder_ship', args=[obj.pk]),
+                'print_base_url': reverse('admin:stocks_salesorder_print_delivery', args=[obj.pk]),
+            }, request=request)
+            shipment_panel_wrapped = f'<div id="sales-shipment-panel-holder" style="display:none;">{shipment_panel_html}</div>'
+            move_panel_script = """
+                <script>
+                    django.jQuery(document).ready(function() {
+                        var $holder = django.jQuery('#sales-shipment-panel-holder');
+                        var $heading = django.jQuery('h2[id$="-heading"]:contains("Sales delivery logs")').first();
+                        var $panel = $holder.children().first();
+                        $panel.show();
+                        if ($heading.length) {
+                            $heading.closest('[id*="delivery_logs"]').before($panel);
+                        } else {
+                            django.jQuery('#content-main').prepend($panel);
+                        }
+                        $holder.remove();
+                    });
+                </script>
+            """
             # 🎯 #submit-row ของ Unfold อยู่ "นอก" <form> จริง (เป็น sticky bar แยกต่างหาก) ปุ่ม submit ที่ยัด
             # เข้าไปต้องมี attribute form="{model}_form" กำกับด้วย ไม่งั้นกดแล้วไม่มี <form> ให้ผูก (กดแล้ว
             # ไม่เกิดอะไรขึ้นเลย) — ใช้ได้กับปุ่ม "เสร็จงาน" เพราะตอนนั้นฟอร์มยัง render แบบแก้ไขได้ปกติ
@@ -1951,7 +2115,7 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
             """
             response.render()
             response.content = response.content.replace(
-                b'</body>', (smart_script + datalist_script + complete_btn_script + print_btn_script).encode('utf-8') + b'</body>', 1
+                b'</body>', (shipment_panel_wrapped + move_panel_script + complete_btn_script + print_btn_script).encode('utf-8') + b'</body>', 1
             )
         return response
 

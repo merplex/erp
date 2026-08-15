@@ -208,6 +208,7 @@ def pending_barcodes_api(request):
 
     items = SalesItem.objects.filter(sales_order=so).select_related('barcode_obj', 'product')
     result = []
+    over_result = []
     for item in items:
         if not item.barcode_obj:
             continue
@@ -216,16 +217,28 @@ def pending_barcodes_api(request):
         shipped_units = SalesDeliveryLog.objects.filter(
             sales_order=so, barcode_obj=item.barcode_obj
         ).aggregate(total=Sum('quantity_shipped'))['total'] or 0
-        remaining_pieces = max(0, ordered_pieces - shipped_units * factor)
-        remaining = remaining_pieces // factor  # แสดงเป็นหน่วยบาร์โค้ด
-        if remaining > 0:
-            result.append({
-                'barcode': item.barcode_obj.code,
-                'product': item.product.name if item.product else '',
-                'remaining': remaining,
-                'unit_name': item.barcode_obj.unit_name or 'ชิ้น',
-            })
-    return JsonResponse({'items': result})
+        diff_pieces = ordered_pieces - shipped_units * factor  # >0 = ยังค้างส่ง, <0 = ส่งเกิน
+        if diff_pieces > 0:
+            remaining = diff_pieces // factor  # แสดงเป็นหน่วยบาร์โค้ด
+            if remaining > 0:
+                result.append({
+                    'barcode': item.barcode_obj.code,
+                    'product': item.product.name if item.product else '',
+                    'remaining': remaining,
+                    'unit_name': item.barcode_obj.unit_name or 'ชิ้น',
+                })
+        elif diff_pieces < 0:
+            # ✅ ส่งเกินยอดสั่ง (เช่น แก้ไขจำนวนในแถวที่มีอยู่แล้วให้เกินยอด) — โชว์แถบเขียวแยก
+            # จากแถบแดง "ยังส่งไม่ครบ" ด้านบน
+            over_units = (-diff_pieces) // factor
+            if over_units > 0:
+                over_result.append({
+                    'barcode': item.barcode_obj.code,
+                    'product': item.product.name if item.product else '',
+                    'over': over_units,
+                    'unit_name': item.barcode_obj.unit_name or 'ชิ้น',
+                })
+    return JsonResponse({'items': result, 'over_items': over_result})
 
 
 @staff_member_required

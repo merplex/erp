@@ -141,6 +141,7 @@
         <table class="print-doc">
             <thead>
                 <tr><td>
+                    {% block doc_header %}
                     <div class="doc-header">
                         <div>
                             <div class="logo-area"><!-- เผื่อรูปหัวกระดาษบริษัทในอนาคต --></div>
@@ -152,6 +153,7 @@
                             <strong>{% block doc_number %}{% endblock %}</strong>
                         </div>
                     </div>
+                    {% endblock %}
                 </td></tr>
             </thead>
             <tfoot>

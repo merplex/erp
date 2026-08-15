@@ -965,9 +965,13 @@ class SalesDeliveryLog(models.Model):
         # ทำให้แก้จำนวนในแถวเดิมแล้วสต็อก/ยอดสะสม/สถานะใบไม่อัพเดทตาม)
         if is_new:
             diff = self.quantity_shipped
+            shipped_date_changed = True
         else:
-            old_qty = SalesDeliveryLog.objects.values_list('quantity_shipped', flat=True).get(pk=self.pk)
+            old_qty, old_shipped_date = SalesDeliveryLog.objects.values_list(
+                'quantity_shipped', 'shipped_date'
+            ).get(pk=self.pk)
             diff = self.quantity_shipped - old_qty
+            shipped_date_changed = old_shipped_date != self.shipped_date
 
         # --- 🚀 [LOGIC เดิมของเปรม] ---
         # 1. สมองกล: ปรับสต็อกจริงตามผลต่าง (เป็นชิ้น)
@@ -995,11 +999,14 @@ class SalesDeliveryLog(models.Model):
             self.shipment_value = item.sale_price * self.quantity_shipped
             self.sync_dc_rebate_from_contract()
 
-        # --- 3. [คำนวณวันจ่ายเงินตามรอบบัญชี — เฉพาะตอนสร้างแถวใหม่ครั้งแรกเท่านั้น] ---
-        if is_new and self.sales_order.customer:
+        # --- 3. [คำนวณวันจ่ายเงินตามรอบบัญชี — อิงจาก "วันที่ส่งของจริง" (shipped_date) เสมอ
+        # ไม่ใช่วันที่กดบันทึก เพราะลูกค้านับเครดิตจากวันที่ได้รับของจริง — คำนวณใหม่ทุกครั้งที่
+        # shipped_date เปลี่ยน (ไม่ใช่แค่ตอนสร้างแถวใหม่) เผื่อแก้วันที่ย้อนหลัง (ดู
+        # SalesOrderAdmin.ship_batch_view → edit_batch_date) ---
+        if (is_new or shipped_date_changed) and self.sales_order.customer:
             close_day = self.sales_order.customer.account_close_day
             term = self.sales_order.customer.payment_term
-            ref_date = datetime.date.today()
+            ref_date = self.shipped_date.date() if hasattr(self.shipped_date, 'date') else self.shipped_date
 
             try:
                 current_closing = ref_date.replace(day=close_day)
