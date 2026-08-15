@@ -5,19 +5,30 @@
     <div id="delivery-status-bars"></div>
 
     {% for b in batches %}
-    <form method="post" action="{{ ship_url }}" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+    <form method="post" action="{{ ship_url }}" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:nowrap;overflow-x:auto;">
         {% csrf_token %}
         <input type="hidden" name="action" value="edit_batch_date">
         <input type="hidden" name="old_date" value="{{ b.date_iso }}">
         <span style="min-width:110px;color:#475569;font-weight:600;">ส่งครั้งที่ {{ forloop.counter }}:</span>
-        <input type="datetime-local" name="new_date" value="{{ b.datetime_local }}" required
-               style="width:180px;border:1px solid #9ca3af;border-radius:4px;padding:6px 8px;">
+        <input type="date" name="new_date" value="{{ b.date_iso }}" required
+               style="width:130px;border:1px solid #9ca3af;border-radius:4px;padding:6px 8px;flex-shrink:0;">
+        <select name="new_hour" style="border:1px solid #9ca3af;border-radius:4px;padding:6px 4px;flex-shrink:0;">
+            {% for h in hour_options %}
+            <option value="{{ h }}" {% if h == b.hour %}selected{% endif %}>{{ h }}</option>
+            {% endfor %}
+        </select>
+        <span style="color:#475569;">:</span>
+        <select name="new_minute" style="border:1px solid #9ca3af;border-radius:4px;padding:6px 4px;flex-shrink:0;">
+            {% for m in minute_options %}
+            <option value="{{ m }}" {% if m == b.minute %}selected{% endif %}>{{ m }}</option>
+            {% endfor %}
+        </select>
         <button type="submit"
-                style="background:#2563eb;color:#fff;border:none;border-radius:4px;padding:6px 14px;cursor:pointer;font-weight:600;">
+                style="background:#2563eb;color:#fff;border:none;border-radius:4px;padding:6px 14px;cursor:pointer;font-weight:600;flex-shrink:0;white-space:nowrap;">
             💾 บันทึกวันที่
         </button>
         <a href="{{ print_base_url }}?shipped_date={{ b.date_iso|urlencode }}" target="_blank"
-           style="background:#6f42c1;color:#fff;border-radius:4px;padding:6px 14px;text-decoration:none;font-weight:600;">
+           style="background:#6f42c1;color:#fff;border-radius:4px;padding:6px 14px;text-decoration:none;font-weight:600;flex-shrink:0;white-space:nowrap;">
             🖨️ พิมพ์
         </a>
     </form>
@@ -27,10 +38,21 @@
     <form method="post" action="{{ ship_url }}" style="margin-top:12px;border-top:1px solid #e2e8f0;padding-top:12px;">
         {% csrf_token %}
         <input type="hidden" name="action" value="create_batch">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
-            <span style="min-width:110px;color:#475569;font-weight:600;">ส่งครั้งที่ {{ next_batch_no }}:</span>
-            <input type="datetime-local" name="shipped_date" value="{{ default_new_datetime }}" required
-                   style="width:180px;border:1px solid #9ca3af;border-radius:4px;padding:6px 8px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:nowrap;overflow-x:auto;">
+            <span style="min-width:110px;color:#475569;font-weight:600;flex-shrink:0;">ส่งครั้งที่ {{ next_batch_no }}:</span>
+            <input type="date" name="shipped_date" value="{{ default_new_date }}" required
+                   style="width:130px;border:1px solid #9ca3af;border-radius:4px;padding:6px 8px;flex-shrink:0;">
+            <select name="shipped_hour" style="border:1px solid #9ca3af;border-radius:4px;padding:6px 4px;flex-shrink:0;">
+                {% for h in hour_options %}
+                <option value="{{ h }}" {% if h == default_new_hour %}selected{% endif %}>{{ h }}</option>
+                {% endfor %}
+            </select>
+            <span style="color:#475569;">:</span>
+            <select name="shipped_minute" style="border:1px solid #9ca3af;border-radius:4px;padding:6px 4px;flex-shrink:0;">
+                {% for m in minute_options %}
+                <option value="{{ m }}" {% if m == default_new_minute %}selected{% endif %}>{{ m }}</option>
+                {% endfor %}
+            </select>
         </div>
         <div style="overflow-x:auto;">
         <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:10px;white-space:nowrap;">

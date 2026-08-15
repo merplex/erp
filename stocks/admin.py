@@ -1811,9 +1811,10 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
         # สนใจค่า -id ที่ส่งมา) ใช้ ORM ธรรมดาสร้าง/แก้ SalesDeliveryLog ทีละแถวผ่าน .save() ปกติ
         # เพื่อให้ side-effect เดิมทำงานครบ (ตัดสต็อก, สะสมยอดใน SalesItem, คำนวณ DC/Rebate/
         # shipment_value ผ่าน sync_dc_rebate_from_contract())
+        import datetime as dt_module
         from django.core.exceptions import PermissionDenied
         from django.http import Http404, HttpResponseBadRequest
-        from django.utils.dateparse import parse_date, parse_datetime
+        from django.utils.dateparse import parse_date
         from django.utils import timezone as tz
 
         if request.method != 'POST':
@@ -1826,22 +1827,37 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
 
         action = request.POST.get('action', '')
 
-        def _parse_batch_date(raw):
-            # รับได้ทั้ง "YYYY-MM-DD" ล้วนๆ (fallback เผื่อ) และ "YYYY-MM-DDTHH:MM" จาก
-            # <input type="datetime-local"> — ถ้าไม่มีเวลามาด้วย default เป็น 10:00 ตามที่ขอ
+        def _parse_batch_date_only(raw):
+            """วันที่ล้วนๆ ไม่มีเวลา — ใช้หา instance เดิม (WHERE) เท่านั้น"""
             raw = (raw or '').strip()
-            if not raw:
+            return parse_date(raw) if raw else None
+
+        def _combine_date_time(date_raw, hour_raw, minute_raw):
+            """รวมช่องวันที่ + ชั่วโมง/นาที (เลือกจาก <select> แยก 2 ช่อง ไม่ใช้
+            <input type="time"> เพราะโชว์ AM/PM ตาม locale ของเบราว์เซอร์/OS ผู้ใช้ — บังคับ
+            24 ชม. เสมอด้วยการเลือกตัวเลขตรงๆ) ไม่กรอกมา default เป็น 10:00 ตามที่เปรมขอ"""
+            d = _parse_batch_date_only(date_raw)
+            if not d:
                 return None
-            d = parse_date(raw)
-            if d:
-                return tz.datetime(d.year, d.month, d.day, 10, 0, tzinfo=tz.get_current_timezone())
-            dt = parse_datetime(raw)
-            if dt and tz.is_naive(dt):
-                dt = tz.make_aware(dt, tz.get_current_timezone())
-            return dt
+            try:
+                h = int(hour_raw)
+                assert 0 <= h <= 23
+            except (TypeError, ValueError, AssertionError):
+                h = 10
+            try:
+                mi = int(minute_raw)
+                assert 0 <= mi <= 59
+            except (TypeError, ValueError, AssertionError):
+                mi = 0
+            t = dt_module.time(h, mi)
+            return tz.make_aware(dt_module.datetime.combine(d, t), tz.get_current_timezone())
 
         if action == 'create_batch':
-            ship_date = _parse_batch_date(request.POST.get('shipped_date'))
+            ship_date = _combine_date_time(
+                request.POST.get('shipped_date'),
+                request.POST.get('shipped_hour'),
+                request.POST.get('shipped_minute'),
+            )
             if not ship_date:
                 messages.error(request, "กรุณากรอกวันที่ส่งของก่อน")
                 return HttpResponseRedirect(reverse('admin:stocks_salesorder_change', args=[obj.pk]))
@@ -1890,13 +1906,17 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
             return HttpResponseRedirect(reverse('admin:stocks_salesorder_change', args=[obj.pk]))
 
         elif action == 'edit_batch_date':
-            old_date = _parse_batch_date(request.POST.get('old_date'))
-            new_date = _parse_batch_date(request.POST.get('new_date'))
+            old_date = _parse_batch_date_only(request.POST.get('old_date'))
+            new_date = _combine_date_time(
+                request.POST.get('new_date'),
+                request.POST.get('new_hour'),
+                request.POST.get('new_minute'),
+            )
             if not old_date or not new_date:
                 messages.error(request, "วันที่ไม่ถูกต้อง")
                 return HttpResponseRedirect(reverse('admin:stocks_salesorder_change', args=[obj.pk]))
 
-            logs = SalesDeliveryLog.objects.filter(sales_order=obj, shipped_date__date=old_date.date())
+            logs = SalesDeliveryLog.objects.filter(sales_order=obj, shipped_date__date=old_date)
             updated_count = 0
             for log in logs:
                 log.shipped_date = new_date
@@ -2023,8 +2043,11 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
                     'date_iso': d.isoformat(),
                     # ⏰ default เวลาเป็น 10:00 เสมอ (ตามที่เปรมขอ) — เดิมเก็บแค่วันที่ (group ตาม
                     # วันที่ล้วนๆ กันรายการเก่าที่เวลาสุ่มไม่ตรงกันแตกเป็นคนละรอบ) ตอนแก้ไขย้อนหลัง
-                    # เลยต้องมีเวลาให้กรอกด้วยจะได้ตรงกับตอนสร้างรอบใหม่
-                    'datetime_local': f"{d.isoformat()}T10:00",
+                    # เลยต้องมีเวลาให้กรอกด้วยจะได้ตรงกับตอนสร้างรอบใหม่ — ใช้ dropdown ชั่วโมง/นาที
+                    # ล้วนๆ (ไม่ใช่ <input type="time"> หรือ "datetime-local") เพราะ input พวกนั้น
+                    # โชว์ AM/PM ตาม locale ของเบราว์เซอร์/OS ผู้ใช้ คุมให้เป็น 24 ชม. เสมอไม่ได้
+                    'hour': '10',
+                    'minute': '00',
                 }
                 for d in batch_dates
             ]
@@ -2061,7 +2084,11 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
                 'ship_url': reverse('admin:stocks_salesorder_ship', args=[obj.pk]),
                 'print_base_url': reverse('admin:stocks_salesorder_print_delivery', args=[obj.pk]),
                 # ⏰ default วันที่ส่งของรอบใหม่ = วันนี้ เวลา 10:00 (ตามที่เปรมขอ)
-                'default_new_datetime': f"{timezone.now().date().isoformat()}T10:00",
+                'default_new_date': timezone.now().date().isoformat(),
+                'default_new_hour': '10',
+                'default_new_minute': '00',
+                'hour_options': [f"{h:02d}" for h in range(24)],
+                'minute_options': [f"{m:02d}" for m in range(60)],
             }, request=request)
             shipment_panel_wrapped = f'<div id="sales-shipment-panel-holder" style="display:none;">{shipment_panel_html}</div>'
             move_panel_script = """
