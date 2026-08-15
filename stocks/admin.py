@@ -1827,13 +1827,18 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
         action = request.POST.get('action', '')
 
         def _parse_batch_date(raw):
+            # รับได้ทั้ง "YYYY-MM-DD" ล้วนๆ (fallback เผื่อ) และ "YYYY-MM-DDTHH:MM" จาก
+            # <input type="datetime-local"> — ถ้าไม่มีเวลามาด้วย default เป็น 10:00 ตามที่ขอ
             raw = (raw or '').strip()
             if not raw:
                 return None
             d = parse_date(raw)
             if d:
-                return tz.datetime(d.year, d.month, d.day, tzinfo=tz.get_current_timezone())
-            return parse_datetime(raw)
+                return tz.datetime(d.year, d.month, d.day, 10, 0, tzinfo=tz.get_current_timezone())
+            dt = parse_datetime(raw)
+            if dt and tz.is_naive(dt):
+                dt = tz.make_aware(dt, tz.get_current_timezone())
+            return dt
 
         if action == 'create_batch':
             ship_date = _parse_batch_date(request.POST.get('shipped_date'))
@@ -2013,7 +2018,14 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
                 .order_by('_d').values_list('_d', flat=True).distinct()
             )
             batches = [
-                {'date': d, 'date_iso': d.isoformat(), 'date_only': d.strftime('%Y-%m-%d')}
+                {
+                    'date': d,
+                    'date_iso': d.isoformat(),
+                    # ⏰ default เวลาเป็น 10:00 เสมอ (ตามที่เปรมขอ) — เดิมเก็บแค่วันที่ (group ตาม
+                    # วันที่ล้วนๆ กันรายการเก่าที่เวลาสุ่มไม่ตรงกันแตกเป็นคนละรอบ) ตอนแก้ไขย้อนหลัง
+                    # เลยต้องมีเวลาให้กรอกด้วยจะได้ตรงกับตอนสร้างรอบใหม่
+                    'datetime_local': f"{d.isoformat()}T10:00",
+                }
                 for d in batch_dates
             ]
 
@@ -2048,6 +2060,8 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
                 'next_batch_no': len(batches) + 1,
                 'ship_url': reverse('admin:stocks_salesorder_ship', args=[obj.pk]),
                 'print_base_url': reverse('admin:stocks_salesorder_print_delivery', args=[obj.pk]),
+                # ⏰ default วันที่ส่งของรอบใหม่ = วันนี้ เวลา 10:00 (ตามที่เปรมขอ)
+                'default_new_datetime': f"{timezone.now().date().isoformat()}T10:00",
             }, request=request)
             shipment_panel_wrapped = f'<div id="sales-shipment-panel-holder" style="display:none;">{shipment_panel_html}</div>'
             move_panel_script = """
