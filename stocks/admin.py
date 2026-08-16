@@ -626,6 +626,16 @@ class ProductBarcodeAdmin(UnfoldModelAdmin):
     list_display = ['code', 'product', 'unit_name', 'conversion_factor']
     autocomplete_fields = ['product']
 
+    # 🎯 กรอง Autocomplete ของช่อง barcode_obj ให้เห็นเฉพาะบาร์โค้ดของสินค้า/วัตถุดิบที่กำลังเลือกอยู่
+    # (JS ที่ส่ง material_id/product_id มา: bom_ingredient_barcode_filter.js)
+    def get_search_results(self, request, queryset, search_term):
+        queryset, use_distinct = super().get_search_results(request, queryset, search_term)
+        if 'autocomplete' in request.path:
+            material_id = (request.GET.get('material_id') or request.GET.get('product_id') or '').strip()
+            if material_id:
+                queryset = queryset.filter(product_id=material_id)
+        return queryset, use_distinct
+
 class ProductSupplierInline(UnfoldTabularInline):
     model = ProductSupplier
     extra = 1
@@ -1564,7 +1574,7 @@ class BOMAdmin(DocumentLockMixin, UnfoldModelAdmin):
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     class Media:
-        js = ('js/barcode_autofill_generic.js',)
+        js = ('js/barcode_autofill_generic.js', 'js/bom_ingredient_barcode_filter.js')
 
 @admin.register(PurchaseOrder)
 class PurchaseOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
