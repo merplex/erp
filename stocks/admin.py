@@ -1493,7 +1493,7 @@ class ProductAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, 
         super().save_related(request, form, formsets, change)
         obj = form.instance
 
-        if not obj.pk or not obj.category:
+        if not obj.pk:
             return
 
         # อ่านค่าล่าสุดจาก DB (หลัง inline ทุกตัว save เสร็จแล้ว — เผื่อ signal ของ ProductSupplier คำนวณไปแล้วรอบนึง)
