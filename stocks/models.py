@@ -190,9 +190,9 @@ class Product(models.Model):
           2) ไม่งั้นเทียบ ต้นทุน BOM เฉลี่ย (ถ้ามีสูตร) กับ auto_cost (Supplier ราคาสูงสุด +15%) แล้วใช้ค่าที่ "สูงกว่า"
              (cost_source='bom' หรือ 'supplier' ตามค่าที่ถูกเลือก)
         sale_price = max(buy_price*1.15, contract ต่ำสุด)
-        คืนค่า dict {field: new_value} เฉพาะฟิลด์ที่เปลี่ยน (ว่างถ้าไม่เปลี่ยน/ไม่มี category)
+        คืนค่า dict {field: new_value} เฉพาะฟิลด์ที่เปลี่ยน (ว่างถ้าไม่เปลี่ยน)
         """
-        if not self.pk or not self.category_id:
+        if not self.pk:
             return {}
 
         best_supplier = self.product_suppliers.filter(
