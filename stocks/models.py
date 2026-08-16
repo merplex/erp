@@ -134,6 +134,13 @@ class Product(models.Model):
     updated_at = models.DateTimeField(auto_now=True, null=True)
 
     def save(self, *args, **kwargs):
+        # manual_buy_price/auto_cost ไม่ได้ตั้ง null=True ที่ DB — ถ้าฟอร์มส่งช่องว่างมา
+        # (ผู้ใช้ลบตัวเลขออกจนหมด ไม่ได้พิมพ์ 0) Django จะได้ None แล้วเซฟลง DB ไม่ได้
+        # (NOT NULL constraint → error 500) จึงต้องกันไว้ตรงนี้ ให้ถือว่าว่าง = 0 เสมอ
+        if self.manual_buy_price is None:
+            self.manual_buy_price = Decimal('0')
+        if self.auto_cost is None:
+            self.auto_cost = Decimal('0')
         if not self.sale_price: self.sale_price = self.buy_price
         super().save(*args, **kwargs)
     def __str__(self): return self.name
