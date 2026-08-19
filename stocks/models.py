@@ -1320,21 +1320,48 @@ def recalc_product_price_on_contract_change(sender, instance, **kwargs):
 def recalc_dc_rebate_on_contract_change(sender, instance, **kwargs):
     """เมื่อสัญญา (T2) ถูกแก้ไข/ลบ ให้คำนวณ dc_amount/rebate_amount ใหม่สำหรับใบส่งของ
     (SalesDeliveryLog/C6) ของ customer+product คู่นี้ — เฉพาะฝั่งที่ "ยังไม่ยืนยัน/ยังไม่จ่าย"
-    เท่านั้น ฝั่งที่ confirm ไปแล้วถือเป็นยอดที่จ่ายจริงแล้ว ไม่แตะ"""
+    เท่านั้น ฝั่งที่ confirm ไปแล้วถือเป็นยอดที่จ่ายจริงแล้ว ไม่แตะ
+
+    หมายเหตุ: เดิม query หา contract ใหม่ทีละแถวใบส่งของ (N+1) แล้วยัง update ทีละแถวอีก —
+    ลูกค้าที่มี T2 price contract เยอะ (เกิน ~100 รายการ) พอกด Save ฟอร์มทีเดียวจะทริกเกอร์
+    signal นี้ซ้ำๆ ต่อ contract แต่ละแถว คูณกับ query ต่อแถวใบส่งของ กลายเป็น query รวมมหาศาล
+    จน request ค้างเกิน timeout ของ gunicorn (WORKER TIMEOUT → error 500) — แก้โดย query หา
+    contract แค่ครั้งเดียว แล้วอัปเดตใบส่งของทั้งหมดเป็นชุดเดียวด้วย bulk_update"""
+    if kwargs.get('signal') is post_delete:
+        contract = None
+    else:
+        contract = CustomerProductContract.objects.filter(
+            customer_id=instance.customer_id,
+            product_id=instance.product_id,
+        ).first()
+
     logs = SalesDeliveryLog.objects.filter(
         sales_order__customer_id=instance.customer_id,
         product_id=instance.product_id,
     ).filter(
         models.Q(is_dc_confirmed=False) | models.Q(is_rebate_confirmed=False)
-    ).select_related('sales_order__customer', 'product')
+    )
 
+    to_update = []
     for log in logs:
         old_dc, old_rebate = log.dc_amount, log.rebate_amount
-        log.sync_dc_rebate_from_contract()
-        new_dc = old_dc if log.is_dc_confirmed else log.dc_amount
-        new_rebate = old_rebate if log.is_rebate_confirmed else log.rebate_amount
+        if contract:
+            new_dc = log.shipment_value * (contract.dc_percent / 100)
+            new_rebate = log.shipment_value * (contract.rebate_percent / 100)
+        else:
+            new_dc = Decimal('0')
+            new_rebate = Decimal('0')
+        if log.is_dc_confirmed:
+            new_dc = old_dc
+        if log.is_rebate_confirmed:
+            new_rebate = old_rebate
         if new_dc != old_dc or new_rebate != old_rebate:
-            SalesDeliveryLog.objects.filter(pk=log.pk).update(dc_amount=new_dc, rebate_amount=new_rebate)
+            log.dc_amount = new_dc
+            log.rebate_amount = new_rebate
+            to_update.append(log)
+
+    if to_update:
+        SalesDeliveryLog.objects.bulk_update(to_update, ['dc_amount', 'rebate_amount'])
 
 # --- T2.2 ระบบปรับปรุงสต็อก (Stock Adjustment) ---
 class StockAdjustment(models.Model):
