@@ -1042,11 +1042,50 @@ class ProductBarcodeAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         return super().get_queryset(request).select_related('product')
 
 
+class ProductStockInline(UnfoldTabularInline):
+    # โชว์เฉพาะคลังที่ไม่ใช่คลังหลัก (ดู get_inline_instances ใน WarehouseAdmin)
+    # สต๊อกตรงนี้แก้ไข/เพิ่มลบโดยตรงไม่ได้ ต้องผ่านเอกสารโอนย้ายคลังเท่านั้น
+    model = ProductStock
+    extra = 0
+    can_delete = False
+    fields = ('code_display', 'name_display', 'quantity', 'buy_price_display', 'sale_price_display')
+    readonly_fields = fields
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('product').filter(quantity__gt=0)
+
+    @admin.display(description="รหัส")
+    def code_display(self, obj):
+        return obj.product.latest_barcode
+
+    @admin.display(description="ชื่อสินค้า")
+    def name_display(self, obj):
+        return obj.product.name
+
+    @admin.display(description="ต้นทุน")
+    def buy_price_display(self, obj):
+        return obj.product.buy_price
+
+    @admin.display(description="ราคาขาย")
+    def sale_price_display(self, obj):
+        return obj.product.sale_price
+
+
 @admin.register(Warehouse)
 class WarehouseAdmin(UnfoldModelAdmin):
     list_display = ('name', 'type', 'is_default')
     list_filter = ('type',)
     search_fields = ('name',)
+    inlines = [ProductStockInline]
+
+    def get_inline_instances(self, request, obj=None):
+        # คลังหลักใช้ Product.stock_quantity ตรงๆ ไม่มีแถวใน ProductStock เลย จึงไม่ต้องโชว์ inline
+        if obj is None or obj.is_default:
+            return []
+        return super().get_inline_instances(request, obj)
 
 
 @admin.register(StockTransfer)
@@ -1056,6 +1095,9 @@ class StockTransferAdmin(UnfoldModelAdmin):
     search_fields = ('transfer_number', 'product__name', 'product__barcodes__code')
     autocomplete_fields = ['product']
     readonly_fields = ('transfer_number',)
+    # ปิด action "ลบที่เลือก" เพราะเป็น bulk queryset.delete() ที่ไม่เรียก StockTransfer.delete()
+    # ต่อรายการ (จะไม่คืนสต๊อกให้ทำให้ยอดคลังเพี้ยน) ต้องลบทีละใบผ่านหน้ายืนยันลบเท่านั้น
+    actions = None
 
     def get_readonly_fields(self, request, obj=None):
         ro = list(self.readonly_fields)

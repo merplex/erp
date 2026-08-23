@@ -390,7 +390,7 @@ class StockTransfer(models.Model):
         # คืนสต๊อกกลับตำแหน่งเดิมก่อนลบเอกสาร
         _warehouse_adjust(self.product, self.from_warehouse, self.quantity)
         _warehouse_adjust(self.product, self.to_warehouse, -self.quantity)
-        super().delete(*args, **kwargs)
+        return super().delete(*args, **kwargs)
 
     def __str__(self):
         return self.transfer_number
