@@ -1025,7 +1025,7 @@ def color_diff(diff):
 @admin.register(Supplier)
 class SupplierAdmin(DetailedHistoryMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('company_name', 'contact_person', 'type')
-    search_fields = ('company_name', 'contact_person')
+    search_fields = ('company_name', 'contact_person', 'supplier_code')
     inlines = [SupplierProductInline]
 
 class ProductBarcodeAdmin(ExportToExcelMixin, UnfoldModelAdmin):
@@ -3938,7 +3938,7 @@ class CustomerProductContractInline(UnfoldTabularInline):
 @admin.register(Customer)
 class CustomerAdmin(DetailedHistoryMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('company_name', 'contact_person', 'phone', 'tax_id')
-    search_fields = ('company_name', 'contact_person', 'phone', 'tax_id')
+    search_fields = ('company_name', 'contact_person', 'phone', 'tax_id', 'buyer_code')
     inlines = [CustomerProductContractInline]
 
 # --- 3. ส่วนหน้าจัดการสัญญาโดยเฉพาะ (T2. ราคาสัญญา&DC/Rebate) ---

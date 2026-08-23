@@ -70,6 +70,7 @@ class ProductTag(models.Model):
 # 2. ผู้จำหน่าย
 class Supplier(models.Model):
     TYPE_CHOICES = [('Domestic', 'ในประเทศ'), ('International', 'ต่างประเทศ')]
+    supplier_code = models.CharField(max_length=50, unique=True, null=True, blank=True, verbose_name="รหัสผู้ขาย")
     company_name = models.CharField(max_length=255, verbose_name="ชื่อบริษัท")
     contact_person = models.CharField(max_length=255, verbose_name="ชื่อคนติดต่อ")
     address = models.TextField(verbose_name="ที่อยู่")
@@ -81,12 +82,17 @@ class Supplier(models.Model):
     updated_at = models.DateTimeField(auto_now=True, null=True)
     def save(self, *args, **kwargs):
         if self.type == 'International': self.vat = 0
+        # ช่องรหัสผู้ขายไม่บังคับกรอก แต่ถ้ากรอกห้ามซ้ำ — '' กับ '' ชนกันได้ใน unique constraint
+        # จึงต้องแปลงค่าว่างเป็น None เพื่อให้ปล่อยว่างได้หลายรายการ
+        if not self.supplier_code:
+            self.supplier_code = None
         super().save(*args, **kwargs)
     def __str__(self): return self.company_name
     class Meta: verbose_name_plural = "A2. ผู้จำหน่าย (Supplier)"
 
 # 3. ลูกค้า
 class Customer(models.Model):
+    buyer_code = models.CharField(max_length=50, unique=True, null=True, blank=True, verbose_name="รหัสผู้ซื้อ")
     company_name = models.CharField(max_length=255, verbose_name="ชื่อบริษัท")
     contact_person = models.CharField(max_length=255, verbose_name="ชื่อคนติดต่อ")
     address = models.TextField(verbose_name="ที่อยู่")
@@ -94,11 +100,18 @@ class Customer(models.Model):
     tax_id = models.CharField(max_length=20, blank=True, verbose_name="เลขประจำตัวผู้เสียภาษี")
     payment_term = models.IntegerField(default=30, verbose_name="Credit (วัน)")
     vat = models.DecimalField(max_digits=5, decimal_places=2, default=7.00)
+    notes = models.TextField(blank=True, null=True, verbose_name="หมายเหตุ")
     created_at = models.DateTimeField(auto_now_add=True, null=True)
     updated_at = models.DateTimeField(auto_now=True, null=True) # แก้ไขจาก auto_True เป็น auto_now
+    def save(self, *args, **kwargs):
+        # ช่องรหัสผู้ซื้อไม่บังคับกรอก แต่ถ้ากรอกห้ามซ้ำ — '' กับ '' ชนกันได้ใน unique constraint
+        # จึงต้องแปลงค่าว่างเป็น None เพื่อให้ปล่อยว่างได้หลายรายการ
+        if not self.buyer_code:
+            self.buyer_code = None
+        super().save(*args, **kwargs)
     def __str__(self): return self.company_name
     account_close_day = models.IntegerField(
-        default=25, 
+        default=25,
         verbose_name="วันที่ตัดรอบบัญชี",
         help_text="ระบุวันที่ 1-31"
     )
