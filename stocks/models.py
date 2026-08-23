@@ -419,7 +419,6 @@ class BOM(models.Model):
     # แก้ไขจาก OneToOneField เป็น ForeignKey และเปลี่ยน related_name เป็นพหูพจน์
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='bom_formulas')
     name = models.CharField(max_length=255, verbose_name="ชื่อสูตร")
-    sale_price = models.DecimalField(max_digits=10, decimal_places=2)
     unit = models.CharField(max_length=50, default="ชิ้น", verbose_name="หน่วยผลิต")
     production_time = models.IntegerField(default=1, verbose_name="เวลาผลิต (วัน)")
     created_at = models.DateTimeField(auto_now_add=True, null=True)

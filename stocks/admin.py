@@ -1620,7 +1620,7 @@ class ProductAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, 
 
 @admin.register(BOM)
 class BOMAdmin(DocumentLockMixin, UnfoldModelAdmin):
-    list_display = ('name', 'product', 'total_cost_display', 'sale_price', 'unit', 'production_time', 'created_by')
+    list_display = ('name', 'product', 'total_cost_display', 'unit', 'production_time', 'created_by')
     list_filter = (('product__category', AutocompleteSelectMultipleFilter),)
     list_filter_submit = True
     autocomplete_fields = ['product']
