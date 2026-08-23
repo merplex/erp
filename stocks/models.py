@@ -444,6 +444,11 @@ class BOMIngredient(models.Model):
     material = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="วัตถุดิบ")
     barcode_obj = models.ForeignKey('ProductBarcode', null=True, blank=True, on_delete=models.SET_NULL, verbose_name="บาร์โค้ด/หน่วยวัตถุดิบ")
     quantity = models.DecimalField(max_digits=10, decimal_places=4, default=1.0000)
+    is_scrap = models.BooleanField(
+        default=False,
+        verbose_name="เศษเสีย",
+        help_text="ติ๊กถ้าวัตถุดิบตัวนี้ตอนผลิตจริง นอกจากตัดออกจากคลังหลักตามปกติแล้ว ให้ย้ายเข้าคลังเศษเสียด้วย",
+    )
 
     def clean(self):
         if self.barcode_obj_id and self.material_id and self.barcode_obj.product_id != self.material_id:
@@ -1277,7 +1282,8 @@ class ProductionOrder(models.Model):
                     production_order=self,
                     raw_material=ing.material, # ใช้ .material ตามโครงสร้างสูตร
                     planned_qty=ing.quantity_base * self.quantity_planned,
-                    actual_qty_to_use=ing.quantity_base * self.quantity_planned
+                    actual_qty_to_use=ing.quantity_base * self.quantity_planned,
+                    is_scrap=ing.is_scrap,
                 )
     class Meta: verbose_name_plural = "B3. ใบสั่งผลิต (Productions)"
 
@@ -1310,6 +1316,13 @@ class ProductionLog(models.Model):
                 usage.raw_material.stock_quantity -= deduct_qty
                 usage.raw_material.save()
 
+                # 🎯 วัตถุดิบที่ติ๊ก "เศษเสีย" ไว้ใน BOM — นอกจากตัดออกจากคลังหลักตามปกติแล้ว
+                # ให้ย้าย (บวก) จำนวนที่ตัดไปนั้นเข้าคลังเศษเสียด้วย
+                if usage.is_scrap:
+                    scrap_wh = Warehouse.objects.filter(type='scrap').first()
+                    if scrap_wh:
+                        _warehouse_adjust(usage.raw_material, scrap_wh, int(deduct_qty))
+
                 # ✅ บันทึกสะสมไว้ว่าตัดไปเท่าไหร่แล้ว เพื่อให้หน้า C1 คำนวณยอด "รอใช้" ได้แม่นยำ
                 usage.used_so_far += deduct_qty
                 usage.save()
@@ -1332,8 +1345,15 @@ class ProductionLog(models.Model):
         bom = prod_order.bom or prod_order.product.bom_formulas.first()
         if bom:
             for ing in bom.ingredients.all():
-                ing.material.stock_quantity += (ing.quantity_base * self.quantity_finished)
+                return_qty = ing.quantity_base * self.quantity_finished
+                ing.material.stock_quantity += return_qty
                 ing.material.save()
+
+                # 🎯 ตัวที่ตอนตัดสต็อกย้ายเข้าคลังเศษเสียไว้ด้วย ต้องคืน (หักออก) จากคลังเศษเสียด้วยเช่นกัน
+                if ing.is_scrap:
+                    scrap_wh = Warehouse.objects.filter(type='scrap').first()
+                    if scrap_wh:
+                        _warehouse_adjust(ing.material, scrap_wh, -int(return_qty))
 
         # 3. หักยอดผลิตสะสมคืน
         prod_order.quantity_actual -= self.quantity_finished
@@ -1550,6 +1570,12 @@ class ProductionMaterialUsage(models.Model):
     used_so_far = models.DecimalField(max_digits=12, decimal_places=4, default=0, verbose_name="ตัดสต็อกไปแล้ว")
     auto_produce = models.BooleanField(default=False, verbose_name="ผลิตทันที (Auto PD)")
     is_produced = models.BooleanField(default=False, editable=False)
+    is_scrap = models.BooleanField(
+        default=False,
+        editable=False,
+        verbose_name="เศษเสีย",
+        help_text="คัดลอกมาจาก BOMIngredient.is_scrap ตอนสร้างใบสั่งผลิต",
+    )
 
     @property
     def pending_use(self):

@@ -661,7 +661,7 @@ class BOMIngredientForm(forms.ModelForm):
 class BOMIngredientInline(UnfoldTabularInline):
     model = BOMIngredient
     form = BOMIngredientForm # ✅ เอา Form ที่เราสร้างมาใส่ตรงนี้ครับ
-    fields = ('material', 'barcode_obj', 'quantity', 'get_unit_display')
+    fields = ('material', 'barcode_obj', 'quantity', 'get_unit_display', 'is_scrap')
     readonly_fields = ('get_unit_display',)
     autocomplete_fields = ['material', 'barcode_obj']
     extra = 1
