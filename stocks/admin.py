@@ -1644,7 +1644,7 @@ class BOMAdmin(DocumentLockMixin, UnfoldModelAdmin):
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     class Media:
-        js = ('js/barcode_autofill_generic.js', 'js/bom_ingredient_barcode_filter.js')
+        js = ('js/barcode_autofill_generic.js', 'js/bom_ingredient_barcode_filter.js', 'js/bom_name_barcode_autofill.js')
 
 @admin.register(PurchaseOrder)
 class PurchaseOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
