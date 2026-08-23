@@ -1042,6 +1042,34 @@ class ProductBarcodeAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         return super().get_queryset(request).select_related('product')
 
 
+@admin.register(Warehouse)
+class WarehouseAdmin(UnfoldModelAdmin):
+    list_display = ('name', 'type', 'is_default')
+    list_filter = ('type',)
+    search_fields = ('name',)
+
+
+@admin.register(StockTransfer)
+class StockTransferAdmin(UnfoldModelAdmin):
+    list_display = ('transfer_number', 'transfer_date', 'product', 'quantity', 'from_warehouse', 'to_warehouse', 'created_by')
+    list_filter = ('from_warehouse', 'to_warehouse', 'transfer_date')
+    search_fields = ('transfer_number', 'product__name', 'product__barcodes__code')
+    autocomplete_fields = ['product']
+    readonly_fields = ('transfer_number',)
+
+    def get_readonly_fields(self, request, obj=None):
+        ro = list(self.readonly_fields)
+        if obj is not None:
+            # ล็อกฟิลด์หลักหลังบันทึกแล้ว เพราะการแก้ไขจะไม่ไปปรับสต๊อกที่ตัดไปแล้วให้อัตโนมัติ
+            ro += ['product', 'quantity', 'from_warehouse', 'to_warehouse']
+        return ro
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+
+
 def _normalize_history_date(d):
     """แปลงวันที่ (DateField หรือ DateTimeField หรือ None) ให้เป็น datetime แบบมี timezone เดียวกันหมด
     เพื่อให้เรียงลำดับ/แสดงผลในตารางประวัติได้โดยไม่พังตอนเทียบ date กับ datetime"""

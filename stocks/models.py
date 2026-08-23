@@ -302,6 +302,102 @@ class ProductBarcode(models.Model):
     
     class Meta: verbose_name_plural = "T5. หน่วยขายตามบาร์โค้ด"
 
+# 4.1 คลังสินค้า
+class Warehouse(models.Model):
+    TYPE_CHOICES = [('normal', 'ปกติ'), ('scrap', 'เศษเสีย')]
+    name = models.CharField(max_length=100, unique=True, verbose_name="ชื่อคลัง")
+    type = models.CharField(max_length=10, choices=TYPE_CHOICES, default='normal', verbose_name="ประเภทคลัง")
+    is_default = models.BooleanField(
+        default=False,
+        verbose_name="คลังหลัก (ค่าเริ่มต้น)",
+        help_text="สินค้าทุกรายการอยู่คลังนี้เป็นค่าเริ่มต้น (ใช้ค่า stock_quantity เดิมของสินค้าโดยตรง) มีได้คลังเดียวเท่านั้น",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, null=True)
+
+    def save(self, *args, **kwargs):
+        # คลังหลักมีได้แค่คลังเดียว — ถ้าตั้งคลังนี้เป็นหลัก ให้ปลดคลังอื่นออกอัตโนมัติ
+        if self.is_default:
+            Warehouse.objects.exclude(pk=self.pk).update(is_default=False)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        verbose_name_plural = "A4.1 คลังสินค้า (Warehouse)"
+
+# 4.2 สต๊อกแยกคลัง (เฉพาะคลังที่ไม่ใช่คลังหลัก — คลังหลักใช้ Product.stock_quantity ตรงๆ
+# เพื่อไม่ต้องแตะจุดคำนวณ/ตัดสต๊อกเดิมของระบบที่ผูกกับ stock_quantity อยู่จำนวนมาก)
+class ProductStock(models.Model):
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='warehouse_stocks')
+    warehouse = models.ForeignKey(Warehouse, on_delete=models.CASCADE, related_name='product_stocks')
+    quantity = models.IntegerField(default=0, verbose_name="จำนวนคงเหลือ")
+
+    class Meta:
+        unique_together = ('product', 'warehouse')
+        verbose_name_plural = "สต๊อกแยกคลัง"
+
+    def __str__(self):
+        return f"{self.product.name} @ {self.warehouse.name}: {self.quantity}"
+
+
+def _warehouse_qty(product, warehouse):
+    """อ่านจำนวนคงเหลือของสินค้าในคลังที่ระบุ (คลังหลักอ่านจาก Product.stock_quantity ตรงๆ)"""
+    if warehouse.is_default:
+        return product.stock_quantity or 0
+    ps = ProductStock.objects.filter(product=product, warehouse=warehouse).first()
+    return ps.quantity if ps else 0
+
+
+def _warehouse_adjust(product, warehouse, delta):
+    """ปรับจำนวนคงเหลือของสินค้าในคลังที่ระบุ (บวก/ลบตาม delta)"""
+    if warehouse.is_default:
+        Product.objects.filter(pk=product.pk).update(stock_quantity=models.F('stock_quantity') + delta)
+    else:
+        ps, _created = ProductStock.objects.get_or_create(product=product, warehouse=warehouse)
+        ProductStock.objects.filter(pk=ps.pk).update(quantity=models.F('quantity') + delta)
+
+# 4.3 โอนย้ายคลังสินค้า
+class StockTransfer(models.Model):
+    transfer_number = models.CharField(max_length=50, unique=True, editable=False, verbose_name="เลขที่เอกสาร")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้า")
+    quantity = models.PositiveIntegerField(verbose_name="จำนวน")
+    from_warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name='transfers_out', verbose_name="คลังต้นทาง")
+    to_warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name='transfers_in', verbose_name="คลังปลายทาง")
+    transfer_date = models.DateField(default=datetime.date.today, verbose_name="วันที่โอนย้าย")
+    note = models.TextField(blank=True, verbose_name="หมายเหตุ")
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="stock_transfers_created")
+    created_at = models.DateTimeField(auto_now_add=True, null=True)
+
+    def clean(self):
+        if self.from_warehouse_id and self.to_warehouse_id and self.from_warehouse_id == self.to_warehouse_id:
+            raise ValidationError("คลังต้นทางและคลังปลายทางต้องไม่ใช่คลังเดียวกัน")
+        if self.pk is None and self.from_warehouse_id and self.product_id and self.quantity:
+            available = _warehouse_qty(self.product, self.from_warehouse)
+            if self.quantity > available:
+                raise ValidationError(f"คลังต้นทาง \"{self.from_warehouse}\" มีสินค้าคงเหลือ {available} ไม่พอสำหรับโอน {self.quantity}")
+
+    def save(self, *args, **kwargs):
+        is_new = self.pk is None
+        if not self.transfer_number:
+            self.transfer_number = generate_number('TR', StockTransfer, 'transfer_number')
+        super().save(*args, **kwargs)
+        if is_new:
+            _warehouse_adjust(self.product, self.from_warehouse, -self.quantity)
+            _warehouse_adjust(self.product, self.to_warehouse, self.quantity)
+
+    def delete(self, *args, **kwargs):
+        # คืนสต๊อกกลับตำแหน่งเดิมก่อนลบเอกสาร
+        _warehouse_adjust(self.product, self.from_warehouse, self.quantity)
+        _warehouse_adjust(self.product, self.to_warehouse, -self.quantity)
+        super().delete(*args, **kwargs)
+
+    def __str__(self):
+        return self.transfer_number
+
+    class Meta:
+        verbose_name_plural = "A4.2 โอนย้ายคลังสินค้า (Stock Transfer)"
+
 class ProductSupplier(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='product_suppliers')
     supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE, verbose_name="ผู้จำหน่าย")

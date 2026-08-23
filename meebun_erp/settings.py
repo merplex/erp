@@ -213,13 +213,21 @@ UNFOLD = {
         "show_all_applications": True,
         "navigation": [
             {
-                "title": "สินค้าและคลัง",
+                "title": "สินค้า",
                 "collapsible": True,
                 "items": [
                     {"title": "กลุ่มสินค้า",           "icon": "category",       "link": "/admin/stocks/productcategory/"},
                     {"title": "รายการสินค้า (A4)",      "icon": "inventory_2",    "link": "/admin/stocks/product/"},
                     {"title": "ผู้จำหน่าย",             "icon": "storefront",     "link": "/admin/stocks/supplier/"},
                     {"title": "ลูกค้า",                 "icon": "people",         "link": "/admin/stocks/customer/"},
+                ],
+            },
+            {
+                "title": "คลัง",
+                "collapsible": True,
+                "items": [
+                    {"title": "คลังสินค้า",             "icon": "warehouse",      "link": "/admin/stocks/warehouse/"},
+                    {"title": "โอนย้ายคลังสินค้า",       "icon": "compare_arrows", "link": "/admin/stocks/stocktransfer/"},
                 ],
             },
             {
