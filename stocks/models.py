@@ -3,6 +3,7 @@ from django.db import models
 from django.db.models import Sum
 from django.db.models.signals import post_delete, post_save
 from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
 from django.utils import timezone
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
@@ -268,7 +269,12 @@ class ProductBarcode(models.Model):
     product = models.ForeignKey(Product, related_name='barcodes', on_delete=models.CASCADE)
     code = models.CharField(max_length=100, unique=True, verbose_name="บาร์โค้ด")
     created_at = models.DateTimeField(auto_now_add=True)
-    conversion_factor = models.PositiveIntegerField(default=1, verbose_name="จำนวนต่อหน่วย")
+    conversion_factor = models.DecimalField(
+        max_digits=10, decimal_places=4, default=1,
+        validators=[MinValueValidator(Decimal('0.0001'))],
+        verbose_name="จำนวนต่อหน่วย",
+        help_text="เช่น 1 ถุง = 1.5234 kg ให้ใส่ 1.5234",
+    )
     unit_name = models.CharField(max_length=20, blank=True, null=True, verbose_name="ชื่อหน่วย")
 
     def get_forecast_stock(self):

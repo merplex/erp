@@ -1616,7 +1616,7 @@ class ProductAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, 
         return TemplateResponse(request, 'admin/product_history.html', context)
 
     class Media:
-        js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
+        js = ('js/admin_sum_selected.js', 'js/product_barcode_primary_unit.js') # เรียกไฟล์ JS มาใช้งาน
 
 @admin.register(BOM)
 class BOMAdmin(DocumentLockMixin, UnfoldModelAdmin):
