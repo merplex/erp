@@ -4205,12 +4205,19 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         if not self.has_view_or_change_permission(request):
             raise PermissionDenied
 
+        from django.db.models import Prefetch
+
         cl = self.get_changelist_instance(request)
-        qs = cl.get_queryset(request).order_by('name')
+        qs = cl.get_queryset(request).order_by('name').prefetch_related(
+            Prefetch('barcodes', queryset=ProductBarcode.objects.order_by('id'))
+        )
 
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = 'SalesByProductReport'[:31]
+        # 🎯 ให้แถวรายละเอียด (ต่อ SO) พับเก็บ/ยุบไว้เป็นค่าเริ่มต้น เหมือนไฟล์ตัวอย่าง — สรุปยอด
+        # อยู่แถวใต้กลุ่มเสมอ (summaryBelow) กดปุ่ม +/- ทางซ้ายเพื่อกางดูรายละเอียดแต่ละ SO
+        ws.sheet_properties.outlinePr.summaryBelow = True
 
         title_font = Font(bold=True, size=14)
         label_font = Font(bold=True)
@@ -4233,7 +4240,7 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         ws.append([])
 
         headers = [
-            'ชื่อสินค้า', 'เลขที่ SO', 'วันที่สั่งซื้อ', 'สถานะ SO', 'ลูกค้า',
+            'บาร์โค้ดสินค้า', 'ชื่อสินค้า', 'เลขที่ SO', 'วันที่สั่งซื้อ', 'สถานะ SO', 'ลูกค้า',
             'จำนวน', 'หน่วย', 'ราคาต่อหน่วย', 'มูลค่าก่อน VAT', 'VAT (%)', 'มูลค่า VAT', 'ยอดรวมหลัง VAT',
         ]
         header_row_idx = ws.max_row + 1
@@ -4248,12 +4255,20 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             if not rows:
                 continue
 
-            group_row_idx = ws.max_row + 1
-            ws.append([product.name])
-            ws.cell(row=group_row_idx, column=1).font = group_font
+            primary_barcode = next(iter(product.barcodes.all()), None)  # เรียงตาม id จาก prefetch (บาร์แรก = บาร์หลัก)
+            barcode_code = primary_barcode.code if primary_barcode else ''
 
+            # แถวหัวกลุ่ม: บาร์โค้ด + ชื่อสินค้า เท่านั้น (ไม่พับเก็บ อยู่นอกกรุ๊ป)
+            group_row_idx = ws.max_row + 1
+            ws.append([barcode_code, product.name])
+            ws.cell(row=group_row_idx, column=1).font = group_font
+            ws.cell(row=group_row_idx, column=2).font = group_font
+
+            # แถวรายละเอียดต่อ SO: อยู่ใน outline level 1 + hidden=True เพื่อให้พับเก็บไว้เป็นค่าเริ่มต้น
+            # (กดปุ่ม +/- ทางซ้ายของ Excel เพื่อกางออกดู เหมือนไฟล์ตัวอย่างที่เปรมส่งมา)
             for row in rows:
                 ws.append([
+                    None,
                     product.name,
                     row['so_number'],
                     row['order_date'],
@@ -4267,7 +4282,10 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                     float(row['vat_amount']),
                     float(row['value_after_vat']),
                 ])
-                ws.cell(row=ws.max_row, column=3).number_format = 'DD/MM/YYYY'
+                detail_row_idx = ws.max_row
+                ws.cell(row=detail_row_idx, column=4).number_format = 'DD/MM/YYYY'
+                ws.row_dimensions[detail_row_idx].outlineLevel = 1
+                ws.row_dimensions[detail_row_idx].hidden = True
 
             total_qty = sum((r['qty'] for r in rows), Decimal('0'))
             total_before = sum((r['value_before_vat'] for r in rows), Decimal('0'))
@@ -4275,7 +4293,7 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             total_after = sum((r['value_after_vat'] for r in rows), Decimal('0'))
             subtotal_row_idx = ws.max_row + 1
             ws.append([
-                None, None, None, None, 'ยอดรวม',
+                None, None, None, None, None, 'ยอดรวม',
                 float(total_qty), None, None, float(total_before), None, float(total_vat), float(total_after),
             ])
             for col_idx in range(1, len(headers) + 1):
