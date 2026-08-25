@@ -37,7 +37,7 @@ from django.utils.html import format_html
 from django.core.exceptions import ValidationError
 from django.forms import TextInput
 from django.db import models # เพิ่มเพื่อรองรับ formfield_overrides
-from django.db.models import Subquery, OuterRef, Q, Sum, F, DecimalField, ExpressionWrapper, Case, When, IntegerField, Value, CharField
+from django.db.models import Subquery, OuterRef, Q, Sum, F, DecimalField, ExpressionWrapper, Case, When, IntegerField, Value
 from django.contrib.postgres.aggregates import StringAgg
 from django.db.models.functions import TruncDate
 from django.db.models.functions import Coalesce, Greatest
@@ -4152,47 +4152,37 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             messages.INFO
         )
 
+    @staticmethod
+    def _build_period_q(prefix, period, now):
+        """สร้าง Q filter (สถานะ + ช่วงวันที่) โดยพารามิเตอร์ prefix คือ path ไปหา SalesOrder
+        เช่น 'sales_order__' (เริ่มจาก SalesItem) หรือ 'sales_items__sales_order__' (เริ่มจาก Product)"""
+        q = Q(**{f"{prefix}status__in": ['Shipped', 'Completed', 'ปิดงาน/ครบถ้วน', 'ส่งบางส่วน']})
+        if period == '1year':
+            q &= Q(**{f"{prefix}order_date__year": now.year})
+        elif period == '4months':
+            q &= Q(**{f"{prefix}order_date__gte": now - timedelta(days=120)})
+        elif period == '1month':
+            q &= Q(**{f"{prefix}order_date__gte": now - timedelta(days=30)})
+        return q
+
     def get_queryset(self, request):
         # 1. ตั้งต้นที่สินค้า (Proxy Model)
         qs = super().get_queryset(request)
-        
+
         period = request.GET.get('period', '1year')
         now = timezone.now()
-        
+
         # 2. สร้างเงื่อนไขการกรอง (เน้นที่ยอดส่งสำเร็จเท่านั้น)
-        # กรองสถานะใบสั่งซื้อที่ยอมรับได้
-        date_query = Q(sales_order__status__in=['Shipped', 'Completed', 'ปิดงาน/ครบถ้วน', 'ส่งบางส่วน'])
-        
-        if period == '1year':
-            date_query &= Q(sales_order__order_date__year=now.year)
-        elif period == '4months':
-            date_query &= Q(sales_order__order_date__gte=now - timedelta(days=120))
-        elif period == '1month':
-            date_query &= Q(sales_order__order_date__gte=now - timedelta(days=30))
+        # path เริ่มจาก SalesItem (ใช้กับ bom_cost_subquery ด้านล่าง ที่ยังต้องเป็น Subquery แยกอยู่)
+        date_query = self._build_period_q('sales_order__', period, now)
+        # path เริ่มจาก Product (ใช้ annotate ตรงๆ ผ่าน sales_items) — เงื่อนไขเดียวกัน แค่ path ยาวขึ้นหนึ่ง hop
+        date_filter = self._build_period_q('sales_items__sales_order__', period, now)
 
-        # 3. ใช้ Subquery เพื่อคำนวณยอด "ส่งสำเร็จ" (quantity_shipped) โดยเฉพาะ
-        # วิธีนี้จะดึงยอด 700 มาโชว์ (ไม่ใช่ 2,100 และไม่เบิ้ลเป็น 6,300)
-        shipped_subquery = SalesItem.objects.filter(
-            product=OuterRef('pk'),
-            **{f"{k}": v for k, v in date_query.children} # ส่งเงื่อนไข Shipped และวันที่เข้าไป
-        ).values('product').annotate(
-            total=Sum('quantity_shipped') # 🎯 เปลี่ยนจาก ordered เป็น shipped ตรงนี้ครับ!
-        ).values('total')
-
-        revenue_subquery = SalesItem.objects.filter(
-            product=OuterRef('pk'),
-            **{f"{k}": v for k, v in date_query.children}
-        ).values('product').annotate(
-            # sale_price = ราคาต่อหน่วยบาร์โค้ด แต่ quantity_shipped สะสมเป็นชิ้นเสมอ
-            # (ดู SalesDeliveryLog.save) จึงต้องหารด้วย conversion_factor ก่อนคูณราคา
-            total=Sum(
-                F('sale_price') * F('quantity_shipped') / Coalesce(F('barcode_obj__conversion_factor'), Value(1)), # 🎯 คำนวณรายได้จากยอดส่งจริงเท่านั้น
-                output_field=DecimalField()
-            )
-        ).values('total')
-
-        # ต้นทุน BOM: เฉพาะรายการที่มี bom ถูก assign เท่านั้น
-        # ใช้ BOM ที่เลือกในแต่ละรายการ ไม่ใช่ค่าเฉลี่ย
+        # 3. รวมยอดขาย/ยอดขายรวม/เลขที่ SO เป็น query เดียว (JOIN + conditional aggregate)
+        #    ไม่ใช้ Subquery แยกฟิลด์เหมือนเดิม เพราะทั้ง 3 ตัวนี้ join ผ่าน path เดียวกันคือ sales_items
+        #    ORM จะ reuse join เดียวกันให้อัตโนมัติ ลด correlated subquery ต่อแถวลงเหลือแค่ตัวเดียว (bom cost)
+        # ต้นทุน BOM: เฉพาะรายการที่มี bom ถูก assign เท่านั้น (ใช้ BOM ที่เลือกในแต่ละรายการ ไม่ใช่ค่าเฉลี่ย)
+        # ต้อง join ผ่าน BOMIngredient ซึ่งเป็นคนละ fan-out กับ sales_items เลยยังต้องแยกเป็น Subquery
         bom_cost_subquery = SalesItem.objects.filter(
             product=OuterRef('pk'),
             bom__isnull=False,
@@ -4212,20 +4202,23 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             total=Sum(F('item_bom_cost') * F('quantity_shipped'), output_field=DecimalField())
         ).values('total')
 
-        # 🎯 SO: รวมเลขที่ SO ทั้งหมดที่เกี่ยวข้องกับสินค้านี้ (ในรอบ/ช่วงที่กรอง) มาต่อกันเป็น string เดียว
-        so_numbers_subquery = SalesItem.objects.filter(
-            product=OuterRef('pk'),
-            **{f"{k}": v for k, v in date_query.children}
-        ).values('product').annotate(
-            so_list=StringAgg('sales_order__so_number', delimiter=', ', distinct=True)
-        ).values('so_list')
-
         # 4. เอาค่าที่บวกได้มาแปะในรายงาน
         return qs.annotate(
-            total_qty=Subquery(shipped_subquery),
-            total_sales_val=Subquery(revenue_subquery),
-            total_bom_cost=Subquery(bom_cost_subquery),
-            so_numbers=Subquery(so_numbers_subquery, output_field=CharField())
+            # 🎯 ยอด "ส่งสำเร็จ" (quantity_shipped) เท่านั้น — ดึงยอด 700 มาโชว์ (ไม่ใช่ 2,100 และไม่เบิ้ลเป็น 6,300)
+            total_qty=Sum('sales_items__quantity_shipped', filter=date_filter),
+            # sale_price = ราคาต่อหน่วยบาร์โค้ด แต่ quantity_shipped สะสมเป็นชิ้นเสมอ
+            # (ดู SalesDeliveryLog.save) จึงต้องหารด้วย conversion_factor ก่อนคูณราคา
+            total_sales_val=Sum(
+                F('sales_items__sale_price') * F('sales_items__quantity_shipped')
+                / Coalesce(F('sales_items__barcode_obj__conversion_factor'), Value(1)),
+                filter=date_filter,
+                output_field=DecimalField()
+            ),
+            # 🎯 SO: รวมเลขที่ SO ทั้งหมดที่เกี่ยวข้องกับสินค้านี้ (ในรอบ/ช่วงที่กรอง) มาต่อกันเป็น string เดียว
+            so_numbers=StringAgg(
+                'sales_items__sales_order__so_number', delimiter=', ', distinct=True, filter=date_filter
+            ),
+            total_bom_cost=Subquery(bom_cost_subquery)
         ).filter(total_qty__gt=0) # 🎯 โชว์เฉพาะสินค้าที่ "ส่งสำเร็จ" จริงๆ ในรอบนั้นๆ
     
     # 🎯 หัวใจหลัก: คำนวณยอดรวมของทั้งหน้า (Grand Total)
