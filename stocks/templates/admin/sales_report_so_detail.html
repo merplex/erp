@@ -1,0 +1,77 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<style>
+    .sod-back { margin-bottom: 12px; }
+    .sod-back a { color: #2563eb; text-decoration: none; font-weight: 600; }
+    .sod-back a:hover { text-decoration: underline; }
+    .sod-summary { margin-bottom: 14px; color: #64748b; font-size: 13px; }
+    .sod-table-wrap { border: 1px solid #e2e8f0; border-radius: 8px; overflow: auto; background: #fff; }
+    .sod-table { width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; }
+    .sod-table th {
+        position: sticky; top: 0; background: #f8fafc; color: #475569;
+        text-align: left; padding: 10px 12px; border-bottom: 1px solid #e2e8f0; font-weight: 700;
+    }
+    .sod-table td { padding: 8px 12px; border-bottom: 1px solid #eef2f6; vertical-align: top; }
+    .sod-table tr:last-child td { border-bottom: none; }
+    .sod-num { text-align: right; font-variant-numeric: tabular-nums; }
+    .sod-total-row td { font-weight: 700; background: #f8fafc; border-top: 2px solid #dee2e6; }
+</style>
+
+<div class="sod-back"><a href="{{ back_url }}">&laquo; กลับไปหน้ารายงานยอดขาย</a></div>
+
+<div class="sod-summary">
+    สินค้า: <b>{{ object.name }}</b> &nbsp;|&nbsp; รวมทั้งหมด {{ rows|length }} SO ในช่วงที่กรอง
+</div>
+
+<div class="sod-table-wrap">
+    <table class="sod-table">
+        <thead>
+            <tr>
+                <th>เลขที่ SO</th>
+                <th>วันที่สั่งซื้อ</th>
+                <th>สถานะ SO</th>
+                <th>ลูกค้า</th>
+                <th class="sod-num">จำนวน</th>
+                <th class="sod-num">ราคา/หน่วย</th>
+                <th class="sod-num">มูลค่าก่อน VAT</th>
+                <th class="sod-num">VAT (%)</th>
+                <th class="sod-num">มูลค่า VAT</th>
+                <th class="sod-num">ยอดรวมหลัง VAT</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in rows %}
+            <tr>
+                <td>{{ row.so_number }}</td>
+                <td>{{ row.order_date|date:"d/m/Y" }}</td>
+                <td>{{ row.status }}</td>
+                <td>{{ row.customer_name }}</td>
+                <td class="sod-num">{{ row.qty|floatformat:0 }} {{ object.unit }}</td>
+                <td class="sod-num">{{ row.unit_price|floatformat:2 }}</td>
+                <td class="sod-num">{{ row.value_before_vat|floatformat:2 }}</td>
+                <td class="sod-num">{{ row.vat_percent|floatformat:2 }}</td>
+                <td class="sod-num">{{ row.vat_amount|floatformat:2 }}</td>
+                <td class="sod-num">{{ row.value_after_vat|floatformat:2 }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="10" style="text-align:center; color:#94a3b8; padding:24px;">ไม่มียอดขายของสินค้านี้ในช่วงที่กรอง</td></tr>
+            {% endfor %}
+        </tbody>
+        {% if rows %}
+        <tfoot>
+            <tr class="sod-total-row">
+                <td colspan="4">ยอดรวมทั้งหมด</td>
+                <td class="sod-num">{{ totals.qty|floatformat:0 }} {{ object.unit }}</td>
+                <td></td>
+                <td class="sod-num">{{ totals.value_before_vat|floatformat:2 }}</td>
+                <td></td>
+                <td class="sod-num">{{ totals.vat_amount|floatformat:2 }}</td>
+                <td class="sod-num">{{ totals.value_after_vat|floatformat:2 }}</td>
+            </tr>
+        </tfoot>
+        {% endif %}
+    </table>
+</div>
+{% endblock %}

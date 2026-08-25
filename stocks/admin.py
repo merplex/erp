@@ -4082,7 +4082,7 @@ class StockAdjustmentAdmin(UnfoldModelAdmin):
 @admin.register(SalesReport)
 class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     list_display = (
-        'name', 'get_so_numbers', 'get_total_qty', 'get_total_revenue',
+        'get_name_link', 'get_so_numbers', 'get_total_qty', 'get_total_revenue',
         'get_total_cost_buy', 'get_profit_margin'
     )
     list_filter = (
@@ -4102,6 +4102,200 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         if lookup.startswith('sales_items__sales_order__delivery_logs__shipped_date'):
             return True
         return super().lookup_allowed(lookup, value, request)
+
+    def get_urls(self):
+        custom_urls = [
+            path('<int:object_id>/so-detail/', self.admin_site.admin_view(self.so_detail_view), name='stocks_salesreport_so_detail'),
+            path('export-detailed/', self.admin_site.admin_view(self.export_detailed_excel_view), name='stocks_salesreport_export_detailed'),
+        ]
+        return custom_urls + super().get_urls()
+
+    @admin.display(description="สินค้า", ordering='name')
+    def get_name_link(self, obj):
+        # ลิงก์ไปหน้ารายละเอียด SO ของสินค้าตัวนี้ พร้อมพ่วง querystring (period/filter) ปัจจุบันไปด้วย
+        # เพื่อให้หน้ารายละเอียดกรองช่วงเวลาเดียวกับหน้า list ที่กดเข้ามา
+        request = getattr(self, '_list_request', None)
+        url = reverse('admin:stocks_salesreport_so_detail', args=[obj.pk])
+        qs = request.GET.urlencode() if request else ''
+        if qs:
+            url += f"?{qs}"
+        return format_html('<a href="{}" style="font-weight:600;">{}</a>', url, obj.name)
+
+    def _so_rows_for_product(self, request, product):
+        """รวมยอดขายของสินค้าตัวนี้ตามช่วงเวลาที่กรอง (period) แยกเป็นแถวต่อ SO
+        (จำนวน/มูลค่าก่อน-หลัง VAT) ใช้ร่วมกันทั้งหน้ารายละเอียด (so_detail_view) และ Export Excel"""
+        from .models import SalesItem
+
+        period = request.GET.get('period', '1year')
+        now = timezone.now()
+        date_filter = self._build_period_q('sales_order__', period, now)
+
+        items = (
+            SalesItem.objects
+            .filter(product=product, quantity_shipped__gt=0)
+            .filter(date_filter)
+            .select_related('sales_order', 'sales_order__customer', 'barcode_obj')
+            .order_by('sales_order__order_date', 'sales_order__so_number')
+        )
+
+        rows_by_so = {}
+        for item in items:
+            so = item.sales_order
+            factor = (item.barcode_obj.conversion_factor if item.barcode_obj else None) or Decimal('1')
+            qty = Decimal(item.quantity_shipped)
+            value_before_vat = (item.sale_price * qty) / factor
+
+            row = rows_by_so.setdefault(so.id, {
+                'so_number': so.so_number,
+                'order_date': so.order_date,
+                'status': so.get_status_display(),
+                'customer_name': so.customer.company_name if so.customer else '-',
+                'qty': Decimal('0'),
+                'value_before_vat': Decimal('0'),
+                'vat_percent': so.vat_percent or Decimal('0'),
+            })
+            row['qty'] += qty
+            row['value_before_vat'] += value_before_vat
+
+        rows = []
+        for row in sorted(rows_by_so.values(), key=lambda r: (r['order_date'], r['so_number'])):
+            vat_amount = row['value_before_vat'] * (row['vat_percent'] / Decimal('100'))
+            row['vat_amount'] = vat_amount
+            row['value_after_vat'] = row['value_before_vat'] + vat_amount
+            row['unit_price'] = (row['value_before_vat'] / row['qty']) if row['qty'] else Decimal('0')
+            rows.append(row)
+        return rows
+
+    def so_detail_view(self, request, object_id):
+        from django.core.exceptions import PermissionDenied
+        from django.http import Http404
+        if not self.has_view_or_change_permission(request):
+            raise PermissionDenied
+        obj = self.get_object(request, object_id)
+        if obj is None:
+            raise Http404("ไม่พบสินค้านี้")
+
+        rows = self._so_rows_for_product(request, obj)
+        totals = {
+            'qty': sum((r['qty'] for r in rows), Decimal('0')),
+            'value_before_vat': sum((r['value_before_vat'] for r in rows), Decimal('0')),
+            'vat_amount': sum((r['vat_amount'] for r in rows), Decimal('0')),
+            'value_after_vat': sum((r['value_after_vat'] for r in rows), Decimal('0')),
+        }
+
+        back_url = reverse('admin:stocks_salesreport_changelist')
+        back_qs = request.GET.urlencode()
+        if back_qs:
+            back_url += f"?{back_qs}"
+
+        context = {
+            **self.admin_site.each_context(request),
+            'title': f"รายละเอียดยอดขายตาม SO: {obj.name}",
+            'object': obj,
+            'opts': self.model._meta,
+            'rows': rows,
+            'totals': totals,
+            'back_url': back_url,
+        }
+        return TemplateResponse(request, 'admin/sales_report_so_detail.html', context)
+
+    def export_detailed_excel_view(self, request):
+        from django.core.exceptions import PermissionDenied
+        from django.conf import settings
+        if not self.has_view_or_change_permission(request):
+            raise PermissionDenied
+
+        cl = self.get_changelist_instance(request)
+        qs = cl.get_queryset(request).order_by('name')
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'SalesByProductReport'[:31]
+
+        title_font = Font(bold=True, size=14)
+        label_font = Font(bold=True)
+        header_font = Font(bold=True, color='FFFFFF')
+        header_fill = PatternFill(start_color='2563EB', end_color='2563EB', fill_type='solid')
+        group_font = Font(bold=True)
+        subtotal_font = Font(bold=True)
+        subtotal_fill = PatternFill(start_color='F1F5F9', end_color='F1F5F9', fill_type='solid')
+
+        period = request.GET.get('period', '1year')
+        period_label = {'1year': 'ปีนี้', '4months': '4 เดือนล่าสุด', '1month': '1 เดือนล่าสุด'}.get(period, period)
+
+        ws.append(['รายงานยอดขายแยกตามสินค้า (แยกตาม SO)'])
+        ws['A1'].font = title_font
+        ws.append(['ชื่อบริษัท', getattr(settings, 'COMPANY_NAME', '')])
+        ws.append(['เลขผู้เสียภาษี :', getattr(settings, 'COMPANY_TAX_ID', '')])
+        ws.append(['ช่วงเวลา :', period_label])
+        for r in (2, 3, 4):
+            ws.cell(row=r, column=1).font = label_font
+        ws.append([])
+
+        headers = [
+            'ชื่อสินค้า', 'เลขที่ SO', 'วันที่สั่งซื้อ', 'สถานะ SO', 'ลูกค้า',
+            'จำนวน', 'หน่วย', 'ราคาต่อหน่วย', 'มูลค่าก่อน VAT', 'VAT (%)', 'มูลค่า VAT', 'ยอดรวมหลัง VAT',
+        ]
+        header_row_idx = ws.max_row + 1
+        ws.append(headers)
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=header_row_idx, column=col_idx)
+            cell.font = header_font
+            cell.fill = header_fill
+
+        for product in qs:
+            rows = self._so_rows_for_product(request, product)
+            if not rows:
+                continue
+
+            group_row_idx = ws.max_row + 1
+            ws.append([product.name])
+            ws.cell(row=group_row_idx, column=1).font = group_font
+
+            for row in rows:
+                ws.append([
+                    product.name,
+                    row['so_number'],
+                    row['order_date'],
+                    row['status'],
+                    row['customer_name'],
+                    float(row['qty']),
+                    product.unit,
+                    float(row['unit_price']),
+                    float(row['value_before_vat']),
+                    float(row['vat_percent']),
+                    float(row['vat_amount']),
+                    float(row['value_after_vat']),
+                ])
+                ws.cell(row=ws.max_row, column=3).number_format = 'DD/MM/YYYY'
+
+            total_qty = sum((r['qty'] for r in rows), Decimal('0'))
+            total_before = sum((r['value_before_vat'] for r in rows), Decimal('0'))
+            total_vat = sum((r['vat_amount'] for r in rows), Decimal('0'))
+            total_after = sum((r['value_after_vat'] for r in rows), Decimal('0'))
+            subtotal_row_idx = ws.max_row + 1
+            ws.append([
+                None, None, None, None, 'ยอดรวม',
+                float(total_qty), None, None, float(total_before), None, float(total_vat), float(total_after),
+            ])
+            for col_idx in range(1, len(headers) + 1):
+                cell = ws.cell(row=subtotal_row_idx, column=col_idx)
+                cell.font = subtotal_font
+                cell.fill = subtotal_fill
+
+            ws.append([])
+
+        for col in ws.columns:
+            length = max((len(str(c.value)) for c in col if c.value is not None), default=10)
+            ws.column_dimensions[col[0].column_letter].width = min(max(length + 2, 10), 45)
+
+        response = HttpResponse(
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        filename = f"C5_SalesByProduct_{timezone.now().strftime('%Y%m%d')}.xlsx"
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        wb.save(response)
+        return response
 
     # --- ให้การค้นหา ใช้ รูปแบบ และ หรือ ได้ ---
     def get_search_results(self, request, queryset, search_term):
@@ -4169,6 +4363,10 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         # 1. ตั้งต้นที่สินค้า (Proxy Model)
         qs = super().get_queryset(request)
 
+        # ⚠️ เก็บ request ไว้ใช้ใน get_name_link (list_display method รับแค่ obj ไม่มี request)
+        # ปลอดภัยเพราะ get_queryset รันก่อน render list_display เสมอในการ request เดียวกัน
+        self._list_request = request
+
         period = request.GET.get('period', '1year')
         now = timezone.now()
 
@@ -4220,9 +4418,13 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                 "profit": "{:,.2f}".format(g_profit)
             }
             
-            # ✅ ใช้ปีกกาคู่ {{ }} สำหรับส่วนที่เป็น JavaScript แท้ๆ 
+            # ✅ ใช้ปีกกาคู่ {{ }} สำหรับส่วนที่เป็น JavaScript แท้ๆ
             # และใช้ {variable} สำหรับส่วนที่ดึงมาจาก Python
             summary_json = json.dumps(summary)
+            export_url = reverse('admin:stocks_salesreport_export_detailed')
+            request_qs = request.GET.urlencode()
+            if request_qs:
+                export_url += f"?{request_qs}"
             js_code = """
                 <script>
                     document.addEventListener('DOMContentLoaded', function() {{
@@ -4242,10 +4444,15 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                                 </tr>
                             `;
                             table.appendChild(tfoot);
+
+                            const exportBtnWrap = document.createElement('div');
+                            exportBtnWrap.style.margin = '0 0 14px 0';
+                            exportBtnWrap.innerHTML = `<a href="{1}" style="display:inline-block;padding:8px 16px;background:#2563EB;color:#fff;border-radius:6px;text-decoration:none;font-weight:600;">📊 Export Excel (แยกตาม SO)</a>`;
+                            table.parentElement.insertBefore(exportBtnWrap, table);
                         }}
                     }});
                 </script>
-            """.format(summary_json) # ✅ ใช้ .format แทน f-string เพื่อความชัวร์
+            """.format(summary_json, export_url) # ✅ ใช้ .format แทน f-string เพื่อความชัวร์
 
             extra_context = extra_context or {}
             extra_context['summary_js'] = mark_safe(js_code)
