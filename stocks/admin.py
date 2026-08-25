@@ -38,7 +38,6 @@ from django.core.exceptions import ValidationError
 from django.forms import TextInput
 from django.db import models # เพิ่มเพื่อรองรับ formfield_overrides
 from django.db.models import Subquery, OuterRef, Q, Sum, F, DecimalField, ExpressionWrapper, Case, When, IntegerField, Value
-from django.contrib.postgres.aggregates import StringAgg
 from django.db.models.functions import TruncDate
 from django.db.models.functions import Coalesce, Greatest
 from django import forms # ✅ เพิ่มบรรทัดนี้ครับ ทำระบบ tag checkbox
@@ -4082,7 +4081,7 @@ class StockAdjustmentAdmin(UnfoldModelAdmin):
 @admin.register(SalesReport)
 class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     list_display = (
-        'get_name_link', 'get_so_numbers', 'get_total_qty', 'get_total_revenue',
+        'get_name_link', 'get_total_qty', 'get_total_revenue',
         'get_total_cost_buy', 'get_profit_margin'
     )
     list_filter = (
@@ -4338,7 +4337,10 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         # ถ้าไม่มี | ก็ให้ทำงานแบบปกติ (AND)
         return super().get_search_results(request, queryset, search_term)
 
-    actions = ['calculate_selected_totals', 'export_to_excel']
+    # ⚠️ ตัด 'export_to_excel' (action แบบแถวเดียวจาก ExportToExcelMixin) ออกจากเมนู Action —
+    # เหลือ export ทางเดียวคือปุ่ม "📊 Export Excel (แยกตาม SO)" ด้านบนตาราง (เรียก
+    # export_detailed_excel_view) กันสับสนว่าทำไม export ได้สองแบบไม่เหมือนกัน
+    actions = ['calculate_selected_totals']
 
     @admin.action(description="📝 สรุปยอดรวมรายการที่เลือก")
     def calculate_selected_totals(self, request, queryset):
@@ -4391,8 +4393,10 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         # 2. สร้างเงื่อนไขการกรอง (เน้นที่ยอดส่งสำเร็จเท่านั้น) — path เริ่มจาก Product ผ่าน sales_items
         date_filter = self._build_period_q('sales_items__sales_order__', period, now)
 
-        # 3. รวมยอดขาย/ยอดขายรวม/เลขที่ SO เป็น query เดียว (JOIN + conditional aggregate)
-        #    ทั้ง 3 ตัวนี้ join ผ่าน path เดียวกันคือ sales_items ORM จะ reuse join เดียวกันให้อัตโนมัติ
+        # 3. รวมยอดขาย/ยอดขายรวมเป็น query เดียว (JOIN + conditional aggregate)
+        #    ทั้ง 2 ตัวนี้ join ผ่าน path เดียวกันคือ sales_items ORM จะ reuse join เดียวกันให้อัตโนมัติ
+        # ⚠️ ตัด so_numbers (StringAgg) ออก — ไม่โชว์คอลัมน์ SO ในหน้า list แล้ว (ดูได้จากหน้ารายละเอียด
+        # ที่คลิกเข้าไปแทน) ตัดออกช่วยลดโหลด query ด้วยเพราะ StringAgg ระดับนี้ค่อนข้างหนัก
         return qs.annotate(
             # 🎯 ยอด "ส่งสำเร็จ" (quantity_shipped) เท่านั้น — ดึงยอด 700 มาโชว์ (ไม่ใช่ 2,100 และไม่เบิ้ลเป็น 6,300)
             total_qty=Sum('sales_items__quantity_shipped', filter=date_filter),
@@ -4404,10 +4408,6 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                 filter=date_filter,
                 output_field=DecimalField()
             ),
-            # 🎯 SO: รวมเลขที่ SO ทั้งหมดที่เกี่ยวข้องกับสินค้านี้ (ในรอบ/ช่วงที่กรอง) มาต่อกันเป็น string เดียว
-            so_numbers=StringAgg(
-                'sales_items__sales_order__so_number', delimiter=', ', distinct=True, filter=date_filter
-            )
         ).filter(total_qty__gt=0) # 🎯 โชว์เฉพาะสินค้าที่ "ส่งสำเร็จ" จริงๆ ในรอบนั้นๆ
     
     # 🎯 หัวใจหลัก: คำนวณยอดรวมของทั้งหน้า (Grand Total)
@@ -4482,18 +4482,6 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             return response
         
     # --- ฟังก์ชันแสดงผลรายบรรทัด (เหมือนเดิม) --- -
-    @admin.display(description="SO")
-    def get_so_numbers(self, obj):
-        so_list = getattr(obj, 'so_numbers', None)
-        if not so_list:
-            return "-"
-        numbers = so_list.split(', ')
-        if len(numbers) > 5:
-            preview = ', '.join(numbers[:5]) + f" (+{len(numbers) - 5})"
-        else:
-            preview = so_list
-        return format_html('<span title="{}">{}</span>', so_list, preview)
-
     @admin.display(description="จำนวนขาย")
     def get_total_qty(self, obj): return f"{obj.total_qty or 0:,.0f} {obj.unit}"
 
