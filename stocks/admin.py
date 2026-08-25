@@ -4083,7 +4083,7 @@ class StockAdjustmentAdmin(UnfoldModelAdmin):
 class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     list_display = (
         'name', 'get_so_numbers', 'get_total_qty', 'get_total_revenue',
-        'get_total_cost_buy', 'get_total_cost_bom', 'get_profit_margin'
+        'get_total_cost_buy', 'get_profit_margin'
     )
     list_filter = (
         ('sales_items__sales_order__delivery_logs__shipped_date', RangeDateTimeFilter),
@@ -4172,37 +4172,11 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         period = request.GET.get('period', '1year')
         now = timezone.now()
 
-        # 2. สร้างเงื่อนไขการกรอง (เน้นที่ยอดส่งสำเร็จเท่านั้น)
-        # path เริ่มจาก SalesItem (ใช้กับ bom_cost_subquery ด้านล่าง ที่ยังต้องเป็น Subquery แยกอยู่)
-        date_query = self._build_period_q('sales_order__', period, now)
-        # path เริ่มจาก Product (ใช้ annotate ตรงๆ ผ่าน sales_items) — เงื่อนไขเดียวกัน แค่ path ยาวขึ้นหนึ่ง hop
+        # 2. สร้างเงื่อนไขการกรอง (เน้นที่ยอดส่งสำเร็จเท่านั้น) — path เริ่มจาก Product ผ่าน sales_items
         date_filter = self._build_period_q('sales_items__sales_order__', period, now)
 
         # 3. รวมยอดขาย/ยอดขายรวม/เลขที่ SO เป็น query เดียว (JOIN + conditional aggregate)
-        #    ไม่ใช้ Subquery แยกฟิลด์เหมือนเดิม เพราะทั้ง 3 ตัวนี้ join ผ่าน path เดียวกันคือ sales_items
-        #    ORM จะ reuse join เดียวกันให้อัตโนมัติ ลด correlated subquery ต่อแถวลงเหลือแค่ตัวเดียว (bom cost)
-        # ต้นทุน BOM: เฉพาะรายการที่มี bom ถูก assign เท่านั้น (ใช้ BOM ที่เลือกในแต่ละรายการ ไม่ใช่ค่าเฉลี่ย)
-        # ต้อง join ผ่าน BOMIngredient ซึ่งเป็นคนละ fan-out กับ sales_items เลยยังต้องแยกเป็น Subquery
-        bom_cost_subquery = SalesItem.objects.filter(
-            product=OuterRef('pk'),
-            bom__isnull=False,
-            **{f"{k}": v for k, v in date_query.children}
-        ).annotate(
-            item_bom_cost=Subquery(
-                BOMIngredient.objects.filter(
-                    bom=OuterRef('bom')
-                ).values('bom').annotate(
-                    cost=Sum(
-                        F('material__buy_price') * F('quantity') * Coalesce(F('barcode_obj__conversion_factor'), Value(1)),
-                        output_field=DecimalField()
-                    )
-                ).values('cost')[:1]
-            )
-        ).values('product').annotate(
-            total=Sum(F('item_bom_cost') * F('quantity_shipped'), output_field=DecimalField())
-        ).values('total')
-
-        # 4. เอาค่าที่บวกได้มาแปะในรายงาน
+        #    ทั้ง 3 ตัวนี้ join ผ่าน path เดียวกันคือ sales_items ORM จะ reuse join เดียวกันให้อัตโนมัติ
         return qs.annotate(
             # 🎯 ยอด "ส่งสำเร็จ" (quantity_shipped) เท่านั้น — ดึงยอด 700 มาโชว์ (ไม่ใช่ 2,100 และไม่เบิ้ลเป็น 6,300)
             total_qty=Sum('sales_items__quantity_shipped', filter=date_filter),
@@ -4217,8 +4191,7 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             # 🎯 SO: รวมเลขที่ SO ทั้งหมดที่เกี่ยวข้องกับสินค้านี้ (ในรอบ/ช่วงที่กรอง) มาต่อกันเป็น string เดียว
             so_numbers=StringAgg(
                 'sales_items__sales_order__so_number', delimiter=', ', distinct=True, filter=date_filter
-            ),
-            total_bom_cost=Subquery(bom_cost_subquery)
+            )
         ).filter(total_qty__gt=0) # 🎯 โชว์เฉพาะสินค้าที่ "ส่งสำเร็จ" จริงๆ ในรอบนั้นๆ
     
     # 🎯 หัวใจหลัก: คำนวณยอดรวมของทั้งหน้า (Grand Total)
@@ -4233,20 +4206,17 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             aggregates = qs.aggregate(
                 g_qty=Sum('total_qty'),
                 g_rev=Sum('total_sales_val'),
-                g_buy_cost=Sum(F('buy_price') * F('total_qty'), output_field=DecimalField()),
-                g_bom_cost=Sum('total_bom_cost')
+                g_buy_cost=Sum(F('buy_price') * F('total_qty'), output_field=DecimalField())
             )
 
             g_rev = aggregates['g_rev'] or 0
             g_buy_cost = aggregates['g_buy_cost'] or 0
-            g_bom_cost = aggregates['g_bom_cost'] or 0
             g_profit = g_rev - g_buy_cost
 
             summary = {
                 "qty": "{:,.0f}".format(aggregates['g_qty'] or 0),
                 "rev": "{:,.2f}".format(g_rev),
                 "buy": "{:,.2f}".format(g_buy_cost),
-                "bom": "{:,.2f}".format(g_bom_cost),
                 "profit": "{:,.2f}".format(g_profit)
             }
             
@@ -4266,7 +4236,6 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                                     <td>${{data.qty}}</td>
                                     <td>${{data.rev}}</td>
                                     <td>${{data.buy}}</td>
-                                    <td>${{data.bom}}</td>
                                     <td style="color: ${{parseFloat(data.profit.replace(/,/g, '')) >= 0 ? '#28a745' : '#dc3545'}}">
                                         ${{data.profit}}
                                     </td>
@@ -4309,11 +4278,6 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     @admin.display(description="ต้นทุนรวม (Buy)")
     def get_total_cost_buy(self, obj):
         return f"{(obj.buy_price or 0) * (obj.total_qty or 0):,.2f}"
-
-    @admin.display(description="ต้นทุน BOM")
-    def get_total_cost_bom(self, obj):
-        cost = obj.total_bom_cost or 0
-        return f"{float(cost):,.2f}"
 
     @admin.display(description="กำไร (vs Buy)")
     def get_profit_margin(self, obj):
