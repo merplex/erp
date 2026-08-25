@@ -37,7 +37,8 @@ from django.utils.html import format_html
 from django.core.exceptions import ValidationError
 from django.forms import TextInput
 from django.db import models # เพิ่มเพื่อรองรับ formfield_overrides
-from django.db.models import Subquery, OuterRef, Q, Sum, F, DecimalField, ExpressionWrapper, Case, When, IntegerField, Value
+from django.db.models import Subquery, OuterRef, Q, Sum, F, DecimalField, ExpressionWrapper, Case, When, IntegerField, Value, CharField
+from django.contrib.postgres.aggregates import StringAgg
 from django.db.models.functions import TruncDate
 from django.db.models.functions import Coalesce, Greatest
 from django import forms # ✅ เพิ่มบรรทัดนี้ครับ ทำระบบ tag checkbox
@@ -4081,7 +4082,7 @@ class StockAdjustmentAdmin(UnfoldModelAdmin):
 @admin.register(SalesReport)
 class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     list_display = (
-        'name', 'get_total_qty', 'get_total_revenue', 
+        'name', 'get_so_numbers', 'get_total_qty', 'get_total_revenue',
         'get_total_cost_buy', 'get_total_cost_bom', 'get_profit_margin'
     )
     list_filter = (
@@ -4092,6 +4093,15 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     )
     list_filter_submit = True
     search_fields = ('name', 'barcodes__code', 'sales_items__sales_order__customer__company_name') # Path: customer__company_name
+
+    # ⚠️ ตัว RangeDateTimeFilter ของ unfold ตั้งชื่อ param แบบ "<field>_from_0" (ต่อ underscore เดี่ยว
+    # ไม่ใช่ "__" แบบ lookup ปกติ) ทำให้ Django เช็ค lookup_allowed() ของ field ที่ข้ามหลาย relation
+    # (sales_items__sales_order__delivery_logs__shipped_date) ไม่เจอ แล้วตีเป็น DisallowedModelAdminLookup
+    # (HTTP 400) ตอนกด Filter วันที่ ต้อง allow lookup นี้ตรงๆ ครับ
+    def lookup_allowed(self, lookup, value, request=None):
+        if lookup.startswith('sales_items__sales_order__delivery_logs__shipped_date'):
+            return True
+        return super().lookup_allowed(lookup, value, request)
 
     # --- ให้การค้นหา ใช้ รูปแบบ และ หรือ ได้ ---
     def get_search_results(self, request, queryset, search_term):
@@ -4202,11 +4212,20 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             total=Sum(F('item_bom_cost') * F('quantity_shipped'), output_field=DecimalField())
         ).values('total')
 
+        # 🎯 SO: รวมเลขที่ SO ทั้งหมดที่เกี่ยวข้องกับสินค้านี้ (ในรอบ/ช่วงที่กรอง) มาต่อกันเป็น string เดียว
+        so_numbers_subquery = SalesItem.objects.filter(
+            product=OuterRef('pk'),
+            **{f"{k}": v for k, v in date_query.children}
+        ).values('product').annotate(
+            so_list=StringAgg('sales_order__so_number', delimiter=', ', distinct=True)
+        ).values('so_list')
+
         # 4. เอาค่าที่บวกได้มาแปะในรายงาน
         return qs.annotate(
             total_qty=Subquery(shipped_subquery),
             total_sales_val=Subquery(revenue_subquery),
-            total_bom_cost=Subquery(bom_cost_subquery)
+            total_bom_cost=Subquery(bom_cost_subquery),
+            so_numbers=Subquery(so_numbers_subquery, output_field=CharField())
         ).filter(total_qty__gt=0) # 🎯 โชว์เฉพาะสินค้าที่ "ส่งสำเร็จ" จริงๆ ในรอบนั้นๆ
     
     # 🎯 หัวใจหลัก: คำนวณยอดรวมของทั้งหน้า (Grand Total)
@@ -4276,6 +4295,18 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             return response
         
     # --- ฟังก์ชันแสดงผลรายบรรทัด (เหมือนเดิม) --- -
+    @admin.display(description="SO")
+    def get_so_numbers(self, obj):
+        so_list = getattr(obj, 'so_numbers', None)
+        if not so_list:
+            return "-"
+        numbers = so_list.split(', ')
+        if len(numbers) > 5:
+            preview = ', '.join(numbers[:5]) + f" (+{len(numbers) - 5})"
+        else:
+            preview = so_list
+        return format_html('<span title="{}">{}</span>', so_list, preview)
+
     @admin.display(description="จำนวนขาย")
     def get_total_qty(self, obj): return f"{obj.total_qty or 0:,.0f} {obj.unit}"
 
