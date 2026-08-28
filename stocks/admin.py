@@ -2482,7 +2482,7 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
         # submit event ของฟอร์มหลักไว้ก่อน (เพื่อรอ auto-save ที่ยังค้างอยู่ให้เสร็จก่อนค่อยปล่อยให้
         # submit จริง) ถ้าโหลดสลับกัน ตัวกันกด submit ซ้ำใน smart_delivery_inline.js จะบล็อคการ
         # re-submit ทีหลังของมันไปด้วย (เพราะ set flag "submitted" ไปแล้วตั้งแต่รอบแรก)
-        js = ('js/admin_sum_selected.js', 'js/delivery_barcode_select2.js', 'js/smart_delivery_inline.js', 'js/sales_item_barcode_autofill.js')
+        js = ('js/admin_sum_selected.js', 'js/delivery_barcode_select2.js', 'js/smart_delivery_inline.js', 'js/sales_item_barcode_autofill.js', 'js/sales_item_row_number.js', 'js/sales_item_autocomplete_delay.js')
 
 class ProductionMaterialUsageInline(UnfoldTabularInline):
     model = ProductionMaterialUsage
