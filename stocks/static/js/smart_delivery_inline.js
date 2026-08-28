@@ -39,15 +39,31 @@
     return inp ? (parseFloat(inp.value) || 0) : 0;
   }
 
-  function getConsumed(excludeSel) {
-    var totals = {};
+  // คำนวณผลรวมจำนวนที่ "ใช้ไป" ของทุก key ในรอบเดียว (O(n) แทนที่จะวนซ้ำต่อแถวแบบเดิมที่เป็น O(n^2)
+  // เมื่อมีหลายสิบแถว — ทุก querySelector ในลูปซ้อนคือต้นเหตุที่หน้าค่อยๆ ช้าลงตามจำนวนแถว)
+  function computeConsumedTotals() {
+    var totals = {};      // key -> รวมจำนวนทุกแถวใหม่
+    var perSelect = new WeakMap(); // sel -> {key, qty} ของแถวตัวเอง (ไว้หักออกตอนใช้)
     getAllSelects().forEach(function (sel) {
-      if (sel === excludeSel || !isNewRow(sel)) return;
+      if (!isNewRow(sel)) return;
       var key = sel.value;
       var q   = getQty(sel);
+      perSelect.set(sel, { key: key, qty: q });
       if (key && q > 0) totals[key] = (totals[key] || 0) + q;
     });
-    return totals;
+    return { totals: totals, perSelect: perSelect };
+  }
+
+  // ผลรวมที่ "แถวอื่น" ใช้ไป (ไม่รวมแถวตัวเอง) แยกตาม key ของสินค้าทุกตัว — หัก contribution
+  // ของ sel เองออกจาก totals ที่คำนวณไว้แล้วครั้งเดียว แทนการวนแถวทั้งหมดใหม่ทุกครั้ง
+  function getConsumedFor(sel, computed) {
+    var own = computed.perSelect.get(sel);
+    if (!own || !own.key || own.qty <= 0) return computed.totals;
+    var out = {};
+    for (var k in computed.totals) out[k] = computed.totals[k];
+    out[own.key] -= own.qty;
+    if (out[own.key] <= 0) delete out[own.key];
+    return out;
   }
 
   // ── snapshot ──────────────────────────────────────────────
@@ -66,10 +82,11 @@
 
   function updateDropdowns(fromEvent) {
     var $ = window.django && window.django.jQuery;
+    var computed = computeConsumedTotals();
     getAllSelects().forEach(function (sel) {
       if (!isNewRow(sel)) return;
       var currentKey = sel.value;
-      var consumed   = getConsumed(sel);
+      var consumed   = getConsumedFor(sel, computed);
       var opts = snapshots.get(sel);
 
       if (!opts) {
@@ -120,6 +137,13 @@
 
   // ── binding ───────────────────────────────────────────────
 
+  // debounce กลาง — กันไม่ให้พิมพ์ตัวเลขในช่องจำนวนทีละตัวอักษรแล้ว rebuild dropdown ทุก keystroke
+  var updateDebounceTimer = null;
+  function updateDropdownsDebounced() {
+    if (updateDebounceTimer) clearTimeout(updateDebounceTimer);
+    updateDebounceTimer = setTimeout(function () { updateDropdowns(true); }, 200);
+  }
+
   function bindSelect(sel) {
     snapshotOptions(sel);
     if (bound.has(sel)) return;
@@ -135,7 +159,7 @@
         console.log('[SmartInline] bound qty input:', inp.name);
         if (!bound.has(inp)) {
           bound.add(inp);
-          inp.addEventListener('input', function () { updateDropdowns(true); });
+          inp.addEventListener('input', updateDropdownsDebounced);
         }
       } else {
         console.warn('[SmartInline] qty input NOT FOUND:', formPrefix + '-' + idx + '-' + qtyField);
@@ -143,10 +167,17 @@
     }
   }
 
+  // คืนจำนวนแถวใหม่ที่เพิ่งถูก bind ในรอบนี้ — ใช้ให้ interval รู้ว่ามีอะไรเปลี่ยนจริงไหม
+  // ก่อนจะยอมเสียเวลา rebuild dropdown ทั้งหมดซ้ำ (แถวที่ bind ไปแล้วไม่ต้องรีเช็กทุกรอบ)
   function bindAll() {
+    var newlyBound = 0;
     getAllSelects().forEach(function (sel) {
-      if (isNewRow(sel)) bindSelect(sel);
+      if (isNewRow(sel) && !bound.has(sel)) {
+        bindSelect(sel);
+        newlyBound++;
+      }
     });
+    return newlyBound;
   }
 
   // ── init ─────────────────────────────────────────────────
@@ -170,9 +201,11 @@
       setTimeout(function () { bindAll(); updateDropdowns(true); }, 50);
     });
 
+    // ใช้ interval แค่เป็น fallback คอยจับแถวใหม่ที่ Unfold เพิ่มเข้ามาโดย event 'formset:added'
+    // ไม่ยิง (เคยเกิดปัญหานี้มาก่อน) — ถ้าไม่มีแถวใหม่จริง ไม่ต้อง rebuild dropdown ทั้งหน้าซ้ำ
+    // เพราะยิ่งมีหลายสิบแถว ยิ่งเสียเวลามาก ทั้งที่ไม่มีอะไรเปลี่ยน
     setInterval(function () {
-      bindAll();
-      updateDropdowns(false);
+      if (bindAll() > 0) updateDropdowns(false);
     }, 500);
 
     bindAll();
