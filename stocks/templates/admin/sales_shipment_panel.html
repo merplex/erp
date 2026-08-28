@@ -1,4 +1,4 @@
-{% load i18n %}
+{% load i18n l10n %}
 <div class="shipment-panel" style="border:1px solid #cbd5e1;border-radius:8px;padding:16px;margin:16px 0;background:#f8fafc;">
     <div style="font-weight:700;font-size:15px;margin-bottom:12px;color:#1e293b;">📦 การส่งของ</div>
 
@@ -76,7 +76,10 @@
                     <td style="padding:6px;">{{ item.code }}</td>
                     <td style="padding:6px;">{{ item.product_name }} ({{ item.unit_name }})</td>
                     <td style="padding:6px;text-align:right;">
-                        <input type="number" name="ship_qty_{{ item.barcode_id }}" value="{{ item.qty }}" min="0"
+                        {# unlocalize กัน settings.USE_THOUSAND_SEPARATOR ใส่คอมม่าใน value ของ input
+                           type="number" — ค่าที่มีคอมม่า (เช่น "1,000") ไม่ผ่าน HTML5 number validation
+                           เบราว์เซอร์จะเคลียร์ช่องเป็นค่าว่างทันทีสำหรับจำนวนที่ตั้งแต่ 1,000 ขึ้นไป #}
+                        <input type="number" name="ship_qty_{{ item.barcode_id }}" value="{{ item.qty|unlocalize }}" min="0"
                                style="width:100px;border:1px solid #9ca3af;border-radius:4px;padding:4px 8px;text-align:right;">
                     </td>
                 </tr>

@@ -26,6 +26,13 @@
             return !tr.querySelector('[name]') && !!tr.querySelector('th');
         }
 
+        // Unfold's collapsible tabular inline เรนเดอร์อีก 1 แถวสรุป/พับต่อ SalesItem แต่ละตัว
+        // ("SalesItem object (8338)" ไม่มีฟิลด์กรอกจริง) ก่อนหน้าแถวฟิลด์จริง — ถ้าไม่กรองแถวนี้ออก
+        // จะนับเลขลำดับซ้ำ 2 เลขต่อ 1 รายการ (แถวสรุป + แถวฟิลด์)
+        function isItemRow(tr) {
+            return !!tr.querySelector('[name^="' + PREFIX + '-"]');
+        }
+
         function ensureCell(tr, isHeader) {
             var cell = tr.querySelector(':scope > .so-item-row-number');
             if (cell) return cell;
@@ -50,8 +57,8 @@
                 }
                 if (!isVisible(tr)) return;
                 var cell = ensureCell(tr, false);
-                if (isMarkedDeleted(tr)) {
-                    setText(cell, '');
+                if (!isItemRow(tr) || isMarkedDeleted(tr)) {
+                    setText(cell, ''); // แถวสรุป/พับ หรือแถวติ๊กลบ — เว้นว่างไว้ (ยังใส่เซลล์เพื่อคอลัมน์ตรงกัน) ไม่นับเลข
                     return;
                 }
                 n += 1;
