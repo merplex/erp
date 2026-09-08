@@ -1,7 +1,7 @@
 import json
 import datetime # ✅ เพิ่มตัวนี้
 from django.contrib import admin
-from django.utils.html import format_html
+from django.utils.html import format_html, format_html_join
 from unfold.admin import ModelAdmin as UnfoldModelAdmin, TabularInline as UnfoldTabularInline, StackedInline as UnfoldStackedInline
 from .models import ProductTag
 from .models import *
@@ -2483,6 +2483,225 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
         # submit จริง) ถ้าโหลดสลับกัน ตัวกันกด submit ซ้ำใน smart_delivery_inline.js จะบล็อคการ
         # re-submit ทีหลังของมันไปด้วย (เพราะ set flag "submitted" ไปแล้วตั้งแต่รอบแรก)
         js = ('js/admin_sum_selected.js', 'js/delivery_barcode_select2.js', 'js/smart_delivery_inline.js', 'js/sales_item_barcode_autofill.js', 'js/sales_item_row_number.js', 'js/sales_item_autocomplete_delay.js')
+
+
+def _receipt_line_items(deliveries):
+    """รวม SalesDeliveryLog ของรอบนี้เป็นรายการต่อบาร์โค้ด (เหมือน print_delivery_view)
+    deliveries: list ที่ select_related('product', 'barcode_obj') มาแล้ว — ไม่ยิง query เพิ่ม
+    คืน (line_items, subtotal)"""
+    line_map = {}
+    line_order = []
+    for d in deliveries:
+        key = d.barcode_obj_id or f'product-{d.product_id}'
+        if key not in line_map:
+            line_map[key] = {
+                'code': d.barcode_obj.code if d.barcode_obj else '-',
+                'product_name': d.product.name if d.product else '-',
+                'unit_name': (d.barcode_obj.unit_name if d.barcode_obj else None) or 'ชิ้น',
+                'qty': 0,
+                'value': Decimal('0'),
+            }
+            line_order.append(key)
+        line_map[key]['qty'] += d.quantity_shipped
+        line_map[key]['value'] += d.shipment_value
+
+    line_items = []
+    for i, key in enumerate(line_order, start=1):
+        row = line_map[key]
+        unit_price = (row['value'] / row['qty']).quantize(Decimal('0.01')) if row['qty'] else Decimal('0')
+        line_items.append({
+            'no': i,
+            'code': row['code'],
+            'product_name': row['product_name'],
+            'unit_name': row['unit_name'],
+            'qty': row['qty'],
+            'unit_price': unit_price,
+            'line_total': row['value'],
+        })
+    subtotal = sum((row['value'] for row in line_map.values()), Decimal('0'))
+    return line_items, subtotal
+
+
+@admin.register(SalesReceipt)
+class SalesReceiptAdmin(ExportToExcelMixin, UnfoldModelAdmin):
+    # 🎯 หน้านี้เป็น "ทะเบียนใบเสร็จ" — สร้าง/ลบเองไม่ได้ ระบบทำอัตโนมัติหลังส่งของ
+    #    ผู้ใช้แก้ได้เฉพาะ "วันครบกำหนด" กับ "หมายเหตุ"
+    list_display = ('shipped_date', 'receipt_number', 'get_customer', 'due_date',
+                    'get_grand_total', 'get_payment_status', 'print_button')
+    list_filter = (
+        ('shipped_date', DjangoDateRangeFilter),
+        ('due_date', DjangoDateRangeFilter),
+        ('sales_order__payment_status', MultipleChoicesDropdownFilter),
+        ('sales_order__customer', AutocompleteSelectMultipleFilter),
+    )
+    list_filter_submit = True
+    date_hierarchy = 'shipped_date'
+    # ค้นได้จาก: เลขที่ใบเสร็จ / เลขใบสั่งขาย (= เลขใบส่งสินค้าในระบบเรา) / เลข PO ลูกค้า / ชื่อลูกค้า
+    # (รายการสินค้า + บาร์โค้ด + เลขใบขนส่ง เพิ่มแบบเจาะจงรอบใน get_search_results)
+    search_fields = ('receipt_number', 'sales_order__so_number', 'sales_order__po_no_customer',
+                     'sales_order__customer__company_name')
+    ordering = ('-shipped_date', '-id')
+    actions = ['export_to_excel']
+    fields = ('receipt_number', 'get_sales_order_link', 'shipped_date', 'due_date',
+              'subtotal', 'vat_amount', 'grand_total', 'notes', 'get_items_preview',
+              'created_at', 'updated_at')
+    readonly_fields = ('receipt_number', 'get_sales_order_link', 'shipped_date', 'subtotal',
+                       'vat_amount', 'grand_total', 'get_items_preview', 'created_at', 'updated_at')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def get_queryset(self, request):
+        # หน้า list: select_related ครบ ไม่มี aggregate ต่อแถว (ยอดเงิน cache ในแถวแล้ว) => query คงที่
+        return super().get_queryset(request).select_related(
+            'sales_order', 'sales_order__customer', 'sales_order__created_by')
+
+    def get_search_results(self, request, queryset, search_term):
+        queryset, may_have_duplicates = super().get_search_results(request, queryset, search_term)
+        term = (search_term or '').strip()
+        if term:
+            from django.db.models import Exists, OuterRef
+            # จับเฉพาะ delivery log ที่อยู่ "รอบเดียวกับใบเสร็จ" (SO + วันที่ตรงกัน)
+            # -> ค้นชื่อสินค้า / บาร์โค้ด / เลขใบขนส่ง(MB Invoice) ในใบเสร็จได้ตรงจริง ไม่ปนรอบอื่น
+            batch_logs = SalesDeliveryLog.objects.annotate(
+                _bd=TruncDate('shipped_date')
+            ).filter(
+                sales_order_id=OuterRef('sales_order_id'),
+                _bd=OuterRef('shipped_date'),
+            ).filter(
+                Q(product__name__icontains=term)
+                | Q(barcode_obj__code__icontains=term)
+                | Q(shipping_no__icontains=term)
+            )
+            queryset = queryset | self.get_queryset(request).filter(Exists(batch_logs))
+            may_have_duplicates = True
+        return queryset, may_have_duplicates
+
+    def get_urls(self):
+        custom_urls = [
+            path('<int:object_id>/print/', self.admin_site.admin_view(self.print_view),
+                 name='stocks_salesreceipt_print'),
+        ]
+        return custom_urls + super().get_urls()
+
+    @admin.display(description="ลูกค้า", ordering='sales_order__customer__company_name')
+    def get_customer(self, obj):
+        c = obj.sales_order.customer
+        return c.company_name if c else '-'
+
+    @admin.display(description="ยอดรวมสุทธิ", ordering='grand_total')
+    def get_grand_total(self, obj):
+        return format_html('<b>{}</b>', f"{obj.grand_total:,.2f}")
+
+    @admin.display(description="สถานะ", ordering='sales_order__payment_status')
+    def get_payment_status(self, obj):
+        return obj.sales_order.get_payment_status_display()
+
+    @admin.display(description="ใบสั่งขายอ้างอิง")
+    def get_sales_order_link(self, obj):
+        if not obj.sales_order_id:
+            return '-'
+        url = reverse('admin:stocks_salesorder_change', args=[obj.sales_order_id])
+        return format_html('<a href="{}" target="_blank">{}</a>', url, obj.sales_order.so_number)
+
+    @admin.display(description="พิมพ์")
+    def print_button(self, obj):
+        url = reverse('admin:stocks_salesreceipt_print', args=[obj.pk])
+        return format_html(
+            '<a href="{}" target="_blank" style="display:inline-block; background:#6f42c1; '
+            'color:#fff; padding:4px 14px; border-radius:4px; font-weight:bold; '
+            'text-decoration:none; white-space:nowrap;">🖨️ พิมพ์</a>', url)
+
+    @admin.display(description="รายการสินค้าในใบเสร็จ")
+    def get_items_preview(self, obj):
+        deliveries = list(
+            obj.sales_order.delivery_logs
+            .annotate(_d=TruncDate('shipped_date')).filter(_d=obj.shipped_date)
+            .order_by('shipped_date', 'id').select_related('product', 'barcode_obj')
+        )
+        line_items, subtotal = _receipt_line_items(deliveries)
+        rows = format_html_join(
+            '', '<tr><td style="padding:4px 8px;">{}</td><td style="padding:4px 8px;">{}<br>'
+            '<span style="color:#888;font-size:11px;">{}</span></td>'
+            '<td style="padding:4px 8px;text-align:right;">{} {}</td>'
+            '<td style="padding:4px 8px;text-align:right;">{}</td>'
+            '<td style="padding:4px 8px;text-align:right;">{}</td></tr>',
+            ((it['no'], it['product_name'], it['code'], it['qty'], it['unit_name'],
+              f"{it['unit_price']:,.2f}", f"{it['line_total']:,.2f}") for it in line_items)
+        )
+        return format_html(
+            '<table style="border-collapse:collapse;width:100%;font-size:12px;">'
+            '<thead><tr style="border-bottom:1px solid #ccc;text-align:left;">'
+            '<th style="padding:4px 8px;">#</th><th style="padding:4px 8px;">รายละเอียด</th>'
+            '<th style="padding:4px 8px;text-align:right;">จำนวน</th>'
+            '<th style="padding:4px 8px;text-align:right;">ราคา/หน่วย</th>'
+            '<th style="padding:4px 8px;text-align:right;">ยอดรวม</th></tr></thead>'
+            '<tbody>{}</tbody></table>', rows)
+
+    def print_view(self, request, object_id):
+        from django.core.exceptions import PermissionDenied
+        from django.http import Http404
+        from django.conf import settings
+        from .utils import thai_baht_text
+        if not self.has_view_permission(request):
+            raise PermissionDenied
+        obj = (SalesReceipt.objects
+               .select_related('sales_order', 'sales_order__customer', 'sales_order__created_by')
+               .filter(pk=object_id).first())
+        if obj is None:
+            raise Http404("ไม่พบใบเสร็จรับเงินนี้")
+        so = obj.sales_order
+        deliveries = list(
+            so.delivery_logs
+            .annotate(_d=TruncDate('shipped_date')).filter(_d=obj.shipped_date)
+            .order_by('shipped_date', 'id').select_related('product', 'barcode_obj')
+        )
+        line_items, subtotal = _receipt_line_items(deliveries)
+        vat_percent = so.vat_percent or Decimal('0')
+        vat_amount = (subtotal * vat_percent / Decimal('100')).quantize(Decimal('0.01'))
+        grand_total = subtotal + vat_amount
+
+        salesperson = '-'
+        if so.created_by_id:
+            salesperson = so.created_by.get_full_name() or so.created_by.username
+
+        context = {
+            **self.admin_site.each_context(request),
+            'obj': obj,
+            'so': so,
+            'line_items': line_items,
+            'subtotal': subtotal,
+            'vat_percent': vat_percent,
+            'vat_amount': vat_amount,
+            'grand_total': grand_total,
+            'amount_words': thai_baht_text(grand_total),
+            'doc_number': obj.receipt_number,
+            'doc_date': obj.shipped_date,
+            'credit_days': so.customer.payment_term if so.customer_id else 0,
+            'due_date': obj.due_date,
+            'salesperson': salesperson,
+            'customer': so.customer,
+            'po_no_customer': so.po_no_customer,
+            'notes': obj.notes,
+            'company_name': settings.COMPANY_NAME,
+            'company_address': settings.COMPANY_ADDRESS,
+            'company_tax_id': settings.COMPANY_TAX_ID,
+            'company_phone': settings.COMPANY_PHONE,
+            'company_mobile': settings.COMPANY_MOBILE,
+            'copies': [
+                {'label': 'ต้นฉบับ', 'page_no': 1},
+                {'label': 'สำเนา', 'page_no': 2},
+            ],
+            'title': f"ใบเสร็จรับเงิน {obj.receipt_number}",
+        }
+        return TemplateResponse(request, 'admin/sales_receipt_print.html', context)
+
+    class Media:
+        js = ('js/admin_sum_selected.js',)
+
 
 class ProductionMaterialUsageInline(UnfoldTabularInline):
     model = ProductionMaterialUsage

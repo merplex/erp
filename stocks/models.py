@@ -1212,6 +1212,118 @@ def handle_delivery_deletion(sender, instance, **kwargs):
     so.update_status()
 
 
+# ── ใบเสร็จรับเงิน (IV) ───────────────────────────────────────────────────────
+# 1 รอบส่งของ (SalesOrder + วันที่ส่ง) = ใบเสร็จรับเงิน 1 ใบ สร้าง/อัปเดต/ลบอัตโนมัติ
+# ผ่าน signal ของ SalesDeliveryLog — ผู้ใช้แก้ได้เฉพาะ "หมายเหตุ" กับ "วันครบกำหนด"
+# เลขที่: ใช้ generate_number() ตัวเดียวกับ SO/PO ทุกอย่าง เปลี่ยนแค่ prefix เป็น IV
+# => รูปแบบ IV-YYYYMM-0001
+class SalesReceipt(models.Model):
+    receipt_number = models.CharField(max_length=50, unique=True, editable=False, verbose_name="เลขที่ใบเสร็จ")
+    sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='receipts', editable=False, verbose_name="ใบสั่งขายอ้างอิง")
+    shipped_date = models.DateField(db_index=True, editable=False, verbose_name="วันที่")
+    due_date = models.DateField(null=True, blank=True, verbose_name="วันครบกำหนด")
+    notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
+    # ยอดเงิน cache ไว้ในแถว — หน้า list/Export ไม่ต้อง aggregate ใหม่ทีละแถว (กัน N+1)
+    subtotal = models.DecimalField(max_digits=14, decimal_places=2, default=0, editable=False, verbose_name="รวมเป็นเงิน")
+    vat_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0, editable=False, verbose_name="ภาษีมูลค่าเพิ่ม")
+    grand_total = models.DecimalField(max_digits=14, decimal_places=2, default=0, editable=False, verbose_name="ยอดรวมสุทธิ")
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True, editable=False)
+
+    class Meta:
+        verbose_name = "ใบเสร็จรับเงิน"
+        verbose_name_plural = "B7. ใบเสร็จรับเงิน (Receipt)"
+        unique_together = ('sales_order', 'shipped_date')
+        ordering = ('-shipped_date', '-id')
+
+    def __str__(self):
+        return self.receipt_number
+
+    def save(self, *args, **kwargs):
+        if not self.receipt_number:
+            self.receipt_number = generate_number('IV', SalesReceipt, 'receipt_number')
+        super().save(*args, **kwargs)
+
+
+def _delivery_local_date(dt_value):
+    """วันที่ (local) ของ shipped_date — ใช้เป็น key ของ 'รอบส่งของ'"""
+    if hasattr(dt_value, 'date'):
+        if timezone.is_aware(dt_value):
+            return timezone.localtime(dt_value).date()
+        return dt_value.date()
+    return dt_value
+
+
+def sync_receipts_for_sales_order(sales_order):
+    """ทำให้ใบเสร็จของ SO นี้ตรงกับ SalesDeliveryLog ปัจจุบันเป๊ะ — 1 วันส่งของ = 1 ใบ
+
+    รวม query ให้น้อยที่สุด: ดึง delivery log ทั้งหมดของ SO ครั้งเดียว + ใบเสร็จเดิมครั้งเดียว
+    แล้ว group/คำนวณในหน่วยความจำ ไม่ยิง query ต่อรอบ
+    - รอบที่ไม่มี log แล้ว -> ลบใบเสร็จทิ้ง (เช่นแก้วันส่งของยกรอบ / ลบรายการส่งของ)
+    - วันครบกำหนด: ตั้งตอนสร้างใบใหม่ + รีเฟรชถ้ายังว่าง โดยอิง payment_due_date ที่
+      SalesDeliveryLog.save() คำนวณจาก 'รอบบัญชี + เครดิตลูกค้า' ไว้แล้ว (แก้วันส่งของ ->
+      log ถูก .save() ใหม่ -> เปลี่ยน key รอบ -> ได้ใบเสร็จใบใหม่พร้อมวันครบกำหนดที่คำนวณสด)
+      หลังจากนั้นผู้ใช้ override เองได้ ระบบจะไม่ทับ
+    """
+    if not sales_order or not sales_order.pk:
+        return
+
+    logs = list(
+        sales_order.delivery_logs
+        .select_related('barcode_obj', 'product')
+        .order_by('shipped_date', 'id')
+    )
+    by_date = {}
+    for log in logs:
+        by_date.setdefault(_delivery_local_date(log.shipped_date), []).append(log)
+
+    existing = {r.shipped_date: r for r in sales_order.receipts.all()}
+
+    stale_ids = [r.id for dt, r in existing.items() if dt not in by_date]
+    if stale_ids:
+        SalesReceipt.objects.filter(id__in=stale_ids).delete()
+
+    vat_p = sales_order.vat_percent or Decimal('0')
+    for dt, batch_logs in by_date.items():
+        receipt = existing.get(dt) or SalesReceipt(sales_order=sales_order, shipped_date=dt)
+        subtotal = sum((log.shipment_value for log in batch_logs), Decimal('0'))
+        vat_amount = (subtotal * vat_p / Decimal('100')).quantize(Decimal('0.01'))
+        grand_total = subtotal + vat_amount
+
+        old_due = receipt.due_date
+        if receipt.pk is None or receipt.due_date is None:
+            receipt.due_date = next(
+                (log.payment_due_date for log in reversed(batch_logs) if log.payment_due_date),
+                None,
+            )
+
+        # เขียนกลับเฉพาะตอนมีอะไรเปลี่ยนจริง — กัน UPDATE ซ้ำซ้อนตอน signal ยิงถี่ๆ (bulk ship)
+        if (receipt.pk is None or receipt.subtotal != subtotal
+                or receipt.vat_amount != vat_amount or receipt.grand_total != grand_total
+                or receipt.due_date != old_due):
+            receipt.subtotal = subtotal
+            receipt.vat_amount = vat_amount
+            receipt.grand_total = grand_total
+            receipt.save()
+
+
+@receiver(post_save, sender=SalesDeliveryLog)
+def _sync_receipt_on_delivery_save(sender, instance, raw=False, **kwargs):
+    if raw:
+        return
+    sync_receipts_for_sales_order(instance.sales_order)
+
+
+@receiver(post_delete, sender=SalesDeliveryLog)
+def _sync_receipt_on_delivery_delete(sender, instance, **kwargs):
+    try:
+        so = instance.sales_order
+    except SalesOrder.DoesNotExist:
+        return
+    if so and so.pk:
+        sync_receipts_for_sales_order(so)
+
+
 # 8. ระบบเอกสารสั่งผลิต
 class ProductionOrder(models.Model):
     STATUS_CHOICES = [('Draft','ร่าง'),('Started','เริ่มผลิต'),('Finished','เสร็จบางส่วน'),('Completed','ปิดงาน/ครบถ้วน'),('Cancelled','ยกเลิก')]

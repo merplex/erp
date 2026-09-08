@@ -245,6 +245,7 @@ UNFOLD = {
                 "collapsible": True,
                 "items": [
                     {"title": "ใบสั่งขาย (B2)",         "icon": "receipt_long",   "link": "/admin/stocks/salesorder/"},
+                    {"title": "ใบเสร็จรับเงิน (B7)",     "icon": "receipt",        "link": "/admin/stocks/salesreceipt/"},
                     {"title": "ใบเสนอราคาขาย (B6)",     "icon": "request_quote",  "link": "/admin/stocks/salesquotation/"},
                     {"title": "สรุปรายรับ (C3)",         "icon": "payments",       "link": "/admin/stocks/incomereport/"},
                     {"title": "รายงานยอดขาย (C5)",       "icon": "bar_chart",      "link": "/admin/stocks/salesreport/"},
