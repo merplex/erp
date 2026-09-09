@@ -1663,7 +1663,7 @@ class PurchaseOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockM
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
     readonly_fields = ('created_by', 'status')
 
-    actions = ['mark_as_completed', 'export_to_excel']
+    actions = ['mark_as_completed', 'force_mark_as_completed', 'export_to_excel']
 
     def get_urls(self):
         custom_urls = [
@@ -1726,15 +1726,61 @@ class PurchaseOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockM
         }
         return TemplateResponse(request, 'admin/purchase_receipt_print.html', context)
 
+    @staticmethod
+    def _po_shortfall(po):
+        """จำนวนที่ยัง 'รับไม่ครบ' (ชิ้น) — 0 = รับครบแล้ว"""
+        total_ordered = po.items.aggregate(t=Sum('quantity_ordered'))['t'] or 0
+        total_received = po.items.aggregate(t=Sum('quantity_received'))['t'] or 0
+        return max(0, total_ordered - total_received)
+
+    def _do_complete(self, request, queryset):
+        """ปิดงานแบบ per-object เพื่อให้ประวัติเอกสารบันทึกไว้ (bulk .update() ไม่ลง log)"""
+        done = 0
+        for po in queryset:
+            if po.status == 'Completed':
+                continue
+            po.status = 'Completed'
+            if not po.received_date and po.items.aggregate(t=Sum('quantity_received'))['t']:
+                po.received_date = datetime.date.today()
+            po.save(update_fields=['status', 'received_date'])
+            self.log_change(request, po, "ปิดงาน (เปลี่ยนสถานะเป็น Completed)")
+            done += 1
+        return done
+
     @admin.action(description="✅ เปลี่ยนสถานะเป็น: เสร็จงาน/ปิดงาน")
     def mark_as_completed(self, request, queryset):
-        queryset.update(status='Completed')
-        self.message_user(request, f"ปิดงานสำเร็จ {queryset.count()} รายการแล้วค่ะ")
+        under = [po for po in queryset if self._po_shortfall(po) > 0]
+        ok = queryset.exclude(pk__in=[po.pk for po in under])
+        done = self._do_complete(request, ok)
+        if done:
+            self.message_user(request, f"ปิดงานสำเร็จ {done} รายการแล้วค่ะ")
+        if under:
+            names = ", ".join(f"{po.po_number} (ขาด {self._po_shortfall(po):,})" for po in under)
+            self.message_user(
+                request,
+                f"⚠️ ไม่ได้ปิด {len(under)} รายการเพราะรับของยังไม่ครบ: {names} — "
+                f"ถ้าต้องการปิดทั้งที่รับไม่ครบ ให้ใช้ action “🔒 ปิดงานทั้งที่รับไม่ครบ (บังคับ)”",
+                level=messages.WARNING,
+            )
+
+    @admin.action(description="🔒 ปิดงานทั้งที่รับไม่ครบ (บังคับ)")
+    def force_mark_as_completed(self, request, queryset):
+        done = self._do_complete(request, queryset)
+        self.message_user(request, f"บังคับปิดงาน {done} รายการแล้ว (รวมที่รับของไม่ครบ)", level=messages.WARNING)
 
     def response_change(self, request, obj):
         if "_complete_order" in request.POST:
-            obj.status = 'Completed'
-            obj.save()
+            shortfall = self._po_shortfall(obj)
+            if shortfall > 0:
+                self.message_user(
+                    request,
+                    f"⚠️ ยังไม่ได้ปิดงาน — ใบสั่งซื้อนี้รับของยังไม่ครบ (ขาดอีก {shortfall:,} ชิ้น) "
+                    f"ถ้าต้องการปิดจริง ๆ ให้กลับไปหน้ารายการ เลือกเอกสารนี้ แล้วใช้ action "
+                    f"“🔒 ปิดงานทั้งที่รับไม่ครบ (บังคับ)”",
+                    level=messages.WARNING,
+                )
+                return HttpResponseRedirect(".")
+            self._do_complete(request, PurchaseOrder.objects.filter(pk=obj.pk))
             self.message_user(request, f"ปิดงานใบสั่งซื้อ {obj.po_number} เรียบร้อยแล้ว")
             return HttpResponseRedirect(".")
         return super().response_change(request, obj)
