@@ -270,7 +270,7 @@ class DetailedHistoryMixin:
     ปกติ Django log ("ประวัติ"/History) จะบอกแค่ *ชื่อ field* ที่ถูกแก้ (เช่น
     "Changed latest_buy_price") ไม่บอกว่าแก้จากค่าอะไรเป็นค่าอะไร — mixin นี้
     เขียน change_message ใหม่ให้มีค่าเดิม → ค่าใหม่ครบ ทั้ง field บนฟอร์มหลัก
-    และทุก inline (เช่น ราคา supplier ใน A4, บาร์โค้ด, ราคาสัญญาลูกค้า)
+    และทุก inline (เช่น ราคา supplier ใน W1, บาร์โค้ด, ราคาสัญญาลูกค้า)
     """
 
     def _fmt_value(self, value):
@@ -488,11 +488,11 @@ class SalesPaymentInline(UnfoldTabularInline):
         # ใช้ prefetch_related จาก get_queryset แทนการ query ใหม่ต่อแถว
         logs = obj.sales_order.delivery_logs.all()
         confirmed = any(getattr(log, 'is_revenue_confirmed', False) for log in logs)
-        return "ยืนยันแล้วจากหน้า C6" if confirmed else "รอยืนยัน"
+        return "ยืนยันแล้วจากหน้า A3" if confirmed else "รอยืนยัน"
     get_status_from_logs.short_description = "สถานะรับเงิน"
 
     def has_change_permission(self, request, obj=None):
-        # 🎯 ถ้าใบสั่งขายนี้มียอดที่คอนเฟิร์มใน C6 แล้ว ห้ามแก้หน้า C3
+        # 🎯 ถ้าใบสั่งขายนี้มียอดที่คอนเฟิร์มใน A3 แล้ว ห้ามแก้หน้า F5
         if obj:
             from .models import SalesDeliveryLog # 👈 Import มาใช้ตรงๆ
             already_confirmed = SalesDeliveryLog.objects.filter(
@@ -975,7 +975,7 @@ class SalesDeliveryLogInline(UnfoldTabularInline):
         if so.delivery_logs.filter(
             Q(is_revenue_confirmed=True) | Q(is_dc_confirmed=True) | Q(is_rebate_confirmed=True)
         ).exists():
-            return "มีรายการที่ยืนยันใน C6 แล้ว"
+            return "มีรายการที่ยืนยันใน A3 แล้ว"
         return None
 
     def has_add_permission(self, request, obj=None):
@@ -1033,7 +1033,7 @@ class ProductBarcodeAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     search_fields = ['code', 'product__name','product__tags__name']
     list_display = ('code', 'product', 'conversion_factor', 'unit_name', 'get_forecast_stock')
     list_filter = (
-        ('product__tags', AutocompleteSelectMultipleFilter), # กรองตามกลุ่มสินค้าที่หน้า A4
+        ('product__tags', AutocompleteSelectMultipleFilter), # กรองตามกลุ่มสินค้าที่หน้า W1
     )
     list_filter_submit = True
     actions = ['export_to_excel']
@@ -2242,7 +2242,7 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
             if obj.delivery_logs.filter(
                 Q(is_revenue_confirmed=True) | Q(is_dc_confirmed=True) | Q(is_rebate_confirmed=True)
             ).exists():
-                reasons.append("มีรายการที่ยืนยันใน C6 แล้ว")
+                reasons.append("มีรายการที่ยืนยันใน A3 แล้ว")
             if reasons:
                 messages.warning(request,
                     f"🔒 เอกสารนี้ถูกล็อค ({', '.join(reasons)}) — ไม่สามารถเพิ่ม/แก้ไข/ลบรายการส่งของได้")
@@ -3501,8 +3501,8 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                 (row['production_order__order_date'], -int(row['remaining']), ref)
             )
 
-        # FO: กฎสั่งซื้อ/สั่งผลิตล่วงหน้า (A6) ที่ยังไม่เกิดเป็น PO/PD จริง — โชว์แค่ "รอบถัดไป" ของแต่ละกฎ
-        # เป็นยอดคาดการณ์บนกราฟ Timeline เท่านั้น ไม่นับรวมในยอด "คาดการณ์ (Plan)" ของหน้า C1/รายการหลัก
+        # FO: กฎสั่งซื้อ/สั่งผลิตล่วงหน้า (F3) ที่ยังไม่เกิดเป็น PO/PD จริง — โชว์แค่ "รอบถัดไป" ของแต่ละกฎ
+        # เป็นยอดคาดการณ์บนกราฟ Timeline เท่านั้น ไม่นับรวมในยอด "คาดการณ์ (Plan)" ของหน้า F1/รายการหลัก
         fo_rules = AdvanceOrderRule.objects.filter(product_id__in=product_ids).exclude(
             end_date__isnull=False, end_date__lt=F('next_run_date')
         )

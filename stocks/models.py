@@ -54,7 +54,7 @@ class ProductCategory(models.Model):
     name = models.CharField(max_length=100, verbose_name="กลุ่มสินค้า")
     created_at = models.DateTimeField(auto_now_add=True, null=True)
     def __str__(self): return self.name
-    class Meta: verbose_name_plural = "A1. กลุ่มสินค้า"
+    class Meta: verbose_name_plural = "W2. กลุ่มสินค้า"
 
 class ProductTag(models.Model):
     name = models.CharField(max_length=50, unique=True, verbose_name="ชื่อแท็ก")
@@ -66,7 +66,7 @@ class ProductTag(models.Model):
     
     class Meta:
         verbose_name = "แท็กสินค้า"
-        verbose_name_plural = "T1. แท็กสินค้า (Product Tag)"
+        verbose_name_plural = "W5. แท็กสินค้า (Product Tag)"
 
 # 2. ผู้จำหน่าย
 class Supplier(models.Model):
@@ -89,7 +89,7 @@ class Supplier(models.Model):
             self.supplier_code = None
         super().save(*args, **kwargs)
     def __str__(self): return self.company_name
-    class Meta: verbose_name_plural = "A2. ผู้จำหน่าย (Supplier)"
+    class Meta: verbose_name_plural = "P1. ผู้จำหน่าย (Supplier)"
 
 # 3. ลูกค้า
 class Customer(models.Model):
@@ -116,7 +116,7 @@ class Customer(models.Model):
         verbose_name="วันที่ตัดรอบบัญชี",
         help_text="ระบุวันที่ 1-31"
     )
-    class Meta: verbose_name_plural = "A3. ลูกค้า (Customer)"
+    class Meta: verbose_name_plural = "S1. ลูกค้า (Customer)"
 
 # 4. รายการสินค้า
 class Product(models.Model):
@@ -263,7 +263,7 @@ class Product(models.Model):
 
         return changes
 
-    class Meta: verbose_name_plural = "A4. รายการสินค้า (Product)"
+    class Meta: verbose_name_plural = "W1. รายการสินค้า (Product)"
 
 class ProductBarcode(models.Model):
     product = models.ForeignKey(Product, related_name='barcodes', on_delete=models.CASCADE)
@@ -306,7 +306,7 @@ class ProductBarcode(models.Model):
     def __str__(self):
         return self.code
     
-    class Meta: verbose_name_plural = "T5. หน่วยขายตามบาร์โค้ด"
+    class Meta: verbose_name_plural = "W6. หน่วยขายตามบาร์โค้ด"
 
 # 4.1 คลังสินค้า
 class Warehouse(models.Model):
@@ -330,7 +330,7 @@ class Warehouse(models.Model):
         return self.name
 
     class Meta:
-        verbose_name_plural = "A4.1 คลังสินค้า (Warehouse)"
+        verbose_name_plural = "W3. คลังสินค้า (Warehouse)"
 
 # 4.2 สต๊อกแยกคลัง (เฉพาะคลังที่ไม่ใช่คลังหลัก — คลังหลักใช้ Product.stock_quantity ตรงๆ
 # เพื่อไม่ต้องแตะจุดคำนวณ/ตัดสต๊อกเดิมของระบบที่ผูกกับ stock_quantity อยู่จำนวนมาก)
@@ -402,7 +402,7 @@ class StockTransfer(models.Model):
         return self.transfer_number
 
     class Meta:
-        verbose_name_plural = "A4.2 โอนย้ายคลังสินค้า (Stock Transfer)"
+        verbose_name_plural = "W4. โอนย้ายคลังสินค้า (Stock Transfer)"
 
 class ProductSupplier(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='product_suppliers')
@@ -443,7 +443,7 @@ class BOM(models.Model):
         except Exception:
             return f"BOM ID: {self.id}" # ไม้ตายสุดท้ายถ้าพังจริงๆ ให้โชว์ ID แทน
         
-    class Meta: verbose_name_plural = "A5. สูตรการผลิต (BOM)"
+    class Meta: verbose_name_plural = "O1. สูตรการผลิต (BOM)"
 
 class BOMIngredient(models.Model):
     bom = models.ForeignKey(BOM, on_delete=models.CASCADE, related_name='ingredients')
@@ -553,7 +553,7 @@ class PurchaseOrder(models.Model):
     cancelled_at = models.DateTimeField(null=True, blank=True, editable=False, verbose_name="วันที่ยกเลิก")
 
     class Meta:
-        verbose_name_plural = "B1. ใบสั่งซื้อ (Purchase)"
+        verbose_name_plural = "P2. ใบสั่งซื้อ (Purchase)"
 
     def __str__(self):
         return f"{self.po_number} ({self.get_status_display()})"
@@ -826,7 +826,7 @@ class SalesOrder(models.Model):
             self.cancelled_at = None
         super().save(*args, **kwargs)
 
-    class Meta: verbose_name_plural = "B2. ใบสั่งขาย (Sales)"
+    class Meta: verbose_name_plural = "S2. ใบสั่งขาย (Sales)"
 
     # ✅ เพิ่มสถานะการเงิน
     payment_status = models.CharField(
@@ -921,8 +921,8 @@ def unlock_shipment_accounting(sender, instance, **kwargs):
 class IncomeReport(SalesOrder):
     class Meta:
         proxy = True
-        verbose_name = "C3. สรุปรายรับ (SO Report)"
-        verbose_name_plural = "C3. สรุปรายรับ (SO Report)"
+        verbose_name = "F5. สรุปรายรับ (SO Report)"
+        verbose_name_plural = "F5. สรุปรายรับ (SO Report)"
 
     @property
     def grand_total(self):
@@ -1232,7 +1232,7 @@ class SalesReceipt(models.Model):
 
     class Meta:
         verbose_name = "ใบเสร็จรับเงิน"
-        verbose_name_plural = "B7. ใบเสร็จรับเงิน (Receipt)"
+        verbose_name_plural = "A1. ใบเสร็จรับเงิน (Receipt)"
         unique_together = ('sales_order', 'shipped_date')
         ordering = ('-shipped_date', '-id')
 
@@ -1253,7 +1253,7 @@ class SalesInvoice(SalesReceipt):
     class Meta:
         proxy = True
         verbose_name = "ใบกำกับภาษี/ใบส่งของ"
-        verbose_name_plural = "B8. ใบกำกับภาษี/ใบส่งของ (Invoice)"
+        verbose_name_plural = "A2. ใบกำกับภาษี/ใบส่งของ (Invoice)"
 
 
 def _delivery_local_date(dt_value):
@@ -1414,7 +1414,7 @@ class ProductionOrder(models.Model):
                     actual_qty_to_use=ing.quantity_base * self.quantity_planned,
                     is_scrap=ing.is_scrap,
                 )
-    class Meta: verbose_name_plural = "B3. ใบสั่งผลิต (Productions)"
+    class Meta: verbose_name_plural = "O2. ใบสั่งผลิต (Productions)"
 
 
 class ProductionLog(models.Model):
@@ -1493,17 +1493,17 @@ class ProductionLog(models.Model):
 class StockForecast(Product):
     class Meta:
         proxy = True
-        verbose_name_plural = "C0. คาดการณ์ Stock"
+        verbose_name_plural = "F2. คาดการณ์ Stock"
 
 class StockPlanning(Product):
     class Meta:
         proxy = True
-        verbose_name_plural = "C1. ตารางการวางแผนสต็อก"
+        verbose_name_plural = "F1. ตารางการวางแผนสต็อก"
 
 class FinanceReport(PurchaseOrder):
     class Meta:
         proxy = True
-        verbose_name_plural = "C2. สรุปรายจ่าย (PO Report)"
+        verbose_name_plural = "F4. สรุปรายจ่าย (PO Report)"
 
 class ShipmentPaymentReport(SalesDeliveryLog):
     class Meta:
@@ -1563,7 +1563,7 @@ class CustomerProductContract(models.Model):
         super().validate_unique(exclude=exclude)
 
     class Meta:
-        verbose_name_plural = "T2. ราคาสัญญา&DC/Rebate"
+        verbose_name_plural = "S4. ราคาสัญญา&DC/Rebate"
         unique_together = ('customer', 'barcode')
 
 @receiver(post_save, sender=CustomerProductContract)
@@ -1647,13 +1647,13 @@ class StockAdjustment(models.Model):
         super().save(*args, **kwargs)
 
     class Meta:
-        verbose_name_plural = "T4. บันทึกการปรับสต็อก"
+        verbose_name_plural = "W7. บันทึกการปรับสต็อก"
 
 class SalesReport(Product): # ใช้ Product เป็นฐาน
     class Meta:
         proxy = True
-        verbose_name = "C5. รายงานยอดขายตามสินค้า"
-        verbose_name_plural = "C5. รายงานยอดขายตามสินค้า"
+        verbose_name = "F6. รายงานยอดขายตามสินค้า"
+        verbose_name_plural = "F6. รายงานยอดขายตามสินค้า"
 
 # --- 5. Proxy Model สำหรับหน้า C6 (Shipment Accounting) ---
 # --- ในไฟล์ models.py ---
@@ -1663,8 +1663,8 @@ from decimal import Decimal # 👈 อย่าลืม import ไว้ด้�
 class ShipmentAccounting(SalesDeliveryLog):
     class Meta:
         proxy = True
-        verbose_name = "C6. การทำบัญชี DC/Rebate"
-        verbose_name_plural = "C6. การทำบัญชี DC/Rebate"
+        verbose_name = "A3. การทำบัญชี DC/Rebate"
+        verbose_name_plural = "A3. การทำบัญชี DC/Rebate"
 
     # ✅ เปลี่ยนชื่อเป็น calculate_revenue_total ตามที่ Admin เรียกหา
     def calculate_revenue_total(self):
@@ -1771,7 +1771,7 @@ class AdvanceOrderRule(models.Model):
         return f"{self.fo_number} - {self.get_order_type_display()} - {self.product} (ทุก {self.frequency_days} วัน)"
 
     class Meta:
-        verbose_name_plural = "A6. ใบสั่งผลิต/ใบสั่งซื้อล่วงหน้า"
+        verbose_name_plural = "F3. ใบสั่งผลิต/ใบสั่งซื้อล่วงหน้า"
 
 
 def run_due_advance_orders():
@@ -1796,8 +1796,8 @@ def run_due_advance_orders():
 class InternationalPurchaseTracking(PurchaseOrder):
     class Meta:
         proxy = True
-        verbose_name = "B4. ติดตามสินค้าต่างประเทศ"
-        verbose_name_plural = "B4. ติดตามสินค้าต่างประเทศ"
+        verbose_name = "P4. ติดตามสินค้าต่างประเทศ"
+        verbose_name_plural = "P4. ติดตามสินค้าต่างประเทศ"
 
 class SalesContract(models.Model):
     customer = models.ForeignKey('Customer', on_delete=models.CASCADE, verbose_name="ลูกค้า")
@@ -1848,8 +1848,8 @@ class SalesContract(models.Model):
         return f"{self.contract_name} - {self.customer.company_name}"
 
     class Meta:
-        verbose_name = "T3. สัญญาการขาย"
-        verbose_name_plural = "T3. สัญญาการขาย"
+        verbose_name = "A5. สัญญาการขาย"
+        verbose_name_plural = "A5. สัญญาการขาย"
 
 class ContractCondition(models.Model):
     TYPE_CHOICES = [
@@ -1912,7 +1912,7 @@ class RebatePayout(models.Model):
 
     class Meta:
         verbose_name = "สรุปสัญญา Rebate"
-        verbose_name_plural = "C7. สรุปสัญญา Rebate"
+        verbose_name_plural = "A4. สรุปสัญญา Rebate"
 
 
 class RebatePayoutItem(models.Model):
@@ -1971,7 +1971,7 @@ class PurchaseQuotation(models.Model):
 
     class Meta:
         verbose_name = "ใบเสนอราคาซื้อ"
-        verbose_name_plural = "B5. ใบเสนอราคาซื้อ (Purchase Quotation)"
+        verbose_name_plural = "P3. ใบเสนอราคาซื้อ (Purchase Quotation)"
 
 
 class PurchaseQuotationItem(models.Model):
@@ -2007,7 +2007,7 @@ class SalesQuotation(models.Model):
 
     class Meta:
         verbose_name = "ใบเสนอราคาขาย"
-        verbose_name_plural = "B6. ใบเสนอราคาขาย (Sales Quotation)"
+        verbose_name_plural = "S3. ใบเสนอราคาขาย (Sales Quotation)"
 
 
 class SalesQuotationItem(models.Model):
