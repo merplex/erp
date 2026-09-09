@@ -488,11 +488,11 @@ class SalesPaymentInline(UnfoldTabularInline):
         # ใช้ prefetch_related จาก get_queryset แทนการ query ใหม่ต่อแถว
         logs = obj.sales_order.delivery_logs.all()
         confirmed = any(getattr(log, 'is_revenue_confirmed', False) for log in logs)
-        return "ยืนยันแล้วจากหน้า A3" if confirmed else "รอยืนยัน"
+        return "ยืนยันแล้วจากหน้า A5" if confirmed else "รอยืนยัน"
     get_status_from_logs.short_description = "สถานะรับเงิน"
 
     def has_change_permission(self, request, obj=None):
-        # 🎯 ถ้าใบสั่งขายนี้มียอดที่คอนเฟิร์มใน A3 แล้ว ห้ามแก้หน้า F5
+        # 🎯 ถ้าใบสั่งขายนี้มียอดที่คอนเฟิร์มใน A5 แล้ว ห้ามแก้หน้า A4
         if obj:
             from .models import SalesDeliveryLog # 👈 Import มาใช้ตรงๆ
             already_confirmed = SalesDeliveryLog.objects.filter(
@@ -975,7 +975,7 @@ class SalesDeliveryLogInline(UnfoldTabularInline):
         if so.delivery_logs.filter(
             Q(is_revenue_confirmed=True) | Q(is_dc_confirmed=True) | Q(is_rebate_confirmed=True)
         ).exists():
-            return "มีรายการที่ยืนยันใน A3 แล้ว"
+            return "มีรายการที่ยืนยันใน A5 แล้ว"
         return None
 
     def has_add_permission(self, request, obj=None):
@@ -2242,7 +2242,7 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
             if obj.delivery_logs.filter(
                 Q(is_revenue_confirmed=True) | Q(is_dc_confirmed=True) | Q(is_rebate_confirmed=True)
             ).exists():
-                reasons.append("มีรายการที่ยืนยันใน A3 แล้ว")
+                reasons.append("มีรายการที่ยืนยันใน A5 แล้ว")
             if reasons:
                 messages.warning(request,
                     f"🔒 เอกสารนี้ถูกล็อค ({', '.join(reasons)}) — ไม่สามารถเพิ่ม/แก้ไข/ลบรายการส่งของได้")
@@ -4691,7 +4691,7 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         response = HttpResponse(
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
-        filename = f"C5_SalesByProduct_{timezone.now().strftime('%Y%m%d')}.xlsx"
+        filename = f"F4_SalesByProduct_{timezone.now().strftime('%Y%m%d')}.xlsx"
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         wb.save(response)
         return response
@@ -4860,7 +4860,7 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             
         except Exception as e:
             # ถ้าเกิด Error ให้รันหน้าปกติไปก่อน ไม่ต้องค้าง
-            print(f"Error in C5 Total: {e}")
+            print(f"Error in F4 Total: {e}")
             return response
         
     # --- ฟังก์ชันแสดงผลรายบรรทัด (เหมือนเดิม) --- -

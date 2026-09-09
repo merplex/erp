@@ -921,8 +921,8 @@ def unlock_shipment_accounting(sender, instance, **kwargs):
 class IncomeReport(SalesOrder):
     class Meta:
         proxy = True
-        verbose_name = "F5. สรุปรายรับ (SO Report)"
-        verbose_name_plural = "F5. สรุปรายรับ (SO Report)"
+        verbose_name = "A4. สรุปรายรับ (SO Report)"
+        verbose_name_plural = "A4. สรุปรายรับ (SO Report)"
 
     @property
     def grand_total(self):
@@ -1503,7 +1503,7 @@ class StockPlanning(Product):
 class FinanceReport(PurchaseOrder):
     class Meta:
         proxy = True
-        verbose_name_plural = "F4. สรุปรายจ่าย (PO Report)"
+        verbose_name_plural = "A3. สรุปรายจ่าย (PO Report)"
 
 class ShipmentPaymentReport(SalesDeliveryLog):
     class Meta:
@@ -1652,8 +1652,8 @@ class StockAdjustment(models.Model):
 class SalesReport(Product): # ใช้ Product เป็นฐาน
     class Meta:
         proxy = True
-        verbose_name = "F6. รายงานยอดขายตามสินค้า"
-        verbose_name_plural = "F6. รายงานยอดขายตามสินค้า"
+        verbose_name = "F4. รายงานยอดขายตามสินค้า"
+        verbose_name_plural = "F4. รายงานยอดขายตามสินค้า"
 
 # --- 5. Proxy Model สำหรับหน้า C6 (Shipment Accounting) ---
 # --- ในไฟล์ models.py ---
@@ -1663,8 +1663,8 @@ from decimal import Decimal # 👈 อย่าลืม import ไว้ด้�
 class ShipmentAccounting(SalesDeliveryLog):
     class Meta:
         proxy = True
-        verbose_name = "A3. การทำบัญชี DC/Rebate"
-        verbose_name_plural = "A3. การทำบัญชี DC/Rebate"
+        verbose_name = "A5. การทำบัญชี DC/Rebate"
+        verbose_name_plural = "A5. การทำบัญชี DC/Rebate"
 
     # ✅ เปลี่ยนชื่อเป็น calculate_revenue_total ตามที่ Admin เรียกหา
     def calculate_revenue_total(self):
@@ -1848,8 +1848,8 @@ class SalesContract(models.Model):
         return f"{self.contract_name} - {self.customer.company_name}"
 
     class Meta:
-        verbose_name = "A5. สัญญาการขาย"
-        verbose_name_plural = "A5. สัญญาการขาย"
+        verbose_name = "A7. สัญญาการขาย"
+        verbose_name_plural = "A7. สัญญาการขาย"
 
 class ContractCondition(models.Model):
     TYPE_CHOICES = [
@@ -1912,7 +1912,7 @@ class RebatePayout(models.Model):
 
     class Meta:
         verbose_name = "สรุปสัญญา Rebate"
-        verbose_name_plural = "A4. สรุปสัญญา Rebate"
+        verbose_name_plural = "A6. สรุปสัญญา Rebate"
 
 
 class RebatePayoutItem(models.Model):
