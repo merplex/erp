@@ -2543,7 +2543,7 @@ def _receipt_line_items(deliveries):
 class SalesReceiptAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     # 🎯 หน้านี้เป็น "ทะเบียนใบเสร็จ" — สร้าง/ลบเองไม่ได้ ระบบทำอัตโนมัติหลังส่งของ
     #    ผู้ใช้แก้ได้เฉพาะ "วันครบกำหนด" กับ "หมายเหตุ"
-    list_display = ('shipped_date', 'receipt_number', 'get_customer', 'due_date',
+    list_display = ('get_shipped_date', 'receipt_number', 'get_customer', 'get_due_date',
                     'get_grand_total', 'get_payment_status', 'print_button')
     list_filter = (
         ('shipped_date', DjangoDateRangeFilter),
@@ -2608,6 +2608,14 @@ class SalesReceiptAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     def get_customer(self, obj):
         c = obj.sales_order.customer
         return c.company_name if c else '-'
+
+    @admin.display(description="วันที่", ordering='shipped_date')
+    def get_shipped_date(self, obj):
+        return obj.shipped_date.strftime('%d/%m/%Y') if obj.shipped_date else '-'
+
+    @admin.display(description="วันครบกำหนด", ordering='due_date')
+    def get_due_date(self, obj):
+        return obj.due_date.strftime('%d/%m/%Y') if obj.due_date else '-'
 
     @admin.display(description="ยอดรวมสุทธิ", ordering='grand_total')
     def get_grand_total(self, obj):
@@ -2724,7 +2732,7 @@ class SalesReceiptAdmin(ExportToExcelMixin, UnfoldModelAdmin):
 class SalesInvoiceAdmin(SalesReceiptAdmin):
     # 🎯 เมนู "ใบกำกับภาษี/ใบส่งของ" — แถว/เลขที่เดียวกับ B7 ใบเสร็จรับเงิน (proxy model)
     #    ต่างกันแค่หน้าพิมพ์ (ใช้เลย์เอาต์ใบส่งของ/ใบกำกับภาษี แทนใบเสร็จรับเงิน)
-    list_display = ('shipped_date', 'get_doc_number', 'get_customer', 'due_date',
+    list_display = ('get_shipped_date', 'get_doc_number', 'get_customer', 'get_due_date',
                     'get_grand_total', 'get_payment_status', 'print_button')
     fields = ('get_doc_number', 'get_sales_order_link', 'shipped_date', 'due_date',
               'subtotal', 'vat_amount', 'grand_total', 'notes', 'get_items_preview',
