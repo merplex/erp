@@ -262,7 +262,7 @@ def barcode_info_api(request):
 
 @staff_member_required
 def product_barcodes_api(request):
-    """API: บาร์โค้ดทั้งหมดของสินค้านี้ — ใช้จำกัดตัวเลือก barcode_obj ในฟอร์ม B7 ให้เห็นเฉพาะของสินค้าที่เลือก"""
+    """API: บาร์โค้ดทั้งหมดของสินค้านี้ — ใช้จำกัดตัวเลือก barcode_obj ในฟอร์ม A6 ให้เห็นเฉพาะของสินค้าที่เลือก"""
     from .models import ProductBarcode
     product_id = request.GET.get('product_id', '').strip()
     if not product_id:

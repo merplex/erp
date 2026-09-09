@@ -1771,7 +1771,7 @@ class AdvanceOrderRule(models.Model):
         return f"{self.fo_number} - {self.get_order_type_display()} - {self.product} (ทุก {self.frequency_days} วัน)"
 
     class Meta:
-        verbose_name_plural = "B7. ใบสั่งผลิต/ใบสั่งซื้อล่วงหน้า"
+        verbose_name_plural = "A6. ใบสั่งผลิต/ใบสั่งซื้อล่วงหน้า"
 
 
 def run_due_advance_orders():

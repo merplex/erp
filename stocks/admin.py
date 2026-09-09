@@ -3447,7 +3447,7 @@ class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                 (row['production_order__order_date'], -int(row['remaining']), ref)
             )
 
-        # FO: กฎสั่งซื้อ/สั่งผลิตล่วงหน้า (B7) ที่ยังไม่เกิดเป็น PO/PD จริง — โชว์แค่ "รอบถัดไป" ของแต่ละกฎ
+        # FO: กฎสั่งซื้อ/สั่งผลิตล่วงหน้า (A6) ที่ยังไม่เกิดเป็น PO/PD จริง — โชว์แค่ "รอบถัดไป" ของแต่ละกฎ
         # เป็นยอดคาดการณ์บนกราฟ Timeline เท่านั้น ไม่นับรวมในยอด "คาดการณ์ (Plan)" ของหน้า C1/รายการหลัก
         fo_rules = AdvanceOrderRule.objects.filter(product_id__in=product_ids).exclude(
             end_date__isnull=False, end_date__lt=F('next_run_date')
