@@ -1245,6 +1245,17 @@ class SalesReceipt(models.Model):
         super().save(*args, **kwargs)
 
 
+# ── ใบกำกับภาษี/ใบส่งของ ──────────────────────────────────────────────────────
+# เป็น "มุมมอง/เมนูแยก" ของ SalesReceipt — แถวเดียวกัน เลขที่เดียวกัน (IV-YYYYMM-####)
+# 1 รอบส่งของ = 1 ใบ, sync อัตโนมัติผ่าน signal ของ SalesDeliveryLog ตัวเดียวกับใบเสร็จ
+# ต่างกันแค่หน้าพิมพ์ (เลย์เอาต์ใบส่งของ/ใบกำกับภาษี แทนใบเสร็จรับเงิน)
+class SalesInvoice(SalesReceipt):
+    class Meta:
+        proxy = True
+        verbose_name = "ใบกำกับภาษี/ใบส่งของ"
+        verbose_name_plural = "B8. ใบกำกับภาษี/ใบส่งของ (Invoice)"
+
+
 def _delivery_local_date(dt_value):
     """วันที่ (local) ของ shipped_date — ใช้เป็น key ของ 'รอบส่งของ'"""
     if hasattr(dt_value, 'date'):

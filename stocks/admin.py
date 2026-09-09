@@ -1856,7 +1856,7 @@ class PurchaseOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockM
 
 @admin.register(SalesOrder)
 class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
-    list_display = ('so_number', 'customer', 'order_date', 'status', 'vat_percent','get_diff')
+    list_display = ('so_number', 'get_po_no_customer', 'customer', 'order_date', 'status', 'vat_percent','get_diff')
     list_filter = (
         ('status', MultipleChoicesDropdownFilter),
         ('order_date', DjangoDateRangeFilter),
@@ -1871,6 +1871,10 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
     readonly_fields = ('created_by', 'status') # ล็อค status ให้ระบบจัดการออโต้
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
     actions = ['mark_as_completed', 'export_to_excel']
+
+    @admin.display(description="Customer PO", ordering='po_no_customer')
+    def get_po_no_customer(self, obj):
+        return obj.po_no_customer or '-'
 
     def get_queryset(self, request):
         # .distinct() กัน SO ซ้ำแถวเวลา filter ผ่าน items__product__tags (join หลายชั้น)
@@ -2125,6 +2129,17 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
 
         due_date = deliveries[-1].payment_due_date if deliveries else None
 
+        # เลขที่เอกสาร: พิมพ์เจาะจงรอบ -> ใช้เลขที่ใบกำกับภาษี/ใบส่งของ (IV-YYYYMM-####) ตัวเดียว
+        # กับใบเสร็จรับเงินของรอบนั้น (SalesReceipt/SalesInvoice = แถวเดียวกัน) ให้ทั้ง 2 จุดพิมพ์
+        # โชว์เลขตรงกัน; พิมพ์รวมทุกรอบ (ไม่ระบุ shipped_date) ยัง fallback เป็นเลขใบสั่งขาย
+        doc_number = obj.so_number
+        if batch_date:
+            iv_number = (SalesReceipt.objects
+                         .filter(sales_order=obj, shipped_date=batch_date)
+                         .values_list('receipt_number', flat=True).first())
+            if iv_number:
+                doc_number = iv_number
+
         salesperson = '-'
         if obj.created_by_id:
             salesperson = obj.created_by.get_full_name() or obj.created_by.username
@@ -2139,12 +2154,14 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
             'vat_amount': vat_amount,
             'grand_total': grand_total,
             'amount_words': thai_baht_text(grand_total),
-            'doc_number': obj.so_number,
+            'doc_number': doc_number,
             'doc_date': doc_date,
             'credit_days': obj.customer.payment_term if obj.customer_id else 0,
             'due_date': due_date,
             'salesperson': salesperson,
             'customer': obj.customer,
+            'po_no_customer': obj.po_no_customer,
+            'notes': obj.notes,
             'company_name': settings.COMPANY_NAME,
             'company_address': settings.COMPANY_ADDRESS,
             'company_tax_id': settings.COMPANY_TAX_ID,
@@ -2154,7 +2171,7 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
                 {'label': 'ต้นฉบับ (เอกสารออกเป็นชุด)', 'page_no': 1},
                 {'label': 'สำเนา (เอกสารออกเป็นชุด)', 'page_no': 2},
             ],
-            'title': f"ใบส่งสินค้า {obj.so_number}",
+            'title': f"ใบส่งสินค้า/ใบกำกับภาษี {doc_number}",
         }
         return TemplateResponse(request, 'admin/sales_delivery_print.html', context)
 
@@ -2701,6 +2718,98 @@ class SalesReceiptAdmin(ExportToExcelMixin, UnfoldModelAdmin):
 
     class Media:
         js = ('js/admin_sum_selected.js',)
+
+
+@admin.register(SalesInvoice)
+class SalesInvoiceAdmin(SalesReceiptAdmin):
+    # 🎯 เมนู "ใบกำกับภาษี/ใบส่งของ" — แถว/เลขที่เดียวกับ B7 ใบเสร็จรับเงิน (proxy model)
+    #    ต่างกันแค่หน้าพิมพ์ (ใช้เลย์เอาต์ใบส่งของ/ใบกำกับภาษี แทนใบเสร็จรับเงิน)
+    list_display = ('shipped_date', 'get_doc_number', 'get_customer', 'due_date',
+                    'get_grand_total', 'get_payment_status', 'print_button')
+    fields = ('get_doc_number', 'get_sales_order_link', 'shipped_date', 'due_date',
+              'subtotal', 'vat_amount', 'grand_total', 'notes', 'get_items_preview',
+              'created_at', 'updated_at')
+    readonly_fields = ('get_doc_number', 'get_sales_order_link', 'shipped_date', 'subtotal',
+                       'vat_amount', 'grand_total', 'get_items_preview', 'created_at', 'updated_at')
+
+    @admin.display(description="เลขที่", ordering='receipt_number')
+    def get_doc_number(self, obj):
+        return obj.receipt_number
+
+    def get_urls(self):
+        # ข้าม SalesReceiptAdmin.get_urls (มันตั้งชื่อ url เป็น stocks_salesreceipt_print ตายตัว)
+        # ไปเรียก base โดยตรง แล้วผูกชื่อ url ของเมนูนี้เอง
+        custom_urls = [
+            path('<int:object_id>/print/', self.admin_site.admin_view(self.print_view),
+                 name='stocks_salesinvoice_print'),
+        ]
+        return custom_urls + UnfoldModelAdmin.get_urls(self)
+
+    @admin.display(description="พิมพ์")
+    def print_button(self, obj):
+        url = reverse('admin:stocks_salesinvoice_print', args=[obj.pk])
+        return format_html(
+            '<a href="{}" target="_blank" style="display:inline-block; background:#6f42c1; '
+            'color:#fff; padding:4px 14px; border-radius:4px; font-weight:bold; '
+            'text-decoration:none; white-space:nowrap;">🖨️ พิมพ์</a>', url)
+
+    def print_view(self, request, object_id):
+        from django.core.exceptions import PermissionDenied
+        from django.http import Http404
+        from django.conf import settings
+        from .utils import thai_baht_text
+        if not self.has_view_permission(request):
+            raise PermissionDenied
+        obj = (SalesReceipt.objects
+               .select_related('sales_order', 'sales_order__customer', 'sales_order__created_by')
+               .filter(pk=object_id).first())
+        if obj is None:
+            raise Http404("ไม่พบใบกำกับภาษี/ใบส่งของนี้")
+        so = obj.sales_order
+        deliveries = list(
+            so.delivery_logs
+            .annotate(_d=TruncDate('shipped_date')).filter(_d=obj.shipped_date)
+            .order_by('shipped_date', 'id').select_related('product', 'barcode_obj')
+        )
+        line_items, subtotal = _receipt_line_items(deliveries)
+        vat_percent = so.vat_percent or Decimal('0')
+        vat_amount = (subtotal * vat_percent / Decimal('100')).quantize(Decimal('0.01'))
+        grand_total = subtotal + vat_amount
+
+        salesperson = '-'
+        if so.created_by_id:
+            salesperson = so.created_by.get_full_name() or so.created_by.username
+
+        context = {
+            **self.admin_site.each_context(request),
+            'obj': obj,
+            'deliveries': deliveries,
+            'line_items': line_items,
+            'subtotal': subtotal,
+            'vat_percent': vat_percent,
+            'vat_amount': vat_amount,
+            'grand_total': grand_total,
+            'amount_words': thai_baht_text(grand_total),
+            'doc_number': obj.receipt_number,
+            'doc_date': obj.shipped_date,
+            'credit_days': so.customer.payment_term if so.customer_id else 0,
+            'due_date': obj.due_date,
+            'salesperson': salesperson,
+            'customer': so.customer,
+            'po_no_customer': so.po_no_customer,
+            'notes': obj.notes,
+            'company_name': settings.COMPANY_NAME,
+            'company_address': settings.COMPANY_ADDRESS,
+            'company_tax_id': settings.COMPANY_TAX_ID,
+            'company_phone': settings.COMPANY_PHONE,
+            'company_mobile': settings.COMPANY_MOBILE,
+            'copies': [
+                {'label': 'ต้นฉบับ (เอกสารออกเป็นชุด)', 'page_no': 1},
+                {'label': 'สำเนา (เอกสารออกเป็นชุด)', 'page_no': 2},
+            ],
+            'title': f"ใบกำกับภาษี/ใบส่งของ {obj.receipt_number}",
+        }
+        return TemplateResponse(request, 'admin/sales_delivery_print.html', context)
 
 
 class ProductionMaterialUsageInline(UnfoldTabularInline):

@@ -2,7 +2,7 @@
 <html lang="th">
 <head>
 <meta charset="utf-8">
-<title>ใบส่งสินค้า {{ obj.so_number }}</title>
+<title>{{ title|default:"ใบส่งสินค้า" }}</title>
 <style>
     @page {
         size: A4;
@@ -240,8 +240,8 @@
 
         <div class="notes-block">
             <div class="section-label">หมายเหตุ</div>
-            <div>อ้างอิงเลขที่ใบสั่งซื้อ : {{ obj.po_no_customer|default:"-" }}</div>
-            {% if obj.notes %}<div>{{ obj.notes }}</div>{% endif %}
+            <div>อ้างอิงเลขที่ใบสั่งซื้อ : {{ po_no_customer|default:"-" }}</div>
+            {% if notes %}<div>{{ notes }}</div>{% endif %}
         </div>
 
         <div class="signature-row">
