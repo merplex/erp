@@ -785,8 +785,7 @@ class PurchaseReceiptLogInline(UnfoldTabularInline):
             return "ใบสั่งซื้อถูกยกเลิก"
         if po.status == 'Completed':
             return "ใบสั่งซื้อปิดงานแล้ว"
-        if po.payment_status == 'Paid':
-            return "จ่ายเงินครบแล้ว"
+        # ไม่ล็อกตอน "จ่ายเงินครบแล้ว" เพราะ PO ต่างประเทศมักจ่ายครบก่อนของมาถึง ต้องยังรับของได้
         return None
 
     def has_add_permission(self, request, obj=None):
@@ -1790,8 +1789,6 @@ class PurchaseOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockM
             reasons = []
             if obj.status in ('Completed', 'Cancelled'):
                 reasons.append(f"สถานะ '{obj.status}'")
-            if obj.payment_status == 'Paid':
-                reasons.append("จ่ายเงินครบแล้ว")
             if reasons:
                 messages.warning(request,
                     f"🔒 เอกสารนี้ถูกล็อค ({', '.join(reasons)}) — ไม่สามารถเพิ่ม/แก้ไข/ลบรายการรับของได้")
