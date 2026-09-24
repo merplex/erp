@@ -4027,10 +4027,12 @@ class FinanceReportAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin
         vat_p = obj.vat_percent or 0
         grand_total = subtotal + (subtotal * vat_p / 100)
         paid = getattr(obj, '_total_paid', None) or 0
-        bal = grand_total - paid
+        bal = round_money(grand_total - paid)
         if bal <= 0:
             return format_html('<span style="color:green; font-weight:bold;">{}</span>', "0.00")
-        return format_html('<span style="color:red; font-weight:bold;">-{}</span>', f"{bal:,.2f}")
+        # ต่อท้ายด้วย % ที่ยังค้างจ่ายเทียบกับยอดสุทธิ เช่น ค้าง 70,000 จาก 100,000 → -70,000.00(70%)
+        pct = f"({bal / grand_total * 100:.0f}%)" if grand_total > 0 else ""
+        return format_html('<span style="color:red; font-weight:bold;">-{}{}</span>', f"{bal:,.2f}", pct)
     get_balance_due_list.short_description = "ค้างจ่าย"
 
     class Media:
@@ -4077,10 +4079,13 @@ class IncomeReportAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin)
 
         vat_p = obj.vat_percent or 0
         grand_total = subtotal + (subtotal * vat_p / 100)
-        balance = grand_total - paid
+        balance = round_money(grand_total - paid)
 
         color = "red" if balance > 0 else "green"
         formatted_balance = f"{float(balance):,.2f}"
+        # ต่อท้ายด้วย % ที่ยังค้างรับเทียบกับยอดสุทธิ เช่น 70,000.00(70%)
+        if balance > 0 and grand_total > 0:
+            formatted_balance += f"({balance / grand_total * 100:.0f}%)"
         return format_html('<b style="color:{};">{}</b>', color, formatted_balance)
     get_balance_due_display.short_description = "ค้างรับ"
 
