@@ -16,7 +16,7 @@ from .models import (
     IncomeReport, ShipmentAccounting, InternationalPurchaseTracking,
     SalesReport  # 👈 เพิ่มตัวที่ทำพังเมื่อกี้เข้าไปแล้วครับ!
 )
-from .models import DocumentLock
+from .models import DocumentLock, round_money
 # 1. เปลี่ยนชื่อที่ปรากฏบนหัวเอกสาร (Header สีน้ำเงิน)
 admin.site.site_header = "Meebun ERP"
 
@@ -3772,7 +3772,7 @@ class PaymentDateForm(forms.Form):
 def settle_income_special(modeladmin, request, queryset):
     if 'apply' in request.POST:
         # ตัดจบสถานะอย่างเดียว ไม่สร้างบันทึกการเงินเพิ่ม
-        count = queryset.update(status='COMPLETED', payment_status='SETTLED')
+        count = queryset.update(status='Completed', payment_status='SETTLED')
         modeladmin.message_user(request, f"ตัดจบรายการรายรับสำเร็จ {count} รายการ (SETTLED)", messages.SUCCESS)
         return None
 
@@ -3789,7 +3789,7 @@ settle_income_special.short_description = "🎯 ปิดยอดกรณี�
 # ✅ ปุ่มใหม่สำหรับฝั่งรายจ่าย (Purchase)
 def settle_purchase_special(modeladmin, request, queryset):
     if 'apply' in request.POST:
-        count = queryset.update(status='COMPLETED', payment_status='SETTLED')
+        count = queryset.update(status='Completed', payment_status='SETTLED')
         modeladmin.message_user(request, f"ตัดจบรายการรายจ่ายสำเร็จ {count} รายการ (SETTLED)", messages.SUCCESS)
         return None
 
@@ -3813,7 +3813,8 @@ def settle_and_close_orders(modeladmin, request, queryset):
             updated_count = 0
             
             for obj in queryset:
-                balance = obj.balance_due
+                # ปัดเป็น 2 ตำแหน่ง ไม่งั้นเศษ VAT (เช่น 107.0749) ทำให้ยอดที่บันทึกได้ (107.07) ไม่ครบ สถานะค้างที่ Partial
+                balance = round_money(obj.balance_due)
                 # สร้างรายการจ่ายเงิน (ตามยอดที่ค้าง)
                 if balance > 0:
                     if isinstance(obj, PurchaseOrder):
@@ -3825,7 +3826,7 @@ def settle_and_close_orders(modeladmin, request, queryset):
                     updated_count += 1
                 
                 # บังคับอัปเดตสถานะการเงินเป็น "Paid"
-                if obj.balance_due <= 0:
+                if round_money(obj.balance_due) <= 0:
                     obj.payment_status = 'Paid'
                 else:
                     obj.payment_status = 'Partial' # เพิ่มบรรทัดนี้เผื่อปิดยอดไม่หมดค่ะ
@@ -3957,7 +3958,7 @@ class FinanceReportAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin
             paid = paid_data['amount__sum'] or 0
         
             # ยอดสุทธิที่ต้องจ่าย
-            total = obj.grand_total
+            total = round_money(obj.grand_total)
 
             update_fields = ['payment_status']
             if paid <= 0:
@@ -4149,7 +4150,7 @@ class IncomeReportAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin)
         # ฝั่งขายใช้ SalesPayment (เปรมต้องเช็ค related_name ใน model นะคะ)
         # ถ้าไม่มีใช้ salespayment_set
         paid = sum(p.amount for p in obj.payments.all())
-        total = obj.grand_total
+        total = round_money(obj.grand_total)
         
         if paid <= 0:
             obj.payment_status = 'Unpaid'
@@ -5192,7 +5193,7 @@ class InternationalPurchaseTrackingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         if formset.model == PurchasePaymentLog:
             from django.db.models import Sum
             paid = PurchasePaymentLog.objects.filter(purchase_order=obj).aggregate(Sum('amount'))['amount__sum'] or 0
-            total = obj.grand_total
+            total = round_money(obj.grand_total)
             update_fields = ['payment_status']
 
             if paid <= 0:

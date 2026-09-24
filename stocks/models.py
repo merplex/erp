@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from django.db import models
 from django.db.models import Sum
 from django.db.models.signals import post_delete, post_save
@@ -14,6 +14,12 @@ from django.dispatch import receiver
 import random # ✅ เพิ่มไว้บนสุดของไฟล์
 import datetime
 import re
+
+
+def round_money(value):
+    """ปัดยอดเงินเป็น 2 ตำแหน่ง (ยอดที่คิด VAT อาจมีทศนิยมเกิน แต่ช่องเงินใน DB เก็บได้แค่ 2 ตำแหน่ง)"""
+    return Decimal(str(value or 0)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
 
 class DocumentLock(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -519,6 +525,7 @@ class PurchaseOrder(models.Model):
         ('Unpaid', '🔴 ยังไม่จ่าย'),
         ('Partial', '🟠 จ่ายบางส่วน'),
         ('Paid', '🟢 จ่ายครบแล้ว'),
+        ('SETTLED', '⚪ ปิดยอดกรณีพิเศษ'),
     ]
 
     # --- Fields ---
@@ -621,7 +628,7 @@ class PurchaseOrder(models.Model):
 
     def update_payment_status(self):
         paid = self.total_paid_amount
-        total = self.grand_total
+        total = round_money(self.grand_total)
         if total > 0:
             if paid >= total: self.payment_status = 'Paid'
             elif paid > 0: self.payment_status = 'Partial'
@@ -834,7 +841,8 @@ class SalesOrder(models.Model):
         choices=[
             ('Unpaid', '🔴 ยังไม่รับเงิน'),
             ('Partial', '🟠 รับเงินบางส่วน'),
-            ('Paid', '🟢 รับเงินครบแล้ว')
+            ('Paid', '🟢 รับเงินครบแล้ว'),
+            ('SETTLED', '⚪ ปิดยอดกรณีพิเศษ'),
         ],
         default='Unpaid',
         verbose_name="สถานะการรับเงิน"
@@ -844,7 +852,7 @@ class SalesOrder(models.Model):
     def update_payment_status(self):
         total_received = self.payments.aggregate(Sum('amount'))['amount__sum'] or Decimal(0)
         
-        if total_received >= self.grand_total:
+        if total_received >= round_money(self.grand_total):
             self.payment_status = 'Paid'
         elif total_received > 0:
             self.payment_status = 'Partial'
