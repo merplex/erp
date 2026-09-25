@@ -2254,10 +2254,16 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
                 .annotate(_d=TruncDate('shipped_date'))
                 .order_by('_d').values_list('_d', flat=True).distinct()
             )
+            # เลข IV ของแต่ละรอบ (1 ใบสั่งขาย + 1 วัน = 1 ใบ) โชว์หลังปุ่มพิมพ์
+            receipt_numbers = dict(
+                SalesReceipt.objects.filter(sales_order=obj)
+                .values_list('shipped_date', 'receipt_number')
+            )
             batches = [
                 {
                     'date': d,
                     'date_iso': d.isoformat(),
+                    'receipt_number': receipt_numbers.get(d, ''),
                     # ⏰ default เวลาเป็น 10:00 เสมอ (ตามที่เปรมขอ) — เดิมเก็บแค่วันที่ (group ตาม
                     # วันที่ล้วนๆ กันรายการเก่าที่เวลาสุ่มไม่ตรงกันแตกเป็นคนละรอบ) ตอนแก้ไขย้อนหลัง
                     # เลยต้องมีเวลาให้กรอกด้วยจะได้ตรงกับตอนสร้างรอบใหม่ — ใช้ dropdown ชั่วโมง/นาที
@@ -2296,6 +2302,8 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
 
             shipment_panel_html = render_to_string('admin/sales_shipment_panel.html', {
                 'batches': batches,
+                # เลข IV ที่ใบถัดไปจะได้ (ยังไม่จองเลข) — รอบใหม่จะได้เลขนี้ / รอบเดิมถ้าแก้วันที่ก็ได้เลขนี้แทน
+                'next_receipt_number': generate_number('IV', SalesReceipt, 'receipt_number'),
                 'pending_items': list(pending_map.values()),
                 'next_batch_no': len(batches) + 1,
                 'ship_url': reverse('admin:stocks_salesorder_ship', args=[obj.pk]),
