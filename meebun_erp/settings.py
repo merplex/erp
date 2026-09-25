@@ -275,6 +275,7 @@ UNFOLD = {
                     {"title": "A5. การทำบัญชี DC/Rebate",    "icon": "account_balance", "link": "/admin/stocks/shipmentaccounting/"},
                     {"title": "A6. สรุปสัญญา Rebate",        "icon": "handshake",       "link": "/admin/stocks/rebatepayout/"},
                     {"title": "A7. สัญญาการขาย",             "icon": "description",     "link": "/admin/stocks/salescontract/"},
+                    {"title": "A8. ใบลดหนี้",                "icon": "receipt_long",    "link": "/admin/stocks/creditnote/"},
                 ],
             },
         ],

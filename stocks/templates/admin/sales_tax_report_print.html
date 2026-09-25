@@ -47,7 +47,11 @@
             <td class="name">{{ r.customer }}</td>
             <td class="c">{{ r.tax_id }}</td>
             <td class="c">{{ r.branch }}</td>
-            {% if r.subtotal < 0 %}
+            {% if r.cancelled %}
+            <td class="n"></td>
+            <td class="n"></td>
+            <td class="c" style="color:#dc2626;font-weight:700;">ยกเลิก</td>
+            {% elif r.subtotal < 0 %}
             <td class="n">({{ r.subtotal_abs|floatformat:"2g" }})</td>
             <td class="n">({{ r.vat_abs|floatformat:"2g" }})</td>
             <td class="n">({{ r.total_abs|floatformat:"2g" }})</td>

@@ -955,7 +955,9 @@ class SalesDeliveryLogInline(UnfoldTabularInline):
     }
 
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related('barcode_obj', 'user')
+        # แถวรับคืนจากใบลดหนี้ไม่ใช่การส่งของ — จัดการที่เมนู A8 เท่านั้น
+        return (super().get_queryset(request).filter(credit_note_item__isnull=True)
+                .select_related('barcode_obj', 'user'))
 
     def get_formset(self, request, obj=None, **kwargs):
         """Inject so_id เข้า form class เพื่อ validate barcode ใน SO"""
@@ -1160,16 +1162,25 @@ def build_product_history_rows(product):
     # 2. ขายออก — ส่งของตาม SO
     deliveries = (
         SalesDeliveryLog.objects.filter(product=product)
-        .select_related('sales_order', 'sales_order__customer')
+        .select_related('sales_order', 'sales_order__customer', 'credit_note_item__credit_note')
     )
     for d in deliveries:
         unit_price = (d.shipment_value / d.quantity_shipped) if d.quantity_shipped else Decimal('0')
+        if d.credit_note_item_id:
+            # รับคืนจากใบลดหนี้ — quantity_shipped/shipment_value ติดลบ => สต๊อกเข้า (ค่าบวก)
+            cn = d.credit_note_item.credit_note
+            type_key, type_label = 'credit_note', '↩️ รับคืน (ลดหนี้)'
+            ref_number, ref_url = cn.cn_number, reverse('admin:stocks_creditnote_change', args=[cn.pk])
+        else:
+            type_key, type_label = 'sale', '📤 ขายออก (ส่งของ)'
+            ref_number = d.sales_order.so_number
+            ref_url = reverse('admin:stocks_salesorder_change', args=[d.sales_order_id])
         rows.append({
             'date': d.shipped_date,
-            'type': 'sale',
-            'type_label': '📤 ขายออก (ส่งของ)',
-            'ref_number': d.sales_order.so_number,
-            'ref_url': reverse('admin:stocks_salesorder_change', args=[d.sales_order_id]),
+            'type': type_key,
+            'type_label': type_label,
+            'ref_number': ref_number,
+            'ref_url': ref_url,
             # ✅ ส่งของ = สต๊อกออก ต้องเป็นค่าลบ (เทมเพลตใช้เครื่องหมายตัดสีแดง/เขียว)
             'quantity': -d.quantity_shipped,
             'unit_price': unit_price,
@@ -1908,7 +1919,7 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
     )
     list_filter_submit = True
     search_fields = ('so_number', 'po_no_customer', 'customer__company_name',
-        'items__product__barcodes__code')
+        'items__product__barcodes__code', 'receipts__receipt_number')
     autocomplete_fields = ['customer']
     inlines = [SalesItemInline, SalesDeliveryLogInline, SalesPaymentInline]
     readonly_fields = ('created_by', 'status') # ล็อค status ให้ระบบจัดการออโต้
@@ -2107,7 +2118,8 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
         obj = self.get_object(request, object_id)
         if obj is None:
             raise Http404("ไม่พบใบสั่งขายนี้")
-        deliveries = obj.delivery_logs.all().order_by('shipped_date', 'id').select_related('product', 'barcode_obj')
+        deliveries = (obj.delivery_logs.filter(credit_note_item__isnull=True)
+                      .order_by('shipped_date', 'id').select_related('product', 'barcode_obj'))
         # 🎯 กด "พิมพ์" จากรอบใดรอบหนึ่งใน shipment panel (ดู ship_batch_view) จะแนบ shipped_date
         # มาด้วย เพื่อพิมพ์เฉพาะรอบนั้น — ถ้าไม่มี query param นี้ (เช่น เข้าจากปุ่มพิมพ์เดิมที่หัว
         # inline) ยังคง behavior เดิมคือโชว์ประวัติการส่งของทั้งหมด
@@ -2178,7 +2190,7 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
         doc_number = obj.so_number
         if batch_date:
             iv_number = (SalesReceipt.objects
-                         .filter(sales_order=obj, shipped_date=batch_date)
+                         .filter(sales_order=obj, shipped_date=batch_date, is_cancelled=False)
                          .values_list('receipt_number', flat=True).first())
             if iv_number:
                 doc_number = iv_number
@@ -2250,13 +2262,13 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
             # (ผ่านระบบ auto-save เดิม) มี shipped_date เป็นเวลาสุ่มไม่ตรงกันเป๊ะ ถ้า group ด้วย
             # datetime ตรงๆ แต่ละแถวเก่าจะกลายเป็นคนละ "รอบ" หมด ยาวรกจนใช้งานไม่ได้
             batch_dates = list(
-                SalesDeliveryLog.objects.filter(sales_order=obj)
+                SalesDeliveryLog.objects.filter(sales_order=obj, credit_note_item__isnull=True)
                 .annotate(_d=TruncDate('shipped_date'))
                 .order_by('_d').values_list('_d', flat=True).distinct()
             )
             # เลข IV ของแต่ละรอบ (1 ใบสั่งขาย + 1 วัน = 1 ใบ) โชว์หลังปุ่มพิมพ์
             receipt_numbers = dict(
-                SalesReceipt.objects.filter(sales_order=obj)
+                SalesReceipt.objects.filter(sales_order=obj, is_cancelled=False)
                 .values_list('shipped_date', 'receipt_number')
             )
             batches = [
@@ -2283,7 +2295,7 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
                 factor = item.barcode_obj.conversion_factor or 1
                 ordered_pieces = item.quantity_ordered or 0
                 shipped_units = SalesDeliveryLog.objects.filter(
-                    sales_order=obj, barcode_obj=item.barcode_obj
+                    sales_order=obj, barcode_obj=item.barcode_obj, credit_note_item__isnull=True
                 ).aggregate(total=Sum('quantity_shipped'))['total'] or 0
                 remaining_pieces = ordered_pieces - shipped_units * factor
                 remaining = remaining_pieces // factor
@@ -2392,7 +2404,7 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
 
     def get_diff(self, obj):
         ordered = sum(i.quantity_ordered for i in obj.items.all())
-        shipped = sum(l.quantity_shipped for l in obj.delivery_logs.all())
+        shipped = sum(l.quantity_shipped for l in obj.delivery_logs.all() if not l.credit_note_item_id)
         return color_diff(shipped - ordered)
     get_diff.short_description = "สถานะส่งของ"
 
@@ -2608,11 +2620,19 @@ def _tax_report_data(receipts):
             'date': r.shipped_date, 'doc_number': r.receipt_number,
             'customer': c.company_name if c else '-', 'tax_id': (c.tax_id if c else '') or '',
             'branch': (c.branch if c else '') or '',
-            'subtotal': r.subtotal, 'vat': r.vat_amount, 'total': r.grand_total,
+            # ใบที่ยกเลิก (ลบรอบส่ง/เปลี่ยนวันที่) ยังต้องโชว์เลขในรายงาน แต่ไม่นับยอด
+            'cancelled': r.is_cancelled,
+            'subtotal': Decimal('0') if r.is_cancelled else r.subtotal,
+            'vat': Decimal('0') if r.is_cancelled else r.vat_amount,
+            'total': Decimal('0') if r.is_cancelled else r.grand_total,
         })
     dates = [r.shipped_date for r in receipts]
     if dates:
-        rows.extend(_credit_note_tax_rows(min(dates), max(dates)))
+        # ใบลดหนี้: ทั้งเดือนของงวดภาษี (ต้นเดือนแรก - สิ้นเดือนสุดท้าย) ไม่ใช่แค่ช่วงวันที่ของใบกำกับที่เลือก
+        import calendar
+        first, last = min(dates), max(dates)
+        month_end = last.replace(day=calendar.monthrange(last.year, last.month)[1])
+        rows.extend(_credit_note_tax_rows(first.replace(day=1), month_end))
 
     for i, row in enumerate(rows, start=1):
         row['no'] = i
@@ -2641,7 +2661,18 @@ def _tax_report_data(receipts):
 
 def _credit_note_tax_rows(date_from, date_to):
     """ใบลดหนี้ในช่วงวันที่ — ยอดติดลบ (แสดงในวงเล็บ) ต่อท้ายรายงานภาษีขาย"""
-    return []
+    rows = []
+    cns = (CreditNote.objects.filter(doc_date__gte=date_from, doc_date__lte=date_to)
+           .select_related('sales_order__customer').order_by('doc_date', 'cn_number'))
+    for cn in cns:
+        c = cn.sales_order.customer
+        rows.append({
+            'date': cn.doc_date, 'doc_number': cn.cn_number,
+            'customer': c.company_name if c else '-', 'tax_id': (c.tax_id if c else '') or '',
+            'branch': (c.branch if c else '') or '', 'cancelled': False,
+            'subtotal': -cn.subtotal, 'vat': -cn.vat_amount, 'total': -cn.grand_total,
+        })
+    return rows
 
 
 TAX_REPORT_COLUMNS = ['ลำดับที่', 'วัน/เดือน/ปี', 'เลขที่เอกสาร', 'ชื่อลูกค้า', 'เลขผู้เสียภาษี',
@@ -2674,12 +2705,19 @@ def tax_report_excel_response(data, filename):
     r = head_row
     for row in data['rows']:
         r += 1
+        if row['cancelled']:
+            amounts = [None, None, 'ยกเลิก']
+        else:
+            amounts = [row['subtotal'], row['vat'], row['total']]
         values = [row['no'], row['date'].strftime('%d/%m/%Y'), row['doc_number'], row['customer'],
-                  row['tax_id'], row['branch'], row['subtotal'], row['vat'], row['total']]
+                  row['tax_id'], row['branch'], *amounts]
         for col, v in enumerate(values, start=1):
             cell = ws.cell(row=r, column=col, value=v)
             cell.border = border
-            if col >= 7:
+            if col >= 7 and row['cancelled']:
+                cell.font = Font(bold=True, color='FF0000')
+                cell.alignment = Alignment(horizontal='center')
+            elif col >= 7:
                 cell.number_format = money
             elif col in (1, 2, 3, 5):
                 cell.alignment = Alignment(horizontal='center')
@@ -2728,6 +2766,7 @@ class SalesReceiptAdmin(TaxReportActionsMixin, UnfoldModelAdmin):
     list_filter = (
         ('shipped_date', DjangoDateRangeFilter),
         ('due_date', DjangoDateRangeFilter),
+        'is_cancelled',
         ('sales_order__payment_status', MultipleChoicesDropdownFilter),
         ('sales_order__customer', AutocompleteSelectMultipleFilter),
     )
@@ -2763,7 +2802,7 @@ class SalesReceiptAdmin(TaxReportActionsMixin, UnfoldModelAdmin):
             from django.db.models import Exists, OuterRef
             # จับเฉพาะ delivery log ที่อยู่ "รอบเดียวกับใบเสร็จ" (SO + วันที่ตรงกัน)
             # -> ค้นชื่อสินค้า / บาร์โค้ด / เลขใบขนส่ง(MB Invoice) ในใบเสร็จได้ตรงจริง ไม่ปนรอบอื่น
-            batch_logs = SalesDeliveryLog.objects.annotate(
+            batch_logs = SalesDeliveryLog.objects.filter(credit_note_item__isnull=True).annotate(
                 _bd=TruncDate('shipped_date')
             ).filter(
                 sales_order_id=OuterRef('sales_order_id'),
@@ -2803,6 +2842,8 @@ class SalesReceiptAdmin(TaxReportActionsMixin, UnfoldModelAdmin):
 
     @admin.display(description="สถานะ", ordering='sales_order__payment_status')
     def get_payment_status(self, obj):
+        if obj.is_cancelled:
+            return mark_safe('<b style="color:#dc2626;">ยกเลิก</b>')
         return obj.sales_order.get_payment_status_display()
 
     @admin.display(description="ใบสั่งขายอ้างอิง")
@@ -2814,6 +2855,8 @@ class SalesReceiptAdmin(TaxReportActionsMixin, UnfoldModelAdmin):
 
     @admin.display(description="พิมพ์")
     def print_button(self, obj):
+        if obj.is_cancelled:
+            return mark_safe('<span style="color:#dc2626;font-weight:bold;">ยกเลิก</span>')
         url = reverse('admin:stocks_salesreceipt_print', args=[obj.pk])
         return format_html(
             '<a href="{}" target="_blank" style="display:inline-block; background:#6f42c1; '
@@ -2823,7 +2866,7 @@ class SalesReceiptAdmin(TaxReportActionsMixin, UnfoldModelAdmin):
     @admin.display(description="รายการสินค้าในใบเสร็จ")
     def get_items_preview(self, obj):
         deliveries = list(
-            obj.sales_order.delivery_logs
+            obj.sales_order.delivery_logs.filter(credit_note_item__isnull=True)
             .annotate(_d=TruncDate('shipped_date')).filter(_d=obj.shipped_date)
             .order_by('shipped_date', 'id').select_related('product', 'barcode_obj')
         )
@@ -2860,7 +2903,7 @@ class SalesReceiptAdmin(TaxReportActionsMixin, UnfoldModelAdmin):
             raise Http404("ไม่พบใบเสร็จรับเงินนี้")
         so = obj.sales_order
         deliveries = list(
-            so.delivery_logs
+            so.delivery_logs.filter(credit_note_item__isnull=True)
             .annotate(_d=TruncDate('shipped_date')).filter(_d=obj.shipped_date)
             .order_by('shipped_date', 'id').select_related('product', 'barcode_obj')
         )
@@ -2935,6 +2978,8 @@ class SalesInvoiceAdmin(SalesReceiptAdmin):
 
     @admin.display(description="พิมพ์")
     def print_button(self, obj):
+        if obj.is_cancelled:
+            return mark_safe('<span style="color:#dc2626;font-weight:bold;">ยกเลิก</span>')
         url = reverse('admin:stocks_salesinvoice_print', args=[obj.pk])
         return format_html(
             '<a href="{}" target="_blank" style="display:inline-block; background:#6f42c1; '
@@ -2955,7 +3000,7 @@ class SalesInvoiceAdmin(SalesReceiptAdmin):
             raise Http404("ไม่พบใบกำกับภาษี/ใบส่งของนี้")
         so = obj.sales_order
         deliveries = list(
-            so.delivery_logs
+            so.delivery_logs.filter(credit_note_item__isnull=True)
             .annotate(_d=TruncDate('shipped_date')).filter(_d=obj.shipped_date)
             .order_by('shipped_date', 'id').select_related('product', 'barcode_obj')
         )
@@ -4195,6 +4240,10 @@ class IncomeReportAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin)
                 ExpressionWrapper(F('items__quantity_ordered') * F('items__sale_price'), output_field=DField())
             ),
             _total_paid=Sum('payments__amount', filter=Q(payments__amount__gt=0)),
+            _credited=Coalesce(Subquery(
+                CreditNote.objects.filter(sales_order=OuterRef('pk')).order_by()
+                .values('sales_order').annotate(t=Sum('grand_total')).values('t')[:1]
+            ), Value(Decimal('0')), output_field=DField()),
         )
 
     @admin.display(description="ค้างรับ")
@@ -4213,6 +4262,11 @@ class IncomeReportAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin)
 
         vat_p = obj.vat_percent or 0
         grand_total = subtotal + (subtotal * vat_p / 100)
+        credited = getattr(obj, '_credited', None)
+        if credited is None:
+            credited = obj.credited_total
+        # ยอดที่ต้องเก็บจริง = ยอดสุทธิ - ใบลดหนี้ (ใช้เป็นฐานของ % ค้างรับด้วย)
+        grand_total -= credited
         balance = round_money(grand_total - paid)
 
         color = "red" if balance > 0 else "green"
@@ -4678,6 +4732,16 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             row['qty'] += qty
             row['value_before_vat'] += value_before_vat
 
+        # หักใบลดหนี้ของสินค้านี้ในใบสั่งขายเดียวกัน (จำนวนเป็นชิ้น, มูลค่าก่อน VAT)
+        cn_items = (CreditNoteItem.objects
+                    .filter(sales_item__product=product, sales_item__sales_order_id__in=list(rows_by_so))
+                    .select_related('sales_item__barcode_obj'))
+        for ci in cn_items:
+            factor = (ci.sales_item.barcode_obj.conversion_factor if ci.sales_item.barcode_obj else None) or Decimal('1')
+            row = rows_by_so[ci.sales_item.sales_order_id]
+            row['qty'] -= Decimal(ci.quantity) * Decimal(factor)
+            row['value_before_vat'] -= ci.amount
+
         rows = []
         for row in sorted(rows_by_so.values(), key=lambda r: (r['order_date'], r['so_number'])):
             vat_amount = row['value_before_vat'] * (row['vat_percent'] / Decimal('100'))
@@ -4919,18 +4983,32 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         #    ทั้ง 2 ตัวนี้ join ผ่าน path เดียวกันคือ sales_items ORM จะ reuse join เดียวกันให้อัตโนมัติ
         # ⚠️ ตัด so_numbers (StringAgg) ออก — ไม่โชว์คอลัมน์ SO ในหน้า list แล้ว (ดูได้จากหน้ารายละเอียด
         # ที่คลิกเข้าไปแทน) ตัดออกช่วยลดโหลด query ด้วยเพราะ StringAgg ระดับนี้ค่อนข้างหนัก
+        cn_base = (CreditNoteItem.objects
+                   .filter(sales_item__product=OuterRef('pk'))
+                   .filter(self._build_period_q('sales_item__sales_order__', period, now))
+                   .order_by().values('sales_item__product'))
+        cn_qty = cn_base.annotate(t=Sum(
+            F('quantity') * Coalesce(F('sales_item__barcode_obj__conversion_factor'), Value(1)),
+            output_field=DecimalField())).values('t')[:1]
+        cn_val = cn_base.annotate(t=Sum('amount')).values('t')[:1]
         return qs.annotate(
             # 🎯 ยอด "ส่งสำเร็จ" (quantity_shipped) เท่านั้น — ดึงยอด 700 มาโชว์ (ไม่ใช่ 2,100 และไม่เบิ้ลเป็น 6,300)
-            total_qty=Sum('sales_items__quantity_shipped', filter=date_filter),
+            _gross_qty=Sum('sales_items__quantity_shipped', filter=date_filter),
             # sale_price = ราคาต่อหน่วยบาร์โค้ด แต่ quantity_shipped สะสมเป็นชิ้นเสมอ
             # (ดู SalesDeliveryLog.save) จึงต้องหารด้วย conversion_factor ก่อนคูณราคา
-            total_sales_val=Sum(
+            _gross_val=Sum(
                 F('sales_items__sale_price') * F('sales_items__quantity_shipped')
                 / Coalesce(F('sales_items__barcode_obj__conversion_factor'), Value(1)),
                 filter=date_filter,
                 output_field=DecimalField()
             ),
-        ).filter(total_qty__gt=0) # 🎯 โชว์เฉพาะสินค้าที่ "ส่งสำเร็จ" จริงๆ ในรอบนั้นๆ
+            _cn_qty=Coalesce(Subquery(cn_qty), Value(0), output_field=DecimalField()),
+            _cn_val=Coalesce(Subquery(cn_val), Value(0), output_field=DecimalField()),
+        ).annotate(
+            # ยอดสุทธิหลังหักใบลดหนี้
+            total_qty=ExpressionWrapper(F('_gross_qty') - F('_cn_qty'), output_field=DecimalField()),
+            total_sales_val=ExpressionWrapper(F('_gross_val') - F('_cn_val'), output_field=DecimalField()),
+        ).filter(_gross_qty__gt=0) # 🎯 โชว์เฉพาะสินค้าที่ "ส่งสำเร็จ" จริงๆ ในรอบนั้นๆ
     
     # 🎯 หัวใจหลัก: คำนวณยอดรวมของทั้งหน้า (Grand Total)
     def changelist_view(self, request, extra_context=None):
@@ -5059,7 +5137,8 @@ class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     ordering = ('-shipped_date', 'sales_order__so_number')
 
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related(
+        # แถวรับคืนจากใบลดหนี้ไม่เข้าหน้านี้ — ยอดลดหนี้หักจากยอดค้างรับของใบสั่งขายโดยตรงแล้ว
+        return super().get_queryset(request).filter(credit_note_item__isnull=True).select_related(
             'sales_order', 'sales_order__customer', 'product'
         )
 
@@ -5729,3 +5808,220 @@ class SalesQuotationAdmin(UnfoldModelAdmin):
             f"อัพเดทราคาสัญญาขายสำเร็จ — เพิ่มใหม่ {created} รายการ, อัพเดทราคา {updated} รายการ"
         )
     actions = ['export_to_excel']
+
+
+# ── A8. ใบลดหนี้ (Credit Note) ────────────────────────────────────────────────
+# ขั้นที่ 1 (หน้าเพิ่ม): เลือกใบสั่งขาย (ค้นด้วยเลข SO / เลข IV / ชื่อลูกค้า ได้) → บันทึก
+# ขั้นที่ 2 (หน้าแก้ไข): พิมพ์ชื่อ/บาร์โค้ดสินค้าในใบสั่งขายนั้น กรอกจำนวนที่ลดหนี้
+# บันทึกแล้วระบบสร้างแถวรับคืน (SalesDeliveryLog ติดลบ) ให้ — สต็อก/DC/Rebate/ยอดสัญญาปรับตามเอง
+
+def _cn_item_label(si):
+    code = si.barcode_obj.code if si.barcode_obj else '-'
+    unit = (si.barcode_obj.unit_name if si.barcode_obj else None) or 'ชิ้น'
+    return f"{code} | {si.product.name if si.product else '-'} ({unit})"
+
+
+def _cn_units(si, pieces):
+    """แปลงจำนวนชิ้น -> หน่วยบาร์โค้ด (หน่วยเดียวกับราคาขาย/จำนวนลดหนี้)"""
+    factor = Decimal(str((si.barcode_obj.conversion_factor if si.barcode_obj else None) or 1))
+    return Decimal(pieces or 0) / factor
+
+
+class CreditNoteItemForm(forms.ModelForm):
+    item_search = forms.CharField(
+        label="สินค้า (พิมพ์ชื่อหรือบาร์โค้ด)",
+        widget=forms.TextInput(attrs={'list': 'cn-item-options', 'class': 'cn-item-search',
+                                      'autocomplete': 'off', 'style': 'width:340px;'}))
+    _so_id = None
+
+    class Meta:
+        model = CreditNoteItem
+        fields = ('quantity',)
+        widgets = {'quantity': forms.NumberInput(attrs={'class': 'cn-qty', 'min': 1, 'style': 'width:100px;'})}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance.pk and self.instance.sales_item_id:
+            self.fields['item_search'].initial = _cn_item_label(self.instance.sales_item)
+
+    def clean(self):
+        data = super().clean()
+        text = (data.get('item_search') or '').strip()
+        if not text:
+            return data
+        items = list(SalesItem.objects.filter(sales_order_id=self._so_id).select_related('barcode_obj', 'product'))
+        code = text.split('|')[0].strip()
+        match = [si for si in items if si.barcode_obj and si.barcode_obj.code == code]
+        if not match:
+            match = [si for si in items if si.product and text.lower() in si.product.name.lower()]
+            if len(match) > 1:
+                self.add_error('item_search', "พบหลายรายการ — กรุณาเลือกจากรายการที่แสดง")
+                return data
+        if not match:
+            self.add_error('item_search', "ไม่พบสินค้านี้ในใบสั่งขาย")
+            return data
+        si = match[0]
+
+        qty = data.get('quantity')
+        if qty:
+            shipped = _cn_units(si, si.quantity_shipped)
+            credited = (CreditNoteItem.objects.filter(sales_item=si).exclude(pk=self.instance.pk)
+                        .aggregate(t=Sum('quantity'))['t'] or 0)
+            max_qty = shipped - credited
+            if qty > max_qty:
+                self.add_error('quantity', f"ลดหนี้ได้ไม่เกิน {max_qty:,.0f} (ส่งแล้ว {shipped:,.0f}, "
+                                           f"ลดหนี้ไปแล้ว {credited:,})")
+        self.instance.sales_item = si
+        return data
+
+
+class CreditNoteItemInline(UnfoldTabularInline):
+    model = CreditNoteItem
+    form = CreditNoteItemForm
+    extra = 3
+    fields = ('item_search', 'get_unit_price', 'get_ordered_qty', 'get_ordered_total',
+              'quantity', 'get_amount', 'get_vat', 'get_total')
+    readonly_fields = ('get_unit_price', 'get_ordered_qty', 'get_ordered_total',
+                       'get_amount', 'get_vat', 'get_total')
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related(
+            'sales_item__barcode_obj', 'sales_item__product', 'credit_note__sales_order')
+
+    def get_formset(self, request, obj=None, **kwargs):
+        kwargs['form'] = type('CreditNoteItemForm', (CreditNoteItemForm,),
+                              {'_so_id': obj.sales_order_id if obj else None})
+        return super().get_formset(request, obj, **kwargs)
+
+    def _vat_p(self, obj):
+        return (obj.credit_note.sales_order.vat_percent or Decimal('0')) if obj and obj.pk else Decimal('0')
+
+    @admin.display(description="ราคาขาย")
+    def get_unit_price(self, obj):
+        return f"{obj.unit_price:,.2f}" if obj and obj.pk else '-'
+
+    @admin.display(description="จำนวนสั่ง")
+    def get_ordered_qty(self, obj):
+        return f"{obj.sales_item.quantity_unit:,}" if obj and obj.pk else '-'
+
+    @admin.display(description="ยอดสั่ง")
+    def get_ordered_total(self, obj):
+        return f"{obj.sales_item.quantity_unit * obj.unit_price:,.2f}" if obj and obj.pk else '-'
+
+    @admin.display(description="มูลค่า")
+    def get_amount(self, obj):
+        return f"{obj.amount:,.2f}" if obj and obj.pk else '-'
+
+    @admin.display(description="VAT")
+    def get_vat(self, obj):
+        return f"{obj.amount * self._vat_p(obj) / 100:,.2f}" if obj and obj.pk else '-'
+
+    @admin.display(description="มูลค่ารวม VAT")
+    def get_total(self, obj):
+        return f"{obj.amount * (1 + self._vat_p(obj) / 100):,.2f}" if obj and obj.pk else '-'
+
+
+@admin.register(CreditNote)
+class CreditNoteAdmin(UnfoldModelAdmin):
+    list_display = ('cn_number', 'get_doc_date', 'get_customer', 'get_so_number', 'reason',
+                    'get_subtotal', 'get_vat', 'get_total')
+    list_filter = (
+        ('doc_date', DjangoDateRangeFilter),
+        ('sales_order__customer', AutocompleteSelectMultipleFilter),
+    )
+    list_filter_submit = True
+    search_fields = ('cn_number', 'sales_order__so_number', 'sales_order__customer__company_name',
+                     'sales_order__receipts__receipt_number', 'items__sales_item__product__name',
+                     'items__sales_item__barcode_obj__code')
+    date_hierarchy = 'doc_date'
+    autocomplete_fields = ['sales_order']
+
+    class Media:
+        js = ('js/credit_note_inline.js',)
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('sales_order', 'sales_order__customer')
+
+    def get_fields(self, request, obj=None):
+        if obj is None:
+            return ('sales_order', 'doc_date', 'reason', 'notes')
+        return ('cn_number', 'get_so_link', 'doc_date', 'reason', 'notes',
+                'subtotal', 'vat_amount', 'grand_total', 'created_by')
+
+    def get_readonly_fields(self, request, obj=None):
+        if obj is None:
+            return ()
+        return ('cn_number', 'get_so_link', 'subtotal', 'vat_amount', 'grand_total', 'created_by')
+
+    def get_inlines(self, request, obj):
+        # ต้องเลือกใบสั่งขายก่อน (หน้าเพิ่ม) ถึงจะรู้ว่ามีสินค้าอะไรให้ลดหนี้
+        return [CreditNoteItemInline] if obj else []
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        obj = form.instance
+        for item in obj.items.select_related('sales_item'):
+            item.sync_delivery_log()  # เผื่อแก้วันที่ใบลดหนี้ -> วันที่แถวรับคืนตาม
+        obj.recalc_totals()
+
+    def response_add(self, request, obj, post_url_continue=None):
+        self.message_user(request, f"สร้างใบลดหนี้ {obj.cn_number} แล้ว — เลือกสินค้าที่จะลดหนี้ด้านล่าง แล้วกดบันทึก")
+        return HttpResponseRedirect(reverse('admin:stocks_creditnote_change', args=[obj.pk]))
+
+    def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
+        response = super().render_change_form(request, context, add, change, form_url, obj)
+        if obj and change:
+            # รายการสินค้าในใบสั่งขาย -> <datalist> ให้พิมพ์ค้นชื่อ/บาร์โค้ด + ข้อมูลให้ JS แสดงราคา/ยอดทันที
+            items = SalesItem.objects.filter(sales_order=obj.sales_order).select_related('barcode_obj', 'product')
+            data = {}
+            for si in items:
+                data[_cn_item_label(si)] = {
+                    'price': float(si.sale_price or 0),
+                    'ordered': si.quantity_unit,
+                    'shipped': float(_cn_units(si, si.quantity_shipped)),
+                }
+            options = ''.join(format_html('<option value="{}"></option>', label) for label in data)
+            payload = json.dumps({'vat': float(obj.sales_order.vat_percent or 0), 'items': data})
+            payload = payload.replace('</', '<\\/')
+            html = (f'<datalist id="cn-item-options">{options}</datalist>'
+                    f'<script>window.CN_DATA={payload};</script>')
+            response.render()
+            response.content = response.content.replace(b'</body>', html.encode() + b'</body>', 1)
+        return response
+
+    @admin.display(description="ใบสั่งขาย")
+    def get_so_link(self, obj):
+        url = reverse('admin:stocks_salesorder_change', args=[obj.sales_order_id])
+        c = obj.sales_order.customer
+        return format_html('<a href="{}" target="_blank">{}</a> — {}', url, obj.sales_order.so_number,
+                           c.company_name if c else '-')
+
+    @admin.display(description="วันที่", ordering='doc_date')
+    def get_doc_date(self, obj):
+        return obj.doc_date.strftime('%d/%m/%Y')
+
+    @admin.display(description="ลูกค้า", ordering='sales_order__customer__company_name')
+    def get_customer(self, obj):
+        c = obj.sales_order.customer
+        return c.company_name if c else '-'
+
+    @admin.display(description="ใบสั่งขาย", ordering='sales_order__so_number')
+    def get_so_number(self, obj):
+        return obj.sales_order.so_number
+
+    @admin.display(description="มูลค่า", ordering='subtotal')
+    def get_subtotal(self, obj):
+        return f"{obj.subtotal:,.2f}"
+
+    @admin.display(description="VAT", ordering='vat_amount')
+    def get_vat(self, obj):
+        return f"{obj.vat_amount:,.2f}"
+
+    @admin.display(description="รวม", ordering='grand_total')
+    def get_total(self, obj):
+        return format_html('<b>{}</b>', f"{obj.grand_total:,.2f}")

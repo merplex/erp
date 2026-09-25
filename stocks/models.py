@@ -802,10 +802,17 @@ class SalesOrder(models.Model):
         return self.total_items_price + self.vat_amount
 
     @property
+    def credited_total(self):
+        # ยอดใบลดหนี้ (รวม VAT) ของใบสั่งขายนี้ — หักออกจากยอดที่ต้องเก็บเงิน
+        if not self.pk:
+            return Decimal('0')
+        return self.credit_notes.aggregate(t=Sum('grand_total'))['t'] or Decimal('0')
+
+    @property
     def balance_due(self):
-        # ยอดค้างรับ = ยอดสุทธิ - ยอดที่รับเงินมาแล้ว
+        # ยอดค้างรับ = ยอดสุทธิ - ใบลดหนี้ - ยอดที่รับเงินมาแล้ว
         total_paid = sum(p.amount for p in self.payments.all()) if hasattr(self, 'payments') else 0
-        return self.grand_total - total_paid
+        return self.grand_total - self.credited_total - total_paid
     
     def __str__(self):
         return self.so_number
@@ -854,7 +861,7 @@ class SalesOrder(models.Model):
     def update_payment_status(self):
         total_received = self.payments.aggregate(Sum('amount'))['amount__sum'] or Decimal(0)
         
-        if total_received >= round_money(self.grand_total):
+        if total_received >= round_money(self.grand_total - self.credited_total):
             self.payment_status = 'Paid'
         elif total_received > 0:
             self.payment_status = 'Partial'
@@ -953,8 +960,8 @@ class IncomeReport(SalesOrder):
 
     @property
     def balance_due(self):
-        # ยอดค้างรับ = ยอดรวมสุทธิ - ยอดที่จ่ายแล้ว
-        return self.grand_total - self.total_paid
+        # ยอดค้างรับ = ยอดรวมสุทธิ - ใบลดหนี้ - ยอดที่จ่ายแล้ว
+        return self.grand_total - self.credited_total - self.total_paid
 
 class SalesItem(models.Model):
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='items')
@@ -1069,7 +1076,8 @@ class SalesDeliveryLog(models.Model):
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='delivery_logs')
     barcode_obj = models.ForeignKey('ProductBarcode', null=True, blank=True, on_delete=models.SET_NULL, verbose_name="บาร์โค้ด/แพ็คเกจ")
     product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="สินค้าที่ส่ง")
-    quantity_shipped = models.PositiveIntegerField(verbose_name="จำนวน")
+    # ติดลบได้เฉพาะแถว "รับคืนจากใบลดหนี้" (credit_note_item) — แถวส่งของปกติเป็นบวกเสมอ
+    quantity_shipped = models.IntegerField(verbose_name="จำนวน")
     shipping_no = models.CharField(max_length=100, blank=True, verbose_name="เลขใบขนส่ง/MB Invoice")
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     shipped_date = models.DateTimeField(
@@ -1088,6 +1096,11 @@ class SalesDeliveryLog(models.Model):
     confirmed_date = models.DateTimeField(null=True, blank=True)
     # 🎯 ฟิลด์อ้างอิงการจ่ายเงิน (ถ้ามี)
     payment_note = models.CharField(max_length=255, blank=True, verbose_name="หมายเหตุการจ่าย")
+    # แถวที่เกิดจากใบลดหนี้ (รับคืน/ลดยอด) — จำนวน/มูลค่าติดลบ ให้สต็อก DC/Rebate/ยอดสัญญา ลดตามอัตโนมัติ
+    # แต่ไม่นับเป็น "การส่งของ" (ไม่แตะยอดส่งสะสมของใบสั่งขาย ไม่ออกใบ IV ไม่โชว์ในแผงส่งของ)
+    credit_note_item = models.OneToOneField(
+        'CreditNoteItem', null=True, blank=True, on_delete=models.CASCADE,
+        related_name='delivery_log', editable=False, verbose_name="ใบลดหนี้")
 
     def save(self, *args, **kwargs):
         is_new = self.pk is None
@@ -1125,7 +1138,7 @@ class SalesDeliveryLog(models.Model):
             item = qs.filter(barcode_obj=self.barcode_obj).first() or qs.first()
         else:
             item = qs.first()
-        if item and diff != 0:
+        if item and diff != 0 and not self.credit_note_item_id:
             item.quantity_shipped += diff * factor  # ชิ้น
             item.save()
         # --- 🛑 [จบ LOGIC เดิม] ---
@@ -1202,6 +1215,10 @@ def handle_delivery_deletion(sender, instance, **kwargs):
             instance.product.save()
         except Exception:
             pass
+    if instance.credit_note_item_id:
+        # แถวรับคืนจากใบลดหนี้ ไม่ได้นับเป็นยอดส่ง — คืนแค่สต็อกด้านบนพอ
+        return
+
     # 2. หักยอดส่งสะสมใน SO (เป็นชิ้นเสมอ ให้ตรงกับ quantity_ordered)
     try:
         qs = SalesItem.objects.filter(sales_order=instance.sales_order, product=instance.product)
@@ -1239,11 +1256,14 @@ class SalesReceipt(models.Model):
     grand_total = models.DecimalField(max_digits=14, decimal_places=2, default=0, editable=False, verbose_name="ยอดรวมสุทธิ")
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True, editable=False)
+    # รอบส่งของถูกลบ/เปลี่ยนวันที่ -> ไม่ลบใบทิ้ง แต่ทำเครื่องหมายยกเลิก (เลขที่ยังอยู่ในทะเบียน/รายงานภาษีขาย
+    # และไม่ถูกนำกลับมาใช้ซ้ำ) — 1 ใบสั่งขาย + 1 วัน มีใบที่ "ยังไม่ยกเลิก" ได้แค่ 1 ใบ
+    is_cancelled = models.BooleanField(default=False, editable=False, db_index=True, verbose_name="ยกเลิก")
+    cancelled_at = models.DateTimeField(null=True, blank=True, editable=False, verbose_name="วันที่ยกเลิก")
 
     class Meta:
         verbose_name = "ใบเสร็จรับเงิน"
         verbose_name_plural = "A1. ใบเสร็จรับเงิน (Receipt)"
-        unique_together = ('sales_order', 'shipped_date')
         ordering = ('-shipped_date', '-id')
 
     def __str__(self):
@@ -1266,6 +1286,86 @@ class SalesInvoice(SalesReceipt):
         verbose_name_plural = "A2. ใบกำกับภาษี/ใบส่งของ (Invoice)"
 
 
+# ── ใบลดหนี้ (CN) ─────────────────────────────────────────────────────────────
+# ลดหนี้ตามรายการในใบสั่งขาย — แต่ละรายการสร้าง SalesDeliveryLog จำนวนติดลบ 1 แถว (credit_note_item)
+# เพื่อให้ สต็อก / DC / Rebate / ยอดสัญญา / รายงานที่รวมจาก log ลดตามเองทั้งหมด
+# ยอด (รวม VAT) หักออกจากยอดค้างรับของใบสั่งขาย (SalesOrder.credited_total)
+class CreditNote(models.Model):
+    cn_number = models.CharField(max_length=50, unique=True, editable=False, verbose_name="เลขที่ใบลดหนี้")
+    sales_order = models.ForeignKey(SalesOrder, on_delete=models.PROTECT, related_name='credit_notes', verbose_name="ใบสั่งขาย")
+    doc_date = models.DateField(default=datetime.date.today, db_index=True, verbose_name="วันที่")
+    reason = models.CharField(max_length=255, blank=True, verbose_name="สาเหตุการลดหนี้")
+    notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
+    subtotal = models.DecimalField(max_digits=14, decimal_places=2, default=0, editable=False, verbose_name="มูลค่า")
+    vat_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0, editable=False, verbose_name="ภาษีมูลค่าเพิ่ม")
+    grand_total = models.DecimalField(max_digits=14, decimal_places=2, default=0, editable=False, verbose_name="รวม")
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, editable=False, verbose_name="ผู้บันทึก")
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+
+    class Meta:
+        verbose_name = "ใบลดหนี้"
+        verbose_name_plural = "A8. ใบลดหนี้ (Credit Note)"
+        ordering = ('-doc_date', '-id')
+
+    def __str__(self):
+        return self.cn_number
+
+    def save(self, *args, **kwargs):
+        if not self.cn_number:
+            self.cn_number = generate_number('CN', CreditNote, 'cn_number')
+        super().save(*args, **kwargs)
+
+    def recalc_totals(self):
+        subtotal = self.items.aggregate(t=Sum('amount'))['t'] or Decimal('0')
+        vat_p = self.sales_order.vat_percent or Decimal('0')
+        vat_amount = (subtotal * vat_p / Decimal('100')).quantize(Decimal('0.01'))
+        self.subtotal, self.vat_amount, self.grand_total = subtotal, vat_amount, subtotal + vat_amount
+        self.save(update_fields=['subtotal', 'vat_amount', 'grand_total'])
+        self.sales_order.update_payment_status()
+
+
+class CreditNoteItem(models.Model):
+    credit_note = models.ForeignKey(CreditNote, on_delete=models.CASCADE, related_name='items')
+    sales_item = models.ForeignKey('SalesItem', on_delete=models.PROTECT, related_name='credit_note_items', verbose_name="รายการในใบสั่งขาย")
+    quantity = models.PositiveIntegerField(verbose_name="จำนวนลดหนี้")
+    unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="ราคา/หน่วย")
+    amount = models.DecimalField(max_digits=14, decimal_places=2, default=0, verbose_name="มูลค่า")
+
+    class Meta:
+        verbose_name = "รายการลดหนี้"
+        verbose_name_plural = "รายการลดหนี้"
+
+    def save(self, *args, **kwargs):
+        # ราคาตามใบสั่งขาย (ต่อหน่วยบาร์โค้ด) ณ ตอนลดหนี้
+        self.unit_price = self.sales_item.sale_price or Decimal('0')
+        self.amount = (self.unit_price * self.quantity).quantize(Decimal('0.01'))
+        super().save(*args, **kwargs)
+        self.sync_delivery_log()
+
+    def sync_delivery_log(self):
+        """สร้าง/อัปเดตแถวรับคืน (SalesDeliveryLog ติดลบ) ผ่าน .save() ปกติ — ได้ปรับสต็อก/DC/Rebate ครบ"""
+        cn = self.credit_note
+        si = self.sales_item
+        shipped_at = timezone.make_aware(
+            datetime.datetime.combine(cn.doc_date, datetime.time(10, 0)), timezone.get_current_timezone())
+        log = SalesDeliveryLog.objects.filter(credit_note_item=self).first() or SalesDeliveryLog(
+            credit_note_item=self, sales_order=cn.sales_order, user=cn.created_by)
+        log.barcode_obj = si.barcode_obj
+        log.product = si.product
+        log.quantity_shipped = -self.quantity
+        log.shipped_date = shipped_at
+        log.notes = f"ลดหนี้ {cn.cn_number}"
+        log.save()
+
+
+@receiver(post_delete, sender=CreditNote)
+def _refresh_payment_status_on_cn_delete(sender, instance, **kwargs):
+    try:
+        instance.sales_order.update_payment_status()
+    except SalesOrder.DoesNotExist:
+        pass
+
+
 def _delivery_local_date(dt_value):
     """วันที่ (local) ของ shipped_date — ใช้เป็น key ของ 'รอบส่งของ'"""
     if hasattr(dt_value, 'date'):
@@ -1280,7 +1380,7 @@ def sync_receipts_for_sales_order(sales_order):
 
     รวม query ให้น้อยที่สุด: ดึง delivery log ทั้งหมดของ SO ครั้งเดียว + ใบเสร็จเดิมครั้งเดียว
     แล้ว group/คำนวณในหน่วยความจำ ไม่ยิง query ต่อรอบ
-    - รอบที่ไม่มี log แล้ว -> ลบใบเสร็จทิ้ง (เช่นแก้วันส่งของยกรอบ / ลบรายการส่งของ)
+    - รอบที่ไม่มี log แล้ว -> ทำเครื่องหมายยกเลิก (เช่นแก้วันส่งของยกรอบ / ลบรายการส่งของ) ไม่ลบทิ้ง
     - วันครบกำหนด: ตั้งตอนสร้างใบใหม่ + รีเฟรชถ้ายังว่าง โดยอิง payment_due_date ที่
       SalesDeliveryLog.save() คำนวณจาก 'รอบบัญชี + เครดิตลูกค้า' ไว้แล้ว (แก้วันส่งของ ->
       log ถูก .save() ใหม่ -> เปลี่ยน key รอบ -> ได้ใบเสร็จใบใหม่พร้อมวันครบกำหนดที่คำนวณสด)
@@ -1290,7 +1390,7 @@ def sync_receipts_for_sales_order(sales_order):
         return
 
     logs = list(
-        sales_order.delivery_logs
+        sales_order.delivery_logs.filter(credit_note_item__isnull=True)
         .select_related('barcode_obj', 'product')
         .order_by('shipped_date', 'id')
     )
@@ -1298,11 +1398,11 @@ def sync_receipts_for_sales_order(sales_order):
     for log in logs:
         by_date.setdefault(_delivery_local_date(log.shipped_date), []).append(log)
 
-    existing = {r.shipped_date: r for r in sales_order.receipts.all()}
+    existing = {r.shipped_date: r for r in sales_order.receipts.filter(is_cancelled=False)}
 
     stale_ids = [r.id for dt, r in existing.items() if dt not in by_date]
     if stale_ids:
-        SalesReceipt.objects.filter(id__in=stale_ids).delete()
+        SalesReceipt.objects.filter(id__in=stale_ids).update(is_cancelled=True, cancelled_at=timezone.now())
 
     vat_p = sales_order.vat_percent or Decimal('0')
     for dt, batch_logs in by_date.items():

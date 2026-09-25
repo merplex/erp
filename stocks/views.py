@@ -139,7 +139,7 @@ def delivery_log_autosave(request):
     items = SalesItem.objects.filter(sales_order=so, barcode_obj=barcode).values('quantity_ordered')
     total_ordered = sum(i['quantity_ordered'] or 0 for i in items)  # ชิ้น
     total_shipped_units = SalesDeliveryLog.objects.filter(
-        sales_order=so, barcode_obj=barcode
+        sales_order=so, barcode_obj=barcode, credit_note_item__isnull=True
     ).aggregate(total=Sum('quantity_shipped'))['total'] or 0
     remaining_pieces = max(0, total_ordered - total_shipped_units * factor)
     remaining = remaining_pieces // factor  # แสดงเป็นหน่วยบาร์โค้ด
@@ -179,7 +179,7 @@ def barcode_remaining_api(request):
     total_ordered = sum(i['quantity_ordered'] or 0 for i in items)  # เป็นชิ้น
     # quantity_shipped ใน log เป็นหน่วยบาร์โค้ด → แปลงเป็นชิ้นก่อนเทียบ
     total_shipped_units = SalesDeliveryLog.objects.filter(
-        sales_order_id=so_id, barcode_obj=barcode
+        sales_order_id=so_id, barcode_obj=barcode, credit_note_item__isnull=True
     ).aggregate(total=Sum('quantity_shipped'))['total'] or 0
     total_shipped_pieces = total_shipped_units * factor
     remaining_pieces = max(0, total_ordered - total_shipped_pieces)
@@ -215,7 +215,7 @@ def pending_barcodes_api(request):
         factor = item.barcode_obj.conversion_factor or 1
         ordered_pieces = item.quantity_ordered or 0  # ชิ้น
         shipped_units = SalesDeliveryLog.objects.filter(
-            sales_order=so, barcode_obj=item.barcode_obj
+            sales_order=so, barcode_obj=item.barcode_obj, credit_note_item__isnull=True
         ).aggregate(total=Sum('quantity_shipped'))['total'] or 0
         diff_pieces = ordered_pieces - shipped_units * factor  # >0 = ยังค้างส่ง, <0 = ส่งเกิน
         if diff_pieces > 0:
