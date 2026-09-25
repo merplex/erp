@@ -2590,8 +2590,137 @@ def _receipt_line_items(deliveries):
     return line_items, subtotal
 
 
+_THAI_MONTHS = ['', 'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+                'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม']
+
+
+def _tax_report_data(receipts):
+    """ข้อมูลรายงานภาษีขาย จากใบกำกับ/ใบเสร็จ (IV) ที่เลือก + ใบลดหนี้ (CN) ในช่วงวันที่เดียวกัน
+    คืน dict: header (บรรทัดหัวรายงาน), rows, totals — ใช้ร่วมกันทั้งหน้าพิมพ์และ Excel"""
+    import re as _re
+    from django.conf import settings
+    receipts = list(receipts.select_related('sales_order__customer')
+                    .order_by('shipped_date', 'receipt_number'))
+    rows = []
+    for r in receipts:
+        c = r.sales_order.customer
+        rows.append({
+            'date': r.shipped_date, 'doc_number': r.receipt_number,
+            'customer': c.company_name if c else '-', 'tax_id': (c.tax_id if c else '') or '',
+            'branch': (c.branch if c else '') or '',
+            'subtotal': r.subtotal, 'vat': r.vat_amount, 'total': r.grand_total,
+        })
+    dates = [r.shipped_date for r in receipts]
+    if dates:
+        rows.extend(_credit_note_tax_rows(min(dates), max(dates)))
+
+    for i, row in enumerate(rows, start=1):
+        row['no'] = i
+        # หน้าพิมพ์แสดงยอดติดลบ (ใบลดหนี้) เป็นตัวเลขในวงเล็บ
+        for k in ('subtotal', 'vat', 'total'):
+            row[f'{k}_abs'] = abs(row[k])
+    totals = {k: sum((row[k] for row in rows), Decimal('0')) for k in ('subtotal', 'vat', 'total')}
+
+    if dates:
+        first, last = min(dates), max(dates)
+        period = f"เดือน {_THAI_MONTHS[first.month]} {first.year + 543}"
+        if (first.year, first.month) != (last.year, last.month):
+            period += f" - เดือน {_THAI_MONTHS[last.month]} {last.year + 543}"
+    else:
+        period = '-'
+    # ชื่อผู้ประกอบการในหัวรายงานไม่ใส่ "(สำนักงานใหญ่)" ต่อท้าย (ตามแบบรายงานที่ใช้ยื่นจริง)
+    company = _re.sub(r'\s*\(สำนักงานใหญ่\)\s*$', '', settings.COMPANY_NAME)
+    header = [
+        'รายงานภาษีขาย',
+        f'สำหรับงวดภาษี {period}',
+        f'ชื่อผู้ประกอบการ {company} เลขประจำตัวผู้เสียภาษีอากร {settings.COMPANY_TAX_ID}',
+        f'ชื่อสถานที่ประกอบการ  {settings.COMPANY_ADDRESS}',
+    ]
+    return {'header': header, 'rows': rows, 'totals': totals}
+
+
+def _credit_note_tax_rows(date_from, date_to):
+    """ใบลดหนี้ในช่วงวันที่ — ยอดติดลบ (แสดงในวงเล็บ) ต่อท้ายรายงานภาษีขาย"""
+    return []
+
+
+TAX_REPORT_COLUMNS = ['ลำดับที่', 'วัน/เดือน/ปี', 'เลขที่เอกสาร', 'ชื่อลูกค้า', 'เลขผู้เสียภาษี',
+                      'สำนักงานใหญ่/สาขา', 'มูลค่า', 'ภาษีมูลค่าเพิ่ม', 'รวม']
+
+
+def tax_report_excel_response(data, filename):
+    from openpyxl.styles import Border, Side
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'รายงานภาษีขาย'
+    ncol = len(TAX_REPORT_COLUMNS)
+    for i, text in enumerate(data['header'], start=1):
+        ws.merge_cells(start_row=i, start_column=1, end_row=i, end_column=ncol)
+        cell = ws.cell(row=i, column=1, value=text)
+        cell.font = Font(bold=(i <= 2), size=14 if i == 1 else 11)
+        cell.alignment = Alignment(horizontal='center')
+
+    thin = Side(style='thin', color='000000')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    head_row = len(data['header']) + 1
+    for col, title in enumerate(TAX_REPORT_COLUMNS, start=1):
+        cell = ws.cell(row=head_row, column=col, value=title)
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill(start_color='00B0F0', end_color='00B0F0', fill_type='solid')
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        cell.border = border
+
+    money = '#,##0.00;(#,##0.00)'
+    r = head_row
+    for row in data['rows']:
+        r += 1
+        values = [row['no'], row['date'].strftime('%d/%m/%Y'), row['doc_number'], row['customer'],
+                  row['tax_id'], row['branch'], row['subtotal'], row['vat'], row['total']]
+        for col, v in enumerate(values, start=1):
+            cell = ws.cell(row=r, column=col, value=v)
+            cell.border = border
+            if col >= 7:
+                cell.number_format = money
+            elif col in (1, 2, 3, 5):
+                cell.alignment = Alignment(horizontal='center')
+                if col == 5:
+                    cell.number_format = '@'
+    r += 1
+    for col, key in ((7, 'subtotal'), (8, 'vat'), (9, 'total')):
+        cell = ws.cell(row=r, column=col, value=data['totals'][key])
+        cell.font = Font(bold=True)
+        cell.number_format = money
+        cell.border = Border(top=thin, bottom=Side(style='double', color='000000'))
+
+    for col, width in zip('ABCDEFGHI', (8, 12, 16, 48, 16, 18, 16, 16, 16)):
+        ws.column_dimensions[col].width = width
+    ws.freeze_panes = ws.cell(row=head_row + 1, column=1)
+
+    response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    response['Content-Disposition'] = f'attachment; filename="{filename}.xlsx"'
+    wb.save(response)
+    return response
+
+
+class TaxReportActionsMixin:
+    """action รายงานภาษีขาย (พิมพ์ / Excel) สำหรับเมนู A1 ใบเสร็จ และ A2 ใบกำกับภาษี/ใบส่งของ
+    Export Excel เดิมของ 2 เมนูนี้ก็ใช้โครงสร้างเดียวกับรายงานภาษีขาย"""
+
+    @admin.action(description="🖨️ พิมพ์รายงานภาษีขาย")
+    def print_tax_report(self, request, queryset):
+        data = _tax_report_data(queryset)
+        return TemplateResponse(request, 'admin/sales_tax_report_print.html', {
+            **data, 'title': data['header'][0] + ' ' + data['header'][1],
+        })
+
+    @admin.action(description="📊 Export เป็น Excel (รายงานภาษีขาย)")
+    def export_to_excel(self, request, queryset):
+        return tax_report_excel_response(_tax_report_data(queryset), 'sales_tax_report')
+
+
+
 @admin.register(SalesReceipt)
-class SalesReceiptAdmin(ExportToExcelMixin, UnfoldModelAdmin):
+class SalesReceiptAdmin(TaxReportActionsMixin, UnfoldModelAdmin):
     # 🎯 หน้านี้เป็น "ทะเบียนใบเสร็จ" — สร้าง/ลบเองไม่ได้ ระบบทำอัตโนมัติหลังส่งของ
     #    ผู้ใช้แก้ได้เฉพาะ "วันครบกำหนด" กับ "หมายเหตุ"
     list_display = ('get_shipped_date', 'receipt_number', 'get_customer', 'get_due_date',
@@ -2609,7 +2738,7 @@ class SalesReceiptAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     search_fields = ('receipt_number', 'sales_order__so_number', 'sales_order__po_no_customer',
                      'sales_order__customer__company_name')
     ordering = ('-shipped_date', '-id')
-    actions = ['export_to_excel']
+    actions = ['print_tax_report', 'export_to_excel']
     fields = ('receipt_number', 'get_sales_order_link', 'shipped_date', 'due_date',
               'subtotal', 'vat_amount', 'grand_total', 'notes', 'get_items_preview',
               'created_at', 'updated_at')
