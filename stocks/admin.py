@@ -2797,6 +2797,9 @@ class SalesReceiptAdmin(TaxReportActionsMixin, UnfoldModelAdmin):
 
     def get_search_results(self, request, queryset, search_term):
         queryset, may_have_duplicates = super().get_search_results(request, queryset, search_term)
+        if request.GET.get('model_name') == 'creditnote':
+            # ช่องเลือกใบกำกับในใบลดหนี้ (A8) — ไม่ให้เลือกใบที่ยกเลิกแล้ว
+            return queryset.filter(is_cancelled=False), may_have_duplicates
         term = (search_term or '').strip()
         if term:
             from django.db.models import Exists, OuterRef
@@ -5811,9 +5814,9 @@ class SalesQuotationAdmin(UnfoldModelAdmin):
 
 
 # ── A8. ใบลดหนี้ (Credit Note) ────────────────────────────────────────────────
-# ขั้นที่ 1 (หน้าเพิ่ม): เลือกใบสั่งขาย (ค้นด้วยเลข SO / เลข IV / ชื่อลูกค้า ได้) → บันทึก
-# ขั้นที่ 2 (หน้าแก้ไข): พิมพ์ชื่อ/บาร์โค้ดสินค้าในใบสั่งขายนั้น กรอกจำนวนที่ลดหนี้
-# บันทึกแล้วระบบสร้างแถวรับคืน (SalesDeliveryLog ติดลบ) ให้ — สต็อก/DC/Rebate/ยอดสัญญาปรับตามเอง
+# เลือกใบกำกับภาษี/ใบส่งของ (IV) -> ตารางรายการด้านล่างโหลดสินค้าในใบนั้นให้ทันที (หน้าเดียว)
+# พิมพ์ชื่อ/บาร์โค้ดเลือกสินค้า กรอกจำนวนที่ลดหนี้ -> บันทึก
+# ระบบสร้างแถวรับคืน (SalesDeliveryLog ติดลบ) ให้ — สต็อก/DC/Rebate/ยอดสัญญาปรับตามเอง
 
 def _cn_item_label(si):
     code = si.barcode_obj.code if si.barcode_obj else '-'
@@ -5821,10 +5824,26 @@ def _cn_item_label(si):
     return f"{code} | {si.product.name if si.product else '-'} ({unit})"
 
 
-def _cn_units(si, pieces):
-    """แปลงจำนวนชิ้น -> หน่วยบาร์โค้ด (หน่วยเดียวกับราคาขาย/จำนวนลดหนี้)"""
-    factor = Decimal(str((si.barcode_obj.conversion_factor if si.barcode_obj else None) or 1))
-    return Decimal(pieces or 0) / factor
+def _receipt_credit_items(receipt):
+    """สินค้าในใบกำกับ (IV) ใบนี้ -> [{'si', 'label', 'price', 'qty'}] (qty = จำนวนในใบ หน่วยบาร์โค้ด)
+    รวม log ส่งของของรอบนั้น (ใบสั่งขาย + วันที่) ต่อบาร์โค้ด แล้วผูกกลับไปที่ SalesItem ตามตรรกะเดียวกับ
+    SalesDeliveryLog.save()"""
+    if receipt is None:
+        return []
+    so_items = list(SalesItem.objects.filter(sales_order_id=receipt.sales_order_id)
+                    .select_related('barcode_obj', 'product').order_by('id'))
+    logs = (SalesDeliveryLog.objects.filter(sales_order_id=receipt.sales_order_id, credit_note_item__isnull=True)
+            .annotate(_d=TruncDate('shipped_date')).filter(_d=receipt.shipped_date))
+    result = {}
+    for log in logs:
+        si = next((i for i in so_items if i.product_id == log.product_id and i.barcode_obj_id == log.barcode_obj_id), None) \
+            or next((i for i in so_items if i.product_id == log.product_id), None)
+        if si is None:
+            continue
+        row = result.setdefault(si.pk, {'si': si, 'label': _cn_item_label(si),
+                                        'price': si.sale_price or Decimal('0'), 'qty': 0})
+        row['qty'] += log.quantity_shipped
+    return list(result.values())
 
 
 class CreditNoteItemForm(forms.ModelForm):
@@ -5832,7 +5851,7 @@ class CreditNoteItemForm(forms.ModelForm):
         label="สินค้า (พิมพ์ชื่อหรือบาร์โค้ด)",
         widget=forms.TextInput(attrs={'list': 'cn-item-options', 'class': 'cn-item-search',
                                       'autocomplete': 'off', 'style': 'width:340px;'}))
-    _so_id = None
+    _receipt_id = None
 
     class Meta:
         model = CreditNoteItem
@@ -5849,29 +5868,33 @@ class CreditNoteItemForm(forms.ModelForm):
         text = (data.get('item_search') or '').strip()
         if not text:
             return data
-        items = list(SalesItem.objects.filter(sales_order_id=self._so_id).select_related('barcode_obj', 'product'))
+        receipt = SalesReceipt.objects.filter(pk=self._receipt_id).first() if self._receipt_id else None
+        if receipt is None:
+            self.add_error('item_search', "กรุณาเลือกใบกำกับภาษี/ใบส่งของก่อน")
+            return data
+        rows = _receipt_credit_items(receipt)
         code = text.split('|')[0].strip()
-        match = [si for si in items if si.barcode_obj and si.barcode_obj.code == code]
+        match = [r for r in rows if r['si'].barcode_obj and r['si'].barcode_obj.code == code]
         if not match:
-            match = [si for si in items if si.product and text.lower() in si.product.name.lower()]
+            match = [r for r in rows if r['si'].product and text.lower() in r['si'].product.name.lower()]
             if len(match) > 1:
                 self.add_error('item_search', "พบหลายรายการ — กรุณาเลือกจากรายการที่แสดง")
                 return data
         if not match:
-            self.add_error('item_search', "ไม่พบสินค้านี้ในใบสั่งขาย")
+            self.add_error('item_search', f"ไม่พบสินค้านี้ในใบ {receipt.receipt_number}")
             return data
-        si = match[0]
+        row = match[0]
 
         qty = data.get('quantity')
         if qty:
-            shipped = _cn_units(si, si.quantity_shipped)
-            credited = (CreditNoteItem.objects.filter(sales_item=si).exclude(pk=self.instance.pk)
-                        .aggregate(t=Sum('quantity'))['t'] or 0)
-            max_qty = shipped - credited
+            credited = (CreditNoteItem.objects
+                        .filter(sales_item=row['si'], credit_note__receipt=receipt)
+                        .exclude(pk=self.instance.pk).aggregate(t=Sum('quantity'))['t'] or 0)
+            max_qty = row['qty'] - credited
             if qty > max_qty:
-                self.add_error('quantity', f"ลดหนี้ได้ไม่เกิน {max_qty:,.0f} (ส่งแล้ว {shipped:,.0f}, "
+                self.add_error('quantity', f"ลดหนี้ได้ไม่เกิน {max_qty:,} (ในใบ {row['qty']:,}, "
                                            f"ลดหนี้ไปแล้ว {credited:,})")
-        self.instance.sales_item = si
+        self.instance.sales_item = row['si']
         return data
 
 
@@ -5879,34 +5902,39 @@ class CreditNoteItemInline(UnfoldTabularInline):
     model = CreditNoteItem
     form = CreditNoteItemForm
     extra = 3
-    fields = ('item_search', 'get_unit_price', 'get_ordered_qty', 'get_ordered_total',
+    fields = ('item_search', 'get_unit_price', 'get_invoice_qty', 'get_invoice_total',
               'quantity', 'get_amount', 'get_vat', 'get_total')
-    readonly_fields = ('get_unit_price', 'get_ordered_qty', 'get_ordered_total',
+    readonly_fields = ('get_unit_price', 'get_invoice_qty', 'get_invoice_total',
                        'get_amount', 'get_vat', 'get_total')
 
     def get_queryset(self, request):
         return super().get_queryset(request).select_related(
-            'sales_item__barcode_obj', 'sales_item__product', 'credit_note__sales_order')
+            'sales_item__barcode_obj', 'sales_item__product', 'credit_note__sales_order', 'credit_note__receipt')
 
     def get_formset(self, request, obj=None, **kwargs):
-        kwargs['form'] = type('CreditNoteItemForm', (CreditNoteItemForm,),
-                              {'_so_id': obj.sales_order_id if obj else None})
+        # หน้าเพิ่ม: ใบกำกับยังไม่ถูกบันทึก -> อ่านค่าที่เลือกมาจากฟอร์มหลัก (POST) ใช้ตรวจรายการสินค้า
+        receipt_id = obj.receipt_id if obj else (request.POST.get('receipt') or None)
+        kwargs['form'] = type('CreditNoteItemForm', (CreditNoteItemForm,), {'_receipt_id': receipt_id})
         return super().get_formset(request, obj, **kwargs)
 
     def _vat_p(self, obj):
         return (obj.credit_note.sales_order.vat_percent or Decimal('0')) if obj and obj.pk else Decimal('0')
 
+    def _invoice_qty(self, obj):
+        rows = _receipt_credit_items(obj.credit_note.receipt)
+        return next((r['qty'] for r in rows if r['si'].pk == obj.sales_item_id), 0)
+
     @admin.display(description="ราคาขาย")
     def get_unit_price(self, obj):
         return f"{obj.unit_price:,.2f}" if obj and obj.pk else '-'
 
-    @admin.display(description="จำนวนสั่ง")
-    def get_ordered_qty(self, obj):
-        return f"{obj.sales_item.quantity_unit:,}" if obj and obj.pk else '-'
+    @admin.display(description="จำนวนในใบ")
+    def get_invoice_qty(self, obj):
+        return f"{self._invoice_qty(obj):,}" if obj and obj.pk else '-'
 
-    @admin.display(description="ยอดสั่ง")
-    def get_ordered_total(self, obj):
-        return f"{obj.sales_item.quantity_unit * obj.unit_price:,.2f}" if obj and obj.pk else '-'
+    @admin.display(description="ยอดในใบ")
+    def get_invoice_total(self, obj):
+        return f"{self._invoice_qty(obj) * obj.unit_price:,.2f}" if obj and obj.pk else '-'
 
     @admin.display(description="มูลค่า")
     def get_amount(self, obj):
@@ -5921,41 +5949,60 @@ class CreditNoteItemInline(UnfoldTabularInline):
         return f"{obj.amount * (1 + self._vat_p(obj) / 100):,.2f}" if obj and obj.pk else '-'
 
 
+def _cn_receipt_payload(receipt):
+    """ข้อมูลให้ JS: รายการสินค้าในใบกำกับ + % VAT"""
+    return {
+        'vat': float(receipt.sales_order.vat_percent or 0),
+        'items': {r['label']: {'price': float(r['price']), 'qty': r['qty']} for r in _receipt_credit_items(receipt)},
+    }
+
+
 @admin.register(CreditNote)
 class CreditNoteAdmin(UnfoldModelAdmin):
-    list_display = ('cn_number', 'get_doc_date', 'get_customer', 'get_so_number', 'reason',
+    list_display = ('cn_number', 'get_doc_date', 'get_receipt_number', 'get_customer', 'reason',
                     'get_subtotal', 'get_vat', 'get_total')
     list_filter = (
         ('doc_date', DjangoDateRangeFilter),
         ('sales_order__customer', AutocompleteSelectMultipleFilter),
     )
     list_filter_submit = True
-    search_fields = ('cn_number', 'sales_order__so_number', 'sales_order__customer__company_name',
-                     'sales_order__receipts__receipt_number', 'items__sales_item__product__name',
+    search_fields = ('cn_number', 'receipt__receipt_number', 'sales_order__so_number',
+                     'sales_order__customer__company_name', 'items__sales_item__product__name',
                      'items__sales_item__barcode_obj__code')
     date_hierarchy = 'doc_date'
-    autocomplete_fields = ['sales_order']
+    autocomplete_fields = ['receipt']
+    inlines = [CreditNoteItemInline]
 
     class Media:
         js = ('js/credit_note_inline.js',)
 
+    def get_urls(self):
+        custom = [
+            path('receipt-items/<int:receipt_id>/', self.admin_site.admin_view(self.receipt_items_view),
+                 name='stocks_creditnote_receipt_items'),
+        ]
+        return custom + super().get_urls()
+
+    def receipt_items_view(self, request, receipt_id):
+        from django.http import JsonResponse
+        receipt = SalesReceipt.objects.select_related('sales_order').filter(pk=receipt_id).first()
+        if receipt is None or not self.has_view_or_change_permission(request):
+            return JsonResponse({'vat': 0, 'items': {}})
+        return JsonResponse(_cn_receipt_payload(receipt))
+
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related('sales_order', 'sales_order__customer')
+        return super().get_queryset(request).select_related('receipt', 'sales_order', 'sales_order__customer')
 
     def get_fields(self, request, obj=None):
         if obj is None:
-            return ('sales_order', 'doc_date', 'reason', 'notes')
-        return ('cn_number', 'get_so_link', 'doc_date', 'reason', 'notes',
+            return ('receipt', 'doc_date', 'reason', 'notes')
+        return ('cn_number', 'get_receipt_link', 'doc_date', 'reason', 'notes',
                 'subtotal', 'vat_amount', 'grand_total', 'created_by')
 
     def get_readonly_fields(self, request, obj=None):
         if obj is None:
             return ()
-        return ('cn_number', 'get_so_link', 'subtotal', 'vat_amount', 'grand_total', 'created_by')
-
-    def get_inlines(self, request, obj):
-        # ต้องเลือกใบสั่งขายก่อน (หน้าเพิ่ม) ถึงจะรู้ว่ามีสินค้าอะไรให้ลดหนี้
-        return [CreditNoteItemInline] if obj else []
+        return ('cn_number', 'get_receipt_link', 'subtotal', 'vat_amount', 'grand_total', 'created_by')
 
     def save_model(self, request, obj, form, change):
         if not change:
@@ -5969,50 +6016,40 @@ class CreditNoteAdmin(UnfoldModelAdmin):
             item.sync_delivery_log()  # เผื่อแก้วันที่ใบลดหนี้ -> วันที่แถวรับคืนตาม
         obj.recalc_totals()
 
-    def response_add(self, request, obj, post_url_continue=None):
-        self.message_user(request, f"สร้างใบลดหนี้ {obj.cn_number} แล้ว — เลือกสินค้าที่จะลดหนี้ด้านล่าง แล้วกดบันทึก")
-        return HttpResponseRedirect(reverse('admin:stocks_creditnote_change', args=[obj.pk]))
-
     def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
         response = super().render_change_form(request, context, add, change, form_url, obj)
-        if obj and change:
-            # รายการสินค้าในใบสั่งขาย -> <datalist> ให้พิมพ์ค้นชื่อ/บาร์โค้ด + ข้อมูลให้ JS แสดงราคา/ยอดทันที
-            items = SalesItem.objects.filter(sales_order=obj.sales_order).select_related('barcode_obj', 'product')
-            data = {}
-            for si in items:
-                data[_cn_item_label(si)] = {
-                    'price': float(si.sale_price or 0),
-                    'ordered': si.quantity_unit,
-                    'shipped': float(_cn_units(si, si.quantity_shipped)),
-                }
-            options = ''.join(format_html('<option value="{}"></option>', label) for label in data)
-            payload = json.dumps({'vat': float(obj.sales_order.vat_percent or 0), 'items': data})
-            payload = payload.replace('</', '<\\/')
-            html = (f'<datalist id="cn-item-options">{options}</datalist>'
-                    f'<script>window.CN_DATA={payload};</script>')
-            response.render()
-            response.content = response.content.replace(b'</body>', html.encode() + b'</body>', 1)
+        # หน้าแก้ไข: ใส่รายการสินค้าของใบกำกับไว้เลย / หน้าเพิ่ม: JS โหลดผ่าน receipt-items/ ตอนเลือกใบ
+        payload = _cn_receipt_payload(obj.receipt) if obj and obj.receipt_id else {'vat': 0, 'items': {}}
+        options = ''.join(format_html('<option value="{}"></option>', label) for label in payload['items'])
+        data = json.dumps({**payload, 'items_url': reverse('admin:stocks_creditnote_receipt_items', args=[0])})
+        data = data.replace('</', '<\\/')
+        html = (f'<datalist id="cn-item-options">{options}</datalist>'
+                f'<script>window.CN_DATA={data};</script>')
+        response.render()
+        response.content = response.content.replace(b'</body>', html.encode() + b'</body>', 1)
         return response
 
-    @admin.display(description="ใบสั่งขาย")
-    def get_so_link(self, obj):
-        url = reverse('admin:stocks_salesorder_change', args=[obj.sales_order_id])
+    @admin.display(description="ใบกำกับภาษี/ใบส่งของ")
+    def get_receipt_link(self, obj):
         c = obj.sales_order.customer
-        return format_html('<a href="{}" target="_blank">{}</a> — {}', url, obj.sales_order.so_number,
-                           c.company_name if c else '-')
+        if not obj.receipt_id:
+            return f"{obj.sales_order.so_number} — {c.company_name if c else '-'}"
+        url = reverse('admin:stocks_salesinvoice_change', args=[obj.receipt_id])
+        return format_html('<a href="{}" target="_blank">{}</a> ({}) — {}', url, obj.receipt.receipt_number,
+                           obj.sales_order.so_number, c.company_name if c else '-')
 
     @admin.display(description="วันที่", ordering='doc_date')
     def get_doc_date(self, obj):
         return obj.doc_date.strftime('%d/%m/%Y')
 
+    @admin.display(description="ใบกำกับ", ordering='receipt__receipt_number')
+    def get_receipt_number(self, obj):
+        return obj.receipt.receipt_number if obj.receipt_id else '-'
+
     @admin.display(description="ลูกค้า", ordering='sales_order__customer__company_name')
     def get_customer(self, obj):
         c = obj.sales_order.customer
         return c.company_name if c else '-'
-
-    @admin.display(description="ใบสั่งขาย", ordering='sales_order__so_number')
-    def get_so_number(self, obj):
-        return obj.sales_order.so_number
 
     @admin.display(description="มูลค่า", ordering='subtotal')
     def get_subtotal(self, obj):

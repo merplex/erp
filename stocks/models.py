@@ -1287,12 +1287,16 @@ class SalesInvoice(SalesReceipt):
 
 
 # ── ใบลดหนี้ (CN) ─────────────────────────────────────────────────────────────
-# ลดหนี้ตามรายการในใบสั่งขาย — แต่ละรายการสร้าง SalesDeliveryLog จำนวนติดลบ 1 แถว (credit_note_item)
+# ลดหนี้อ้างอิงใบกำกับภาษี/ใบส่งของ (IV) 1 ใบ — แต่ละรายการสร้าง SalesDeliveryLog จำนวนติดลบ 1 แถว (credit_note_item)
 # เพื่อให้ สต็อก / DC / Rebate / ยอดสัญญา / รายงานที่รวมจาก log ลดตามเองทั้งหมด
 # ยอด (รวม VAT) หักออกจากยอดค้างรับของใบสั่งขาย (SalesOrder.credited_total)
 class CreditNote(models.Model):
     cn_number = models.CharField(max_length=50, unique=True, editable=False, verbose_name="เลขที่ใบลดหนี้")
-    sales_order = models.ForeignKey(SalesOrder, on_delete=models.PROTECT, related_name='credit_notes', verbose_name="ใบสั่งขาย")
+    receipt = models.ForeignKey('SalesReceipt', on_delete=models.PROTECT, null=True, related_name='credit_notes',
+                                verbose_name="ใบกำกับภาษี/ใบส่งของ")
+    # ตั้งจากใบกำกับอัตโนมัติ (ใช้หักยอดค้างรับของใบสั่งขาย)
+    sales_order = models.ForeignKey(SalesOrder, on_delete=models.PROTECT, related_name='credit_notes',
+                                    editable=False, verbose_name="ใบสั่งขาย")
     doc_date = models.DateField(default=datetime.date.today, db_index=True, verbose_name="วันที่")
     reason = models.CharField(max_length=255, blank=True, verbose_name="สาเหตุการลดหนี้")
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
@@ -1313,6 +1317,8 @@ class CreditNote(models.Model):
     def save(self, *args, **kwargs):
         if not self.cn_number:
             self.cn_number = generate_number('CN', CreditNote, 'cn_number')
+        if self.receipt_id:
+            self.sales_order_id = self.receipt.sales_order_id
         super().save(*args, **kwargs)
 
     def recalc_totals(self):
