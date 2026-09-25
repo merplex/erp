@@ -2645,7 +2645,7 @@ def _credit_note_tax_rows(date_from, date_to):
 
 
 TAX_REPORT_COLUMNS = ['ลำดับที่', 'วัน/เดือน/ปี', 'เลขที่เอกสาร', 'ชื่อลูกค้า', 'เลขผู้เสียภาษี',
-                      'สำนักงานใหญ่/สาขา', 'มูลค่า', 'ภาษีมูลค่าเพิ่ม', 'รวม']
+                      'สำนักงาน', 'มูลค่า', 'ภาษีมูลค่าเพิ่ม', 'รวม']
 
 
 def tax_report_excel_response(data, filename):
@@ -2692,7 +2692,7 @@ def tax_report_excel_response(data, filename):
         cell.number_format = money
         cell.border = Border(top=thin, bottom=Side(style='double', color='000000'))
 
-    for col, width in zip('ABCDEFGHI', (8, 12, 16, 48, 16, 18, 16, 16, 16)):
+    for col, width in zip('ABCDEFGHI', (8, 12, 16, 48, 16, 16, 16, 16, 16)):
         ws.column_dimensions[col].width = width
     ws.freeze_panes = ws.cell(row=head_row + 1, column=1)
 
