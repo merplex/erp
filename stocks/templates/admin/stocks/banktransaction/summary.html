@@ -1,0 +1,11 @@
+{% if bank_summary %}
+<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:12px;">
+    <div style="padding:8px 14px;border:1px solid #bbf7d0;border-radius:6px;">เงินเข้า <b style="color:#16a34a">{{ bank_summary.money_in|floatformat:"2g" }}</b></div>
+    <div style="padding:8px 14px;border:1px solid #fecaca;border-radius:6px;">เงินออก <b style="color:#dc2626">{{ bank_summary.money_out|floatformat:"2g" }}</b></div>
+    <div style="padding:8px 14px;border:1px solid #cbd5e1;border-radius:6px;">สุทธิ <b>{{ bank_summary.net|floatformat:"2g" }}</b></div>
+    {% if bank_summary.unassigned %}
+    <a href="?bank_account__isnull=True" style="padding:8px 14px;border:1px solid #fcd34d;border-radius:6px;color:#b45309;">
+        ⚠️ ยังไม่ระบุสมุดบัญชี {{ bank_summary.unassigned }} รายการ</a>
+    {% endif %}
+</div>
+{% endif %}

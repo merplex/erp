@@ -722,6 +722,8 @@ class PurchasePaymentLog(models.Model):
     payment_date = models.DateField(default=datetime.date.today, verbose_name="วันที่จ่าย")
     notes = models.CharField(max_length=200, blank=True, verbose_name="หมายเหตุ/เลขที่สลิป")
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
+    bank_account = models.ForeignKey('BankAccount', on_delete=models.PROTECT, null=True, blank=True,
+                                     related_name='+', verbose_name="สมุดบัญชี")
 
     def __str__(self): return f"{self.amount}"
 
@@ -881,6 +883,8 @@ class SalesPayment(models.Model):
     amount = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="ยอดเงินที่รับ")
     remark = models.CharField(max_length=200, blank=True, null=True, verbose_name="หมายเหตุ")
     evidence = models.ImageField(upload_to='payment_evidence/', blank=True, null=True, verbose_name="หลักฐานการโอน")
+    bank_account = models.ForeignKey('BankAccount', on_delete=models.PROTECT, null=True, blank=True,
+                                     related_name='+', verbose_name="สมุดบัญชี")
 
     def __str__(self):
         return f"รับเงิน {self.amount:,.2f}"
@@ -2010,6 +2014,9 @@ class RebatePayout(models.Model):
     
     status = models.CharField(max_length=20, choices=[('PENDING', 'รอจ่าย'), ('PAID', 'จ่ายแล้ว')], default='PENDING')
     ref_invoice = models.CharField(max_length=100, blank=True, verbose_name="เลขที่ใบลดหนี้/ใบจ่ายเงิน")
+    paid_date = models.DateField(null=True, blank=True, verbose_name="วันที่จ่ายจริง")
+    bank_account = models.ForeignKey('BankAccount', on_delete=models.PROTECT, null=True, blank=True,
+                                     related_name='+', verbose_name="จ่ายจากสมุดบัญชี")
 
     def recalculate_totals(self):
         """คำนวณยอดรวมใหม่จาก RebatePayoutItem ที่เชื่อมอยู่"""
@@ -2022,6 +2029,8 @@ class RebatePayout(models.Model):
             total_sales_amount=totals['total_sales'] or 0,
             rebate_amount=totals['total_rebate'] or 0,
         )
+        # update() ไม่ยิง signal — ถ้าจ่ายแล้ว ให้รายการเดินบัญชีได้ยอดใหม่ด้วย
+        sync_rebate_payout_ledger(RebatePayout.objects.get(pk=self.pk))
 
     def __str__(self):
         return f"{self.contract} | {self.period_start} – {self.period_end}"
@@ -2138,3 +2147,433 @@ class SalesQuotationItem(models.Model):
     class Meta:
         unique_together = ('quotation', 'product')
         pass
+
+
+# ============================================================
+# การเงิน (M): สมุดบัญชี + รายการเดินบัญชี
+# ============================================================
+# รายการเดินบัญชี (BankTransaction) ส่วนใหญ่ "สร้างเอง" ผ่าน signal จากเอกสารต้นทาง:
+#   - รับเงินขาย / หัก DC-Rebate (SalesPayment — หน้า A4, A5)
+#   - จ่ายเงินซื้อ (PurchasePaymentLog — หน้า A3)
+#   - จ่าย Rebate ตามสัญญา (RebatePayout สถานะ "จ่ายแล้ว" — หน้า A6)
+#   - รับเงินกู้ / ผ่อนชำระเงินกู้ตามตารางผ่อนที่ถึงกำหนด (Loan / LoanInstallment — หน้า M3)
+# แก้/ลบที่ต้นทาง -> แถวในสมุดตามเอง (OneToOne CASCADE) ส่วนรายการอื่น (ค่าธรรมเนียม, โอนระหว่างบัญชี ฯลฯ) บันทึกเองได้
+# amount เก็บแบบมีเครื่องหมาย: + เงินเข้า, - เงินออก
+class BankAccount(models.Model):
+    ACCOUNT_TYPES = [
+        ('SAVINGS', 'ออมทรัพย์'),
+        ('CURRENT', 'กระแสรายวัน (เช็ค)'),
+        ('CREDIT', 'เครดิต'),
+        ('CASH', 'เงินสด'),
+        ('FACTORING', 'แฟคตอริ่ง'),
+    ]
+    name = models.CharField(max_length=100, verbose_name="ชื่อบัญชี")
+    account_type = models.CharField(max_length=20, choices=ACCOUNT_TYPES, default='SAVINGS', verbose_name="ประเภทบัญชี")
+    bank_name = models.CharField(max_length=100, blank=True, verbose_name="ธนาคาร/สถาบัน")
+    branch = models.CharField(max_length=100, blank=True, verbose_name="สาขา")
+    account_number = models.CharField(max_length=50, blank=True, verbose_name="เลขที่บัญชี")
+    opening_balance = models.DecimalField(max_digits=18, decimal_places=4, default=0, verbose_name="ยอดยกมา")
+    # รายการก่อนวันนี้ยังแสดงในรายการเดินบัญชี แต่ไม่นับรวมยอดคงเหลือ (ยอดยกมาครอบคลุมแล้ว)
+    opening_date = models.DateField(default=datetime.date.today, verbose_name="วันที่ยอดยกมา")
+    is_default = models.BooleanField(default=False, verbose_name="บัญชีหลัก",
+                                     help_text="รายการรับ/จ่ายที่ไม่ได้เลือกบัญชี (เช่น ยืนยันยอดจาก A5) จะเข้าบัญชีนี้")
+    is_active = models.BooleanField(default=True, verbose_name="ใช้งาน")
+    notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
+
+    class Meta:
+        verbose_name = "สมุดบัญชี"
+        verbose_name_plural = "M1. สมุดบัญชี"
+        ordering = ('-is_default', 'name')
+
+    def __str__(self):
+        label = f"{self.name} ({self.get_account_type_display()})"
+        return f"{label} {self.account_number}" if self.account_number else label
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if self.is_default:
+            BankAccount.objects.filter(is_default=True).exclude(pk=self.pk).update(is_default=False)
+
+    @property
+    def current_balance(self):
+        moved = self.transactions.filter(txn_date__gte=self.opening_date).aggregate(t=Sum('amount'))['t']
+        return self.opening_balance + (moved or 0)
+
+
+def default_bank_account_id():
+    return BankAccount.objects.filter(is_default=True, is_active=True).values_list('id', flat=True).first()
+
+
+class BankTransactionCategory(models.Model):
+    """หมวดของรายการที่บันทึกเอง (ค่าแรง, เงินเดือน, ค่าเช่า ...) — เพิ่มเองได้"""
+    name = models.CharField(max_length=100, unique=True, verbose_name="ชื่อหมวด")
+
+    class Meta:
+        verbose_name = "หมวดรายการเดินบัญชี"
+        verbose_name_plural = "หมวดรายการเดินบัญชี"
+        ordering = ('name',)
+
+    def __str__(self):
+        return self.name
+
+
+class BankTransaction(models.Model):
+    SOURCE_CHOICES = [
+        ('MANUAL', 'บันทึกเอง'),
+        ('SALES_PAYMENT', 'รับเงินขาย (A4/A5)'),
+        ('DC_REBATE', 'หัก DC/Rebate (A5)'),
+        ('PURCHASE_PAYMENT', 'จ่ายเงินซื้อ (A3)'),
+        ('REBATE_PAYOUT', 'จ่าย Rebate ตามสัญญา (A6)'),
+        ('LOAN_DISBURSE', 'รับเงินกู้ (M3)'),
+        ('LOAN_PAYMENT', 'ผ่อนชำระเงินกู้ (M3)'),
+    ]
+    bank_account = models.ForeignKey(BankAccount, on_delete=models.PROTECT, null=True, blank=True,
+                                     related_name='transactions', verbose_name="สมุดบัญชี")
+    txn_date = models.DateField(default=datetime.date.today, db_index=True, verbose_name="วันที่")
+    amount = models.DecimalField(max_digits=18, decimal_places=4, verbose_name="จำนวนเงิน (+เข้า / -ออก)")
+    source_type = models.CharField(max_length=20, choices=SOURCE_CHOICES, default='MANUAL', editable=False,
+                                   db_index=True, verbose_name="ที่มา")
+    reference = models.CharField(max_length=100, blank=True, verbose_name="เอกสารอ้างอิง")
+    party = models.CharField(max_length=255, blank=True, verbose_name="คู่ค้า")
+    category = models.ForeignKey(BankTransactionCategory, on_delete=models.PROTECT, null=True, blank=True,
+                                 verbose_name="หมวด")
+    description = models.CharField(max_length=255, blank=True, verbose_name="รายละเอียด")
+    sales_payment = models.OneToOneField(SalesPayment, null=True, blank=True, on_delete=models.CASCADE,
+                                         related_name='bank_txn', editable=False)
+    purchase_payment = models.OneToOneField(PurchasePaymentLog, null=True, blank=True, on_delete=models.CASCADE,
+                                            related_name='bank_txn', editable=False)
+    rebate_payout = models.OneToOneField(RebatePayout, null=True, blank=True, on_delete=models.CASCADE,
+                                         related_name='bank_txn', editable=False)
+    loan_disbursement = models.OneToOneField('Loan', null=True, blank=True, on_delete=models.CASCADE,
+                                             related_name='disbursement_txn', editable=False)
+    loan_installment = models.OneToOneField('LoanInstallment', null=True, blank=True, on_delete=models.CASCADE,
+                                            related_name='bank_txn', editable=False)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, editable=False,
+                                   verbose_name="ผู้บันทึก")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "รายการเดินบัญชี"
+        verbose_name_plural = "M2. รายการเดินบัญชี"
+        ordering = ('-txn_date', '-id')
+
+    def __str__(self):
+        return f"{self.txn_date:%d/%m/%Y} {self.amount:,.2f}"
+
+    @property
+    def source_obj(self):
+        return (self.sales_payment or self.purchase_payment or self.rebate_payout
+                or self.loan_disbursement or self.loan_installment)
+
+    @property
+    def is_loan_row(self):
+        # สมุดบัญชีของแถวเงินกู้ยึดตาม Loan.bank_account เสมอ (เปลี่ยนที่หน้า M3)
+        return bool(self.loan_disbursement_id or self.loan_installment_id)
+
+
+def _as_date(value):
+    # A5 ใส่ timezone.now() (datetime) ลง DateField — ค่าใน instance ยังเป็น datetime อยู่
+    return value.date() if isinstance(value, datetime.datetime) else value
+
+
+@receiver(models.signals.pre_save, sender=SalesPayment)
+@receiver(models.signals.pre_save, sender=PurchasePaymentLog)
+def _payment_default_bank_account(sender, instance, **kwargs):
+    if instance.pk is None and not instance.bank_account_id:
+        instance.bank_account_id = default_bank_account_id()
+
+
+@receiver(post_save, sender=SalesPayment)
+def sync_sales_payment_ledger(sender, instance, **kwargs):
+    order = instance.order
+    remark = instance.remark or ''
+    is_deduction = instance.amount < 0 and ('DC' in remark or 'Rebate' in remark)
+    BankTransaction.objects.update_or_create(sales_payment=instance, defaults={
+        'bank_account_id': instance.bank_account_id,
+        'txn_date': _as_date(instance.payment_date),
+        'amount': round_money(instance.amount),  # ต้นทางเก็บ 2 ตำแหน่ง (A5 ส่งยอด VAT มาเกิน) ให้ตรงกัน
+        'source_type': 'DC_REBATE' if is_deduction else 'SALES_PAYMENT',
+        'reference': order.so_number or '',
+        'party': order.customer.company_name if order.customer_id else '',
+        'description': (remark or 'รับเงินขาย')[:255],
+    })
+
+
+@receiver(post_save, sender=PurchasePaymentLog)
+def sync_purchase_payment_ledger(sender, instance, **kwargs):
+    po = instance.purchase_order
+    BankTransaction.objects.update_or_create(purchase_payment=instance, defaults={
+        'bank_account_id': instance.bank_account_id,
+        'txn_date': _as_date(instance.payment_date),
+        'amount': -round_money(instance.amount),
+        'source_type': 'PURCHASE_PAYMENT',
+        'reference': po.po_number or '',
+        'party': po.supplier.company_name if po.supplier_id else '',
+        'description': (instance.notes or 'จ่ายเงินซื้อ')[:255],
+        'created_by_id': instance.user_id,
+    })
+
+
+@receiver(models.signals.pre_save, sender=RebatePayout)
+def _rebate_payout_paid_defaults(sender, instance, **kwargs):
+    if instance.status == 'PAID':
+        instance.paid_date = instance.paid_date or datetime.date.today()
+        if not instance.bank_account_id:
+            instance.bank_account_id = default_bank_account_id()
+
+
+def sync_rebate_payout_ledger(payout):
+    if payout.status != 'PAID':
+        BankTransaction.objects.filter(rebate_payout=payout).delete()
+        return
+    contract = payout.contract
+    BankTransaction.objects.update_or_create(rebate_payout=payout, defaults={
+        'bank_account_id': payout.bank_account_id,
+        'txn_date': payout.paid_date or payout.payout_date,
+        'amount': -round_money(payout.rebate_amount),
+        'source_type': 'REBATE_PAYOUT',
+        'reference': payout.ref_invoice or contract.contract_name,
+        'party': contract.customer.company_name,
+        'description': f"จ่าย Rebate {contract.contract_name} "
+                       f"({payout.period_start:%d/%m/%Y}–{payout.period_end:%d/%m/%Y})"[:255],
+    })
+
+
+@receiver(post_save, sender=RebatePayout)
+def _rebate_payout_post_save(sender, instance, **kwargs):
+    sync_rebate_payout_ledger(instance)
+
+# ── M3. เงินกู้ ──────────────────────────────────────────────────────────────
+# กรอกยอดกู้ + เงื่อนไข (วันครบกำหนดงวดแรก, จำนวนงวด, วิธีผ่อน, อัตราดอกเบี้ยหลายช่วง)
+# -> ระบบสร้างตารางผ่อน (LoanInstallment) ให้เอง งวดที่ถึงกำหนดจะลงรายการเดินบัญชี (เงินออก) อัตโนมัติ
+# ผ่าน run_due_loan_installments() ที่ AdvanceOrderRunnerMiddleware เรียกทุกครั้งที่เปิดหน้า Admin
+def add_months(date, months, day=None):
+    import calendar
+    m = date.month - 1 + months
+    y, m = date.year + m // 12, m % 12 + 1
+    return datetime.date(y, m, min(day or date.day, calendar.monthrange(y, m)[1]))
+
+
+class Loan(models.Model):
+    REPAYMENT_METHODS = [
+        ('ANNUITY', 'ผ่อนเท่ากันทุกงวด (เงินต้น+ดอกเบี้ย)'),
+        ('EQUAL_PRINCIPAL', 'เงินต้นเท่ากันทุกงวด + ดอกเบี้ยตามยอดคงเหลือ'),
+        ('FIXED_PAYMENT', 'ระบุยอดผ่อนต่องวดเอง (งวดสุดท้ายจ่ายส่วนที่เหลือ)'),
+    ]
+    INTEREST_METHODS = [
+        ('MONTHLY', 'รายเดือน (อัตราต่อปี ÷ 12)'),
+        ('DAILY', 'รายวันตามจริง (อัตราต่อปี × จำนวนวัน ÷ 365)'),
+    ]
+    name = models.CharField(max_length=150, verbose_name="ชื่อ/เลขที่สัญญากู้")
+    lender = models.CharField(max_length=255, verbose_name="ผู้ให้กู้")
+    bank_account = models.ForeignKey(BankAccount, on_delete=models.PROTECT, related_name='loans',
+                                     verbose_name="สมุดบัญชี (รับเงินกู้/ตัดชำระ)")
+    principal = models.DecimalField(max_digits=18, decimal_places=4, validators=[MinValueValidator(0)],
+                                    verbose_name="ยอดกู้")
+    loan_date = models.DateField(default=datetime.date.today, verbose_name="วันที่รับเงินกู้")
+    first_due_date = models.DateField(verbose_name="วันครบกำหนดงวดแรก",
+                                      help_text="งวดถัดไปครบกำหนดวันเดียวกันของทุกเดือน")
+    term_months = models.PositiveSmallIntegerField(validators=[MinValueValidator(1)],
+                                                   verbose_name="จำนวนงวด (เดือน)")
+    repayment_method = models.CharField(max_length=20, choices=REPAYMENT_METHODS, default='ANNUITY',
+                                        verbose_name="วิธีผ่อน")
+    installment_amount = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True,
+                                             verbose_name="ยอดผ่อนต่องวด",
+                                             help_text="ใช้กับวิธี \"ระบุยอดผ่อนต่องวดเอง\"")
+    interest_method = models.CharField(max_length=10, choices=INTEREST_METHODS, default='MONTHLY',
+                                       verbose_name="วิธีคิดดอกเบี้ย")
+    record_disbursement = models.BooleanField(default=True, verbose_name="บันทึกเงินกู้เข้าสมุดบัญชี",
+                                              help_text="สร้างรายการเงินเข้า (ยอดกู้) ในวันที่รับเงินกู้")
+    is_active = models.BooleanField(default=True, verbose_name="ใช้งาน",
+                                    help_text="ปิด = หยุดตัดชำระงวดที่ถึงกำหนดอัตโนมัติ")
+    notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
+
+    class Meta:
+        verbose_name = "เงินกู้"
+        verbose_name_plural = "M3. เงินกู้"
+        ordering = ('-loan_date', '-id')
+
+    def __str__(self):
+        return f"{self.name} ({self.lender})"
+
+    def clean(self):
+        if self.repayment_method == 'FIXED_PAYMENT' and not self.installment_amount:
+            raise ValidationError({'installment_amount': "วิธีผ่อนนี้ต้องระบุยอดผ่อนต่องวด"})
+        if self.first_due_date and self.loan_date and self.first_due_date < self.loan_date:
+            raise ValidationError({'first_due_date': "วันครบกำหนดงวดแรกต้องไม่ก่อนวันที่รับเงินกู้"})
+
+    def is_schedule_ready(self):
+        return bool(self.principal and self.term_months and self.first_due_date and self.rates.exists()
+                    and (self.repayment_method != 'FIXED_PAYMENT' or self.installment_amount))
+
+    def due_dates(self):
+        return [add_months(self.first_due_date, k) for k in range(self.term_months)]
+
+    @staticmethod
+    def rate_for(due_date, due_dates, rates):
+        """อัตราของงวดที่ครบกำหนด due_date = แถวที่ "เริ่มมีผล" ล่าสุดก่อนหรือตรงวันนั้น"""
+        best, best_start = Decimal(0), None
+        for r in rates:
+            if r.from_date:
+                start = r.from_date
+            elif r.from_period:
+                start = due_dates[min(r.from_period, len(due_dates)) - 1]
+            else:
+                start = datetime.date.min
+            if start <= due_date and (best_start is None or start >= best_start):
+                best, best_start = r.annual_rate, start
+        return best
+
+    def generate_schedule(self):
+        """ลบงวดที่ยังไม่ตัดบัญชี แล้วคำนวณงวดที่เหลือใหม่จากเงินต้นคงเหลือ (งวดที่ตัดบัญชีแล้วเก็บไว้ตามเดิม)"""
+        self.installments.filter(bank_txn__isnull=True).delete()
+        posted = list(self.installments.order_by('period_no'))
+        balance = self.principal - sum((i.principal_amount for i in posted), Decimal(0))
+        prev_date = posted[-1].due_date if posted else self.loan_date
+        start_n = posted[-1].period_no + 1 if posted else 1
+        due_dates = self.due_dates()
+        rates = list(self.rates.all())
+        rows = []
+        for n in range(start_n, self.term_months + 1):
+            if balance <= 0:
+                break
+            due = due_dates[n - 1]
+            rate = self.rate_for(due, due_dates, rates)
+            if self.interest_method == 'DAILY':
+                interest = balance * rate / 100 * Decimal((due - prev_date).days) / 365
+            else:
+                interest = balance * rate / 1200
+            interest = round_money(interest)
+            remaining = self.term_months - n + 1
+            if self.repayment_method == 'EQUAL_PRINCIPAL':
+                principal = balance / remaining
+            elif self.repayment_method == 'FIXED_PAYMENT':
+                principal = self.installment_amount - interest
+            else:
+                # คิดยอดผ่อนใหม่ทุกงวดจากเงินต้นคงเหลือ -> อัตราเปลี่ยนกลางสัญญา ยอดผ่อนก็ปรับตาม
+                i = rate / 1200
+                payment = balance / remaining if not i else balance * i / (1 - (1 + i) ** -remaining)
+                principal = payment - interest
+            principal = round_money(max(principal, 0))
+            if n == self.term_months or principal > balance:
+                principal = balance
+            balance -= principal
+            rows.append(LoanInstallment(loan=self, period_no=n, due_date=due, annual_rate=rate,
+                                        principal_amount=principal, interest_amount=interest,
+                                        total_amount=principal + interest, balance_after=balance))
+            prev_date = due
+        LoanInstallment.objects.bulk_create(rows)
+
+    def recalc_balances(self):
+        """หลังแก้ยอดในตารางผ่อนเอง: คำนวณเงินต้นคงเหลือของทุกงวดใหม่"""
+        balance = self.principal
+        for inst in self.installments.order_by('period_no', 'due_date'):
+            balance -= inst.principal_amount
+            if inst.balance_after != balance:
+                LoanInstallment.objects.filter(pk=inst.pk).update(balance_after=balance)
+
+    @property
+    def outstanding_principal(self):
+        paid = self.installments.filter(bank_txn__isnull=False).aggregate(t=Sum('principal_amount'))['t']
+        return self.principal - (paid or 0)
+
+
+class LoanRate(models.Model):
+    loan = models.ForeignKey(Loan, on_delete=models.CASCADE, related_name='rates')
+    from_period = models.PositiveSmallIntegerField(null=True, blank=True, verbose_name="เริ่มงวดที่",
+                                                   help_text="เว้นว่างทั้งสองช่อง = ตั้งแต่งวดแรก")
+    from_date = models.DateField(null=True, blank=True, verbose_name="หรือ เริ่มวันที่")
+    annual_rate = models.DecimalField(max_digits=8, decimal_places=4, validators=[MinValueValidator(0)],
+                                      verbose_name="ดอกเบี้ย % ต่อปี")
+
+    class Meta:
+        verbose_name = "อัตราดอกเบี้ย"
+        verbose_name_plural = "อัตราดอกเบี้ย (กำหนดได้หลายช่วง ตามงวดหรือวันที่)"
+        ordering = ('from_period', 'from_date', 'id')
+
+    def clean(self):
+        if self.from_period and self.from_date:
+            raise ValidationError("ระบุ \"เริ่มงวดที่\" หรือ \"เริ่มวันที่\" อย่างใดอย่างหนึ่ง")
+
+    def __str__(self):
+        return f"{self.annual_rate}%"
+
+
+class LoanInstallment(models.Model):
+    loan = models.ForeignKey(Loan, on_delete=models.CASCADE, related_name='installments')
+    period_no = models.PositiveSmallIntegerField(verbose_name="งวดที่")
+    due_date = models.DateField(db_index=True, verbose_name="วันครบกำหนด")
+    annual_rate = models.DecimalField(max_digits=8, decimal_places=4, default=0, verbose_name="ดอกเบี้ย %")
+    principal_amount = models.DecimalField(max_digits=18, decimal_places=4, default=0, verbose_name="เงินต้น")
+    interest_amount = models.DecimalField(max_digits=18, decimal_places=4, default=0, verbose_name="ดอกเบี้ย")
+    total_amount = models.DecimalField(max_digits=18, decimal_places=4, default=0, verbose_name="ยอดชำระ")
+    balance_after = models.DecimalField(max_digits=18, decimal_places=4, default=0, verbose_name="เงินต้นคงเหลือ")
+
+    class Meta:
+        verbose_name = "งวดผ่อนชำระ"
+        verbose_name_plural = "ตารางผ่อนชำระ"
+        ordering = ('period_no', 'due_date')
+
+    def __str__(self):
+        return f"{self.loan.name} งวดที่ {self.period_no}"
+
+    def save(self, *args, **kwargs):
+        self.total_amount = (self.principal_amount or 0) + (self.interest_amount or 0)
+        super().save(*args, **kwargs)
+
+    @property
+    def is_posted(self):
+        return hasattr(self, 'bank_txn')
+
+    def ledger_values(self):
+        loan = self.loan
+        return {
+            'bank_account_id': loan.bank_account_id,
+            'txn_date': self.due_date,
+            'amount': -self.total_amount,
+            'source_type': 'LOAN_PAYMENT',
+            'reference': loan.name[:100],
+            'party': loan.lender,
+            'description': f"ผ่อนเงินกู้ งวดที่ {self.period_no} (ต้น {self.principal_amount:,.2f} "
+                           f"ดอก {self.interest_amount:,.2f})",
+        }
+
+
+@receiver(post_save, sender=LoanInstallment)
+def _loan_installment_sync_ledger(sender, instance, created, **kwargs):
+    # แก้ยอด/วันที่ของงวดที่ตัดบัญชีไปแล้ว -> รายการเดินบัญชีตาม (งวดใหม่รอ run_due_loan_installments)
+    if not created:
+        BankTransaction.objects.filter(loan_installment=instance).update(**instance.ledger_values())
+
+
+@receiver(post_save, sender=Loan)
+def _loan_sync_ledger(sender, instance, **kwargs):
+    if instance.record_disbursement:
+        BankTransaction.objects.update_or_create(loan_disbursement=instance, defaults={
+            'bank_account_id': instance.bank_account_id,
+            'txn_date': instance.loan_date,
+            'amount': instance.principal,
+            'source_type': 'LOAN_DISBURSE',
+            'reference': instance.name[:100],
+            'party': instance.lender,
+            'description': f"รับเงินกู้ {instance.name}"[:255],
+        })
+    else:
+        BankTransaction.objects.filter(loan_disbursement=instance).delete()
+    BankTransaction.objects.filter(loan_installment__loan=instance).update(
+        bank_account_id=instance.bank_account_id, reference=instance.name[:100], party=instance.lender)
+
+
+def run_due_loan_installments():
+    """งวดผ่อนที่ถึงกำหนดแล้วแต่ยังไม่ตัดบัญชี -> สร้างรายการเดินบัญชี (เงินออก) — เรียกจาก middleware"""
+    from django.db import IntegrityError, transaction
+    today = datetime.date.today()
+    due = (LoanInstallment.objects
+           .filter(due_date__lte=today, bank_txn__isnull=True, loan__is_active=True)
+           .select_related('loan'))
+    for inst in due:
+        try:
+            with transaction.atomic():
+                BankTransaction.objects.create(loan_installment=inst, **inst.ledger_values())
+        except IntegrityError:
+            pass  # request คู่ขนานตัดงวดนี้ไปแล้ว (OneToOne กันซ้ำ)

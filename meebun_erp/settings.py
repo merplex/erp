@@ -278,6 +278,15 @@ UNFOLD = {
                     {"title": "A8. ใบลดหนี้",                "icon": "receipt_long",    "link": "/admin/stocks/creditnote/"},
                 ],
             },
+            {
+                "title": "การเงิน",
+                "collapsible": True,
+                "items": [
+                    {"title": "M1. สมุดบัญชี",               "icon": "account_balance_wallet", "link": "/admin/stocks/bankaccount/"},
+                    {"title": "M2. รายการเดินบัญชี",          "icon": "swap_vert",       "link": "/admin/stocks/banktransaction/"},
+                    {"title": "M3. เงินกู้",                  "icon": "credit_score",    "link": "/admin/stocks/loan/"},
+                ],
+            },
         ],
     },
 }

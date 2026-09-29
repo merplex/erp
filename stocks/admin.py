@@ -65,6 +65,7 @@ from unfold.contrib.filters.admin import (
 from django.core.validators import EMPTY_VALUES
 from django.forms import ValidationError as FilterValidationError
 from unfold.utils import parse_datetime_str
+from unfold.widgets import UnfoldAdminRadioSelectWidget
 import re
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -472,7 +473,8 @@ class PurchasePaymentInline(UnfoldTabularInline):
     extra = 1
     verbose_name = "💰 บันทึกการจ่ายเงิน"
     verbose_name_plural = "💰 ประวัติการจ่ายเงิน (Payments)"
-    fields = ('amount', 'notes', 'payment_date', 'user')
+    fields = ('amount', 'bank_account', 'notes', 'payment_date', 'user')
+    autocomplete_fields = ['bank_account']
     readonly_fields = ('user',)
 
 
@@ -481,7 +483,8 @@ class SalesPaymentInline(UnfoldTabularInline):
     extra = 1
     verbose_name = "💰 รายการรับเงิน"
     verbose_name_plural = "ประวัติการรับเงิน (กรอกเองกรณีแบ่งจ่าย / หรือกด Action หน้ารวมเพื่อรับเต็มจำนวน)"
-    fields = ('payment_date', 'amount', 'remark', 'evidence')
+    fields = ('payment_date', 'amount', 'bank_account', 'remark', 'evidence')
+    autocomplete_fields = ['bank_account']
     readonly_fields = ('get_status_from_logs',)
 
     def get_status_from_logs(self, obj):
@@ -3949,6 +3952,13 @@ class PaymentDateForm(forms.Form):
         initial=timezone.now,
         widget=AdminDateWidget()
     )
+    bank_account = forms.ModelChoiceField(
+        label="สมุดบัญชี",
+        queryset=BankAccount.objects.filter(is_active=True),
+        required=False,
+        initial=default_bank_account_id,
+        help_text="ไม่เลือก = เข้าบัญชีหลัก",
+    )
 
 @admin.action(description="🎯 ปิดยอด: กรณีพิเศษ/รับไม่ครบ (SETTLED)")    
 def settle_income_special(modeladmin, request, queryset):
@@ -3992,6 +4002,7 @@ def settle_and_close_orders(modeladmin, request, queryset):
         form = PaymentDateForm(request.POST)
         if form.is_valid():
             pay_date = form.cleaned_data['payment_date']
+            bank_account = form.cleaned_data['bank_account']
             updated_count = 0
             
             for obj in queryset:
@@ -4000,10 +4011,12 @@ def settle_and_close_orders(modeladmin, request, queryset):
                 # สร้างรายการจ่ายเงิน (ตามยอดที่ค้าง)
                 if balance > 0:
                     if isinstance(obj, PurchaseOrder):
-                        PurchasePaymentLog.objects.create(purchase_order=obj, amount=balance, payment_date=pay_date, notes="Auto Settle")
+                        PurchasePaymentLog.objects.create(purchase_order=obj, amount=balance, payment_date=pay_date, notes="Auto Settle",
+                                                          bank_account=bank_account, user=request.user)
                         obj.refresh_from_db()
                     elif isinstance(obj, SalesOrder): # รองรับทั้ง SalesOrder และ IncomeReport
-                        SalesPayment.objects.create(order=obj, amount=balance, payment_date=pay_date, remark="Auto Settle")
+                        SalesPayment.objects.create(order=obj, amount=balance, payment_date=pay_date, remark="Auto Settle",
+                                                bank_account=bank_account)
                         obj.refresh_from_db()
                     updated_count += 1
                 
@@ -5661,6 +5674,9 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     list_filter_submit = True
     search_fields = ('contract__contract_name', 'contract__customer__company_name', 'ref_invoice')
     readonly_fields = ('contract', 'period_start', 'period_end', 'total_sales_amount', 'rebate_amount')
+    fields = ('contract', 'period_start', 'period_end', 'payout_date', 'total_sales_amount', 'rebate_amount',
+              'status', 'paid_date', 'bank_account', 'ref_invoice')
+    autocomplete_fields = ['bank_account']
     list_display_links = ('contract',)
     ordering = ('-payout_date',)
     inlines = [RebatePayoutItemInline]
@@ -6062,3 +6078,347 @@ class CreditNoteAdmin(UnfoldModelAdmin):
     @admin.display(description="รวม", ordering='grand_total')
     def get_total(self, obj):
         return format_html('<b>{}</b>', f"{obj.grand_total:,.2f}")
+
+
+# ============================================================
+# M. การเงิน: สมุดบัญชี + รายการเดินบัญชี
+# ============================================================
+MONEY = DecimalField(max_digits=18, decimal_places=4)
+
+
+def _money_html(value, color=None):
+    text = f"{value:,.2f}"
+    return format_html('<span style="color:{}">{}</span>', color, text) if color else text
+
+
+@admin.register(BankAccount)
+class BankAccountAdmin(UnfoldModelAdmin):
+    list_display = ('name', 'account_type', 'bank_name', 'account_number', 'get_opening',
+                    'get_balance', 'is_default', 'is_active', 'get_ledger_link')
+    list_filter = ('account_type', 'is_active')
+    search_fields = ('name', 'bank_name', 'account_number')
+    fields = ('name', 'account_type', 'bank_name', 'branch', 'account_number',
+              'opening_balance', 'opening_date', 'is_default', 'is_active', 'notes')
+
+    def get_queryset(self, request):
+        moved = (BankTransaction.objects
+                 .filter(bank_account=OuterRef('pk'), txn_date__gte=OuterRef('opening_date'))
+                 .values('bank_account').annotate(s=Sum('amount')).values('s'))
+        return super().get_queryset(request).annotate(
+            balance=ExpressionWrapper(F('opening_balance') + Coalesce(Subquery(moved, output_field=MONEY),
+                                                                     Value(0, output_field=MONEY)),
+                                      output_field=MONEY))
+
+    def get_search_results(self, request, queryset, search_term):
+        queryset, may_have_duplicates = super().get_search_results(request, queryset, search_term)
+        # ช่องพิมพ์ค้นหาในหน้ารับ/จ่ายเงิน (autocomplete) แสดงเฉพาะบัญชีที่ยังใช้งาน
+        if request.path.endswith('/autocomplete/'):
+            queryset = queryset.filter(is_active=True)
+        return queryset, may_have_duplicates
+
+    @admin.display(description="ยอดยกมา", ordering='opening_balance')
+    def get_opening(self, obj):
+        return f"{obj.opening_balance:,.2f} ({obj.opening_date:%d/%m/%Y})"
+
+    @admin.display(description="ยอดคงเหลือ", ordering='balance')
+    def get_balance(self, obj):
+        return format_html('<b>{}</b>', _money_html(obj.balance, '#dc2626' if obj.balance < 0 else None))
+
+    @admin.display(description="")
+    def get_ledger_link(self, obj):
+        url = reverse('admin:stocks_banktransaction_changelist') + f'?bank_account__id__exact={obj.pk}'
+        return format_html('<a href="{}">📒 รายการเดินบัญชี</a>', url)
+
+
+class AssignBankAccountForm(forms.Form):
+    bank_account = forms.ModelChoiceField(label="ย้ายไปสมุดบัญชี", queryset=BankAccount.objects.filter(is_active=True))
+
+
+class ManualBankTransactionForm(forms.ModelForm):
+    """รายการที่บันทึกเอง (ค่าแรง, เงินเดือน, ค่าเช่า ...) — กรอกยอดเป็นบวก แล้วเลือกเงินเข้า/เงินออก"""
+    direction = forms.ChoiceField(label="ประเภท", choices=[('OUT', 'เงินออก (จ่าย)'), ('IN', 'เงินเข้า (รับ)')],
+                                  initial='OUT', widget=UnfoldAdminRadioSelectWidget)
+
+    class Meta:
+        model = BankTransaction
+        fields = ('bank_account', 'txn_date', 'direction', 'amount', 'category', 'reference', 'party', 'description')
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['amount'].label = "จำนวนเงิน"
+        self.fields['bank_account'].required = True
+        if self.instance.pk and self.instance.amount is not None:
+            self.initial['direction'] = 'IN' if self.instance.amount > 0 else 'OUT'
+            self.initial['amount'] = abs(self.instance.amount)
+
+    def clean_amount(self):
+        amount = self.cleaned_data.get('amount')
+        if amount is not None and amount <= 0:
+            raise ValidationError("กรอกจำนวนเงินมากกว่า 0 (เลือกเงินเข้า/เงินออกที่ช่องประเภท)")
+        return amount
+
+    def clean(self):
+        cleaned = super().clean()
+        amount = cleaned.get('amount')
+        if amount is not None and cleaned.get('direction') == 'OUT':
+            cleaned['amount'] = -amount
+        return cleaned
+
+
+@admin.register(BankTransaction)
+class BankTransactionAdmin(ExportToExcelMixin, UnfoldModelAdmin):
+    list_display = ('get_date', 'bank_account', 'source_type', 'category', 'get_reference', 'party', 'description',
+                    'get_in', 'get_out', 'get_balance')
+    list_display_links = ('get_date',)
+    list_filter = (
+        'bank_account',
+        ('txn_date', DjangoDateRangeFilter),
+        'source_type',
+        'category',
+    )
+    list_filter_submit = True
+    search_fields = ('reference', 'party', 'description', 'category__name')
+    autocomplete_fields = ['bank_account', 'category']
+    list_before_template = 'admin/stocks/banktransaction/summary.html'
+    actions = ['assign_bank_account', 'export_to_excel']
+    source_fields = ('source_type', 'get_source_link', 'bank_account', 'txn_date', 'amount', 'reference', 'party',
+                     'description')
+
+    def get_form(self, request, obj=None, **kwargs):
+        if obj is None or obj.source_type == 'MANUAL':
+            kwargs['form'] = ManualBankTransactionForm
+        return super().get_form(request, obj, **kwargs)
+
+    def get_queryset(self, request):
+        # ยอดคงเหลือหลังรายการ = ยอดยกมา + ผลรวมรายการของบัญชีเดียวกัน (ตั้งแต่วันยอดยกมา) จนถึงแถวนี้
+        # คิดจากทั้งบัญชีเสมอ ไม่ขึ้นกับตัวกรองในหน้า list
+        prior = (BankTransaction.objects
+                 .filter(bank_account=OuterRef('bank_account'),
+                         txn_date__gte=OuterRef('bank_account__opening_date'))
+                 .filter(Q(txn_date__lt=OuterRef('txn_date')) | Q(txn_date=OuterRef('txn_date'), id__lte=OuterRef('id')))
+                 .values('bank_account').annotate(s=Sum('amount')).values('s'))
+        return super().get_queryset(request).select_related(
+            'bank_account', 'category', 'sales_payment', 'purchase_payment', 'loan_installment').annotate(
+            running_balance=ExpressionWrapper(
+                F('bank_account__opening_balance') + Coalesce(Subquery(prior, output_field=MONEY),
+                                                             Value(0, output_field=MONEY)),
+                output_field=MONEY))
+
+    def get_fields(self, request, obj=None):
+        if obj and obj.source_type != 'MANUAL':
+            return self.source_fields
+        return ManualBankTransactionForm.Meta.fields
+
+    def get_readonly_fields(self, request, obj=None):
+        if obj and obj.source_type != 'MANUAL':
+            # รายการจากเอกสารต้นทาง: แก้ได้แค่ "สมุดบัญชี" (ส่งกลับไปที่ต้นทางด้วย) ที่เหลือแก้ที่ต้นทาง
+            # แถวเงินกู้: สมุดบัญชียึดตามหน้า M3 จึงแก้ที่นี่ไม่ได้
+            if obj.is_loan_row:
+                return self.source_fields
+            return tuple(f for f in self.source_fields if f != 'bank_account')
+        return ()
+
+    def has_delete_permission(self, request, obj=None):
+        # ห้ามลบแถวจากเอกสารต้นทาง "จากหน้า M2" เท่านั้น — ถ้าเช็คทุกที่ Django จะนับเป็น perms_needed
+        # ตอนลบเอกสารต้นทาง (SO/PO/เงินกู้ ที่ลบแถวนี้ตาม CASCADE) แล้วตอบ 403
+        url_name = getattr(getattr(request, 'resolver_match', None), 'url_name', '') or ''
+        if obj and obj.source_type != 'MANUAL' and url_name.startswith('stocks_banktransaction_'):
+            return False
+        return super().has_delete_permission(request, obj)
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+        if obj.source_obj and not obj.is_loan_row and 'bank_account' in form.changed_data:
+            type(obj.source_obj).objects.filter(pk=obj.source_obj.pk).update(bank_account=obj.bank_account)
+
+    def changelist_view(self, request, extra_context=None):
+        if request.method == 'POST' and request.POST.get('action') == 'delete_selected':
+            ids = request.POST.getlist(helpers.ACTION_CHECKBOX_NAME)
+            if BankTransaction.objects.filter(pk__in=ids).exclude(source_type='MANUAL').exists():
+                self.message_user(request, "ลบได้เฉพาะรายการที่บันทึกเอง — รายการจากเอกสาร (A3/A4/A5/A6/M3) "
+                                           "ให้แก้/ลบที่เอกสารต้นทาง", messages.ERROR)
+                return HttpResponseRedirect(request.get_full_path())
+        response = super().changelist_view(request, extra_context)
+        cl = getattr(response, 'context_data', {}).get('cl')
+        if cl is not None:
+            totals = cl.queryset.order_by().aggregate(
+                money_in=Sum('amount', filter=Q(amount__gt=0)),
+                money_out=Sum('amount', filter=Q(amount__lt=0)))
+            money_in = totals['money_in'] or Decimal(0)
+            money_out = -(totals['money_out'] or Decimal(0))
+            response.context_data['bank_summary'] = {
+                'money_in': money_in, 'money_out': money_out, 'net': money_in - money_out,
+                'unassigned': BankTransaction.objects.filter(bank_account__isnull=True).count(),
+            }
+        return response
+
+    @admin.action(description="🏦 ระบุ/ย้ายสมุดบัญชี")
+    def assign_bank_account(self, request, queryset):
+        if 'apply' in request.POST:
+            form = AssignBankAccountForm(request.POST)
+            if form.is_valid():
+                account = form.cleaned_data['bank_account']
+                loan_rows = queryset.filter(Q(loan_disbursement__isnull=False) | Q(loan_installment__isnull=False))
+                skipped = loan_rows.count()
+                queryset = queryset.exclude(pk__in=list(loan_rows.values_list('pk', flat=True)))
+                rows = list(queryset)
+                for model, field in ((SalesPayment, 'sales_payment_id'), (PurchasePaymentLog, 'purchase_payment_id'),
+                                     (RebatePayout, 'rebate_payout_id')):
+                    ids = [getattr(t, field) for t in rows if getattr(t, field)]
+                    model.objects.filter(pk__in=ids).update(bank_account=account)
+                count = queryset.update(bank_account=account)
+                self.message_user(request, f"ย้าย {count} รายการไปที่ {account} แล้ว", messages.SUCCESS)
+                if skipped:
+                    self.message_user(request, f"ข้าม {skipped} รายการเงินกู้ (เปลี่ยนสมุดบัญชีที่หน้า M3 เงินกู้)",
+                                      messages.WARNING)
+                return None
+        else:
+            form = AssignBankAccountForm()
+        return TemplateResponse(request, 'admin/stocks/banktransaction/assign_account.html', {
+            **self.admin_site.each_context(request),
+            'title': "ระบุ/ย้ายสมุดบัญชี",
+            'opts': self.model._meta,
+            'queryset': queryset,
+            'form': form,
+            'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
+        })
+
+    @admin.display(description="ที่มา")
+    def get_source_link(self, obj):
+        if obj.sales_payment_id:
+            url = reverse('admin:stocks_incomereport_change', args=[obj.sales_payment.order_id])
+        elif obj.purchase_payment_id:
+            url = reverse('admin:stocks_financereport_change', args=[obj.purchase_payment.purchase_order_id])
+        elif obj.rebate_payout_id:
+            url = reverse('admin:stocks_rebatepayout_change', args=[obj.rebate_payout_id])
+        elif obj.loan_disbursement_id:
+            url = reverse('admin:stocks_loan_change', args=[obj.loan_disbursement_id])
+        elif obj.loan_installment_id:
+            url = reverse('admin:stocks_loan_change', args=[obj.loan_installment.loan_id])
+        else:
+            return '-'
+        return format_html('<a href="{}" target="_blank">{} ↗</a>', url, obj.reference or 'เปิดเอกสาร')
+
+    @admin.display(description="วันที่", ordering='txn_date')
+    def get_date(self, obj):
+        return obj.txn_date.strftime('%d/%m/%Y')
+
+    @admin.display(description="เอกสาร", ordering='reference')
+    def get_reference(self, obj):
+        return self.get_source_link(obj) if obj.source_type != 'MANUAL' else (obj.reference or '-')
+
+    @admin.display(description="เงินเข้า")
+    def get_in(self, obj):
+        return _money_html(obj.amount, '#16a34a') if obj.amount > 0 else ''
+
+    @admin.display(description="เงินออก")
+    def get_out(self, obj):
+        return _money_html(-obj.amount, '#dc2626') if obj.amount < 0 else ''
+
+    @admin.display(description="คงเหลือ")
+    def get_balance(self, obj):
+        if not obj.bank_account_id or obj.txn_date < obj.bank_account.opening_date:
+            return '—'
+        return format_html('<b>{}</b>', _money_html(obj.running_balance,
+                                                    '#dc2626' if obj.running_balance < 0 else None))
+
+
+@admin.register(BankTransactionCategory)
+class BankTransactionCategoryAdmin(UnfoldModelAdmin):
+    list_display = ('name',)
+    search_fields = ('name',)
+
+
+class LoanRateInline(UnfoldTabularInline):
+    model = LoanRate
+    extra = 1
+    fields = ('from_period', 'from_date', 'annual_rate')
+
+
+class LoanInstallmentInline(UnfoldTabularInline):
+    model = LoanInstallment
+    extra = 0
+    fields = ('period_no', 'due_date', 'annual_rate', 'principal_amount', 'interest_amount', 'get_total',
+              'get_balance_after', 'get_status')
+    readonly_fields = ('get_total', 'get_balance_after', 'get_status')
+    verbose_name_plural = "ตารางผ่อนชำระ (งวดที่ถึงกำหนดจะลงรายการเดินบัญชีเอง)"
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('bank_txn')
+
+    @admin.display(description="ยอดชำระ")
+    def get_total(self, obj):
+        return f"{obj.total_amount:,.2f}" if obj.pk else '-'
+
+    @admin.display(description="เงินต้นคงเหลือ")
+    def get_balance_after(self, obj):
+        return f"{obj.balance_after:,.2f}" if obj.pk else '-'
+
+    @admin.display(description="สถานะ")
+    def get_status(self, obj):
+        if not obj.pk:
+            return '-'
+        if obj.is_posted:
+            url = reverse('admin:stocks_banktransaction_change', args=[obj.bank_txn.pk])
+            return format_html('<a href="{}" style="color:#16a34a">✔ ตัดบัญชีแล้ว</a>', url)
+        return '⏳ รอครบกำหนด'
+
+
+class LoanAdminForm(forms.ModelForm):
+    regenerate_schedule = forms.BooleanField(
+        label="สร้างตารางผ่อนใหม่", required=False,
+        help_text="ลบงวดที่ยังไม่ตัดบัญชี แล้วคำนวณใหม่ตามเงื่อนไข/อัตราดอกเบี้ยปัจจุบัน (งวดที่ตัดบัญชีแล้วเก็บไว้)")
+
+    class Meta:
+        model = Loan
+        fields = '__all__'
+
+
+@admin.register(Loan)
+class LoanAdmin(UnfoldModelAdmin):
+    form = LoanAdminForm
+    list_display = ('name', 'lender', 'bank_account', 'get_principal', 'loan_date', 'term_months',
+                    'get_outstanding', 'get_next_due', 'is_active')
+    list_filter = ('is_active', 'bank_account')
+    search_fields = ('name', 'lender')
+    autocomplete_fields = ['bank_account']
+    inlines = [LoanRateInline, LoanInstallmentInline]
+    fieldsets = (
+        (None, {'fields': ('name', 'lender', 'bank_account', 'principal', 'loan_date', 'record_disbursement')}),
+        ("เงื่อนไขการผ่อน", {'fields': ('first_due_date', 'term_months', 'repayment_method', 'installment_amount',
+                                       'interest_method', 'regenerate_schedule')}),
+        (None, {'fields': ('is_active', 'notes')}),
+    )
+
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        loan = form.instance
+        has_pending = loan.installments.filter(bank_txn__isnull=True).exists()
+        # สร้างเองเมื่อยังไม่มีงวดค้าง (เพิ่งกรอกเงื่อนไขครบ หรือลบงวดใน inline ทิ้งหมด) หรือเมื่อติ๊กสร้างใหม่
+        if form.cleaned_data.get('regenerate_schedule') or (not has_pending and loan.outstanding_principal > 0):
+            if loan.is_schedule_ready():
+                loan.generate_schedule()
+                self.message_user(request, "สร้างตารางผ่อนชำระแล้ว", messages.SUCCESS)
+            else:
+                self.message_user(request, "ยังสร้างตารางผ่อนไม่ได้: กรอกยอดกู้, วันครบกำหนดงวดแรก, จำนวนงวด "
+                                           "และอัตราดอกเบี้ยอย่างน้อย 1 แถว (0 ได้)", messages.WARNING)
+        else:
+            loan.recalc_balances()
+        run_due_loan_installments()  # งวดที่เลยกำหนดแล้ว (เช่น กรอกเงินกู้ย้อนหลัง) ลงสมุดทันที
+
+    @admin.display(description="ยอดกู้", ordering='principal')
+    def get_principal(self, obj):
+        return f"{obj.principal:,.2f}"
+
+    @admin.display(description="เงินต้นคงเหลือ")
+    def get_outstanding(self, obj):
+        return format_html('<b>{}</b>', f"{obj.outstanding_principal:,.2f}")
+
+    @admin.display(description="งวดถัดไป")
+    def get_next_due(self, obj):
+        nxt = obj.installments.filter(bank_txn__isnull=True).order_by('due_date').first()
+        if not nxt:
+            return '-'
+        return f"{nxt.due_date:%d/%m/%Y} ({nxt.total_amount:,.2f})"

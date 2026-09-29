@@ -12,4 +12,9 @@ class AdvanceOrderRunnerMiddleware:
                 run_due_advance_orders()
             except Exception:
                 pass  # ห้ามให้ error ตรงนี้บัง page load เด็ดขาด
+            try:
+                from .models import run_due_loan_installments
+                run_due_loan_installments()  # งวดผ่อนเงินกู้ที่ถึงกำหนด -> รายการเดินบัญชี (M3)
+            except Exception:
+                pass
         return self.get_response(request)
