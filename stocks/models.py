@@ -2184,11 +2184,11 @@ class BankAccount(models.Model):
     branch = models.CharField(max_length=100, blank=True, verbose_name="สาขา")
     account_number = models.CharField(max_length=50, blank=True, verbose_name="เลขที่บัญชี")
     opening_balance = models.DecimalField(max_digits=18, decimal_places=4, default=0,
-                                          verbose_name="เงินเริ่มต้นบัญชี (ยอดยกมา)",
-                                          help_text="ยอดเงินในบัญชี ณ วันที่เริ่มต้นบัญชี (บัญชีเครดิตที่ใช้ไปแล้วใส่ติดลบ)")
+                                          verbose_name="ยอดยกมา",
+                                          help_text="ยอดเงินในบัญชี ณ วันที่ยอดยกมา (บัญชีเครดิตที่ใช้ไปแล้วใส่ติดลบ)")
     # รายการก่อนวันนี้ยังแสดงในรายการเดินบัญชี แต่ไม่นับรวมยอดคงเหลือ (ยอดยกมาครอบคลุมแล้ว)
-    opening_date = models.DateField(default=datetime.date.today, verbose_name="วันที่เริ่มต้นบัญชี",
-                                    help_text="รายการก่อนวันนี้ไม่นับรวมในยอดคงเหลือ (รวมอยู่ในเงินเริ่มต้นแล้ว)")
+    opening_date = models.DateField(default=datetime.date.today, verbose_name="วันที่ยอดยกมา",
+                                    help_text="รายการก่อนวันนี้ไม่นับรวมในยอดคงเหลือ (รวมอยู่ในยอดยกมาแล้ว)")
     is_default = models.BooleanField(default=False, verbose_name="บัญชีหลัก",
                                      help_text="รายการรับ/จ่ายที่ไม่ได้เลือกบัญชี (เช่น ยืนยันยอดจาก A5) จะเข้าบัญชีนี้")
     is_active = models.BooleanField(default=True, verbose_name="ใช้งาน")

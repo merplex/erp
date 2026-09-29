@@ -6141,7 +6141,7 @@ class BankAccountAdmin(UnfoldModelAdmin):
             queryset = queryset.filter(is_active=True)
         return queryset, may_have_duplicates
 
-    @admin.display(description="เงินเริ่มต้น", ordering='opening_balance')
+    @admin.display(description="ยอดยกมา", ordering='opening_balance')
     def get_opening(self, obj):
         return f"{obj.opening_balance:,.2f} ({obj.opening_date:%d/%m/%Y})"
 
