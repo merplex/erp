@@ -2234,7 +2234,7 @@ class BankTransaction(models.Model):
     source_type = models.CharField(max_length=20, choices=SOURCE_CHOICES, default='MANUAL', editable=False,
                                    db_index=True, verbose_name="ที่มา")
     reference = models.CharField(max_length=100, blank=True, verbose_name="เอกสารอ้างอิง")
-    party = models.CharField(max_length=255, blank=True, verbose_name="คู่ค้า")
+    party = models.CharField(max_length=255, blank=True, verbose_name="บริษัท/บุคคล")
     category = models.ForeignKey(BankTransactionCategory, on_delete=models.PROTECT, null=True, blank=True,
                                  verbose_name="หมวด")
     description = models.CharField(max_length=255, blank=True, verbose_name="รายละเอียด")
