@@ -6179,10 +6179,15 @@ class ManualBankTransactionForm(forms.ModelForm):
     """รายการที่บันทึกเอง (ค่าแรง, เงินเดือน, ค่าเช่า ...) — กรอกยอดเป็นบวก แล้วเลือกเงินเข้า/เงินออก"""
     direction = forms.ChoiceField(label="ประเภท", choices=[('OUT', 'เงินออก (จ่าย)'), ('IN', 'เงินเข้า (รับ)')],
                                   initial='OUT', widget=UnfoldAdminRadioSelectWidget)
+    transfer_account = forms.ModelChoiceField(
+        label="โอนไป/รับจากบัญชี", required=False, queryset=BankAccount.objects.filter(is_active=True),
+        help_text="ถ้าเป็นการโอนระหว่างบัญชี (เช่น โอนชดเชยยอดติดลบในบัญชีแฟคตอริ่ง) เลือกบัญชีอีกฝั่ง "
+                  "ระบบจะลงรายการฝั่งนั้นให้เอง")
 
     class Meta:
         model = BankTransaction
-        fields = ('bank_account', 'txn_date', 'direction', 'amount', 'category', 'reference', 'party', 'description')
+        fields = ('bank_account', 'txn_date', 'direction', 'amount', 'transfer_account', 'category', 'reference',
+                  'party', 'description')
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -6191,6 +6196,9 @@ class ManualBankTransactionForm(forms.ModelForm):
         if self.instance.pk and self.instance.amount is not None:
             self.initial['direction'] = 'IN' if self.instance.amount > 0 else 'OUT'
             self.initial['amount'] = abs(self.instance.amount)
+            mirror = BankTransaction.objects.filter(transfer_peer=self.instance).first()
+            if mirror:
+                self.initial['transfer_account'] = mirror.bank_account_id
 
     def clean_amount(self):
         amount = self.cleaned_data.get('amount')
@@ -6203,6 +6211,9 @@ class ManualBankTransactionForm(forms.ModelForm):
         amount = cleaned.get('amount')
         if amount is not None and cleaned.get('direction') == 'OUT':
             cleaned['amount'] = -amount
+        other = cleaned.get('transfer_account')
+        if other and other == cleaned.get('bank_account'):
+            self.add_error('transfer_account', "ต้องเป็นคนละบัญชีกับสมุดบัญชีด้านบน")
         return cleaned
 
 
@@ -6263,8 +6274,9 @@ class BankTransactionAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     def has_delete_permission(self, request, obj=None):
         # ห้ามลบแถวจากเอกสารต้นทาง "จากหน้า M2" เท่านั้น — ถ้าเช็คทุกที่ Django จะนับเป็น perms_needed
         # ตอนลบเอกสารต้นทาง (SO/PO/เงินกู้ ที่ลบแถวนี้ตาม CASCADE) แล้วตอบ 403
+        # แถวฝั่งปลายทางของการโอน (TRANSFER) ลบได้ — ระบบลบแถวต้นให้ด้วย
         url_name = getattr(getattr(request, 'resolver_match', None), 'url_name', '') or ''
-        if obj and obj.source_type != 'MANUAL' and url_name.startswith('stocks_banktransaction_'):
+        if obj and obj.source_type not in ('MANUAL', 'TRANSFER') and url_name.startswith('stocks_banktransaction_'):
             return False
         return super().has_delete_permission(request, obj)
 
@@ -6274,11 +6286,23 @@ class BankTransactionAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         super().save_model(request, obj, form, change)
         if obj.source_obj and not obj.is_account_locked and 'bank_account' in form.changed_data:
             type(obj.source_obj).objects.filter(pk=obj.source_obj.pk).update(bank_account=obj.bank_account)
+        if obj.source_type == 'MANUAL' and 'transfer_account' in form.cleaned_data:
+            other = form.cleaned_data['transfer_account']
+            if other:
+                BankTransaction.objects.update_or_create(transfer_peer=obj, defaults={
+                    'bank_account': other, 'txn_date': obj.txn_date, 'amount': -obj.amount,
+                    'source_type': 'TRANSFER', 'category': obj.category, 'reference': obj.reference,
+                    'party': obj.party, 'created_by': obj.created_by,
+                    'description': f"{'รับโอนจาก' if obj.amount < 0 else 'โอนไป'} {obj.bank_account.name}"
+                                   f"{': ' + obj.description if obj.description else ''}"[:255],
+                })
+            else:
+                BankTransaction.objects.filter(transfer_peer=obj).delete()
 
     def changelist_view(self, request, extra_context=None):
         if request.method == 'POST' and request.POST.get('action') == 'delete_selected':
             ids = request.POST.getlist(helpers.ACTION_CHECKBOX_NAME)
-            if BankTransaction.objects.filter(pk__in=ids).exclude(source_type='MANUAL').exists():
+            if BankTransaction.objects.filter(pk__in=ids).exclude(source_type__in=('MANUAL', 'TRANSFER')).exists():
                 self.message_user(request, "ลบได้เฉพาะรายการที่บันทึกเอง — รายการจากเอกสาร (A3/A4/A5/A6/M3/แฟคตอริ่ง) "
                                            "ให้แก้/ลบที่เอกสารต้นทาง", messages.ERROR)
                 return HttpResponseRedirect(request.get_full_path())
@@ -6303,7 +6327,7 @@ class BankTransactionAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             if form.is_valid():
                 account = form.cleaned_data['bank_account']
                 loan_rows = queryset.filter(Q(loan_disbursement__isnull=False) | Q(loan_installment__isnull=False)
-                                            | Q(factoring_payment__isnull=False))
+                                            | Q(factoring_payment__isnull=False) | Q(transfer_peer__isnull=False))
                 skipped = loan_rows.count()
                 queryset = queryset.exclude(pk__in=list(loan_rows.values_list('pk', flat=True)))
                 rows = list(queryset)
@@ -6342,6 +6366,9 @@ class BankTransactionAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             url = reverse('admin:stocks_loan_change', args=[obj.loan_installment.loan_id])
         elif obj.factoring_payment_id:
             url = reverse('admin:stocks_incomereport_change', args=[obj.factoring_payment.order_id])
+        elif obj.transfer_peer_id:
+            url = reverse('admin:stocks_banktransaction_change', args=[obj.transfer_peer_id])
+            return format_html('<a href="{}">รายการต้นทาง ↗</a>', url)
         else:
             return '-'
         return format_html('<a href="{}" target="_blank">{} ↗</a>', url, obj.reference or 'เปิดเอกสาร')
