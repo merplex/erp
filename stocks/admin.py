@@ -3973,7 +3973,31 @@ class PaymentDateForm(forms.Form):
         help_text="ไม่เลือก = เข้าบัญชีหลัก",
     )
 
-@admin.action(description="🎯 ปิดยอด: กรณีพิเศษ/รับไม่ครบ (SETTLED)")    
+
+THAI_MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.']
+
+
+def thai_month_label(month):
+    return f"{THAI_MONTHS[month.month - 1]} {month.year + 543}"
+
+
+def _deduct_month_choices():
+    this_month = datetime.date.today().replace(day=1)
+    months = [add_months(this_month, k, 1) for k in range(-12, 7)]
+    return [(m.isoformat(), thai_month_label(m)) for m in months]
+
+
+class DeductMonthForm(forms.Form):
+    """A5: รอบเดือนที่จะหัก DC/Rebate ออกจากเงินเข้าของลูกค้า"""
+    month = forms.TypedChoiceField(
+        label="หักรอบเดือน", choices=_deduct_month_choices,
+        coerce=datetime.date.fromisoformat,
+        initial=lambda: datetime.date.today().replace(day=1).isoformat(),
+        help_text="ยอดจะถูกหักจากเงินเข้าของลูกค้าในเดือนนี้ (ลงวันที่ตาม \"วันกำหนดชำระเงิน\" ของลูกค้า) "
+                  "ถ้าลูกค้าจ่ายเดือนนี้ผ่านแฟคตอริ่ง จะหักจากยอดส่วนที่เหลือที่แฟคตอริ่งโอนให้ "
+                  "เลือกซ้ำเพื่อย้ายเดือนได้")
+
+@admin.action(description="🎯 ปิดยอด: กรณีพิเศษ/รับไม่ครบ (SETTLED)")
 def settle_income_special(modeladmin, request, queryset):
     if 'apply' in request.POST:
         # ตัดจบสถานะอย่างเดียว ไม่สร้างบันทึกการเงินเพิ่ม
@@ -5148,8 +5172,8 @@ class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     ]
 
     list_display = (
-        'short_shipped_date', 'get_so_number', 'product', 'quantity_shipped', 
-        'get_revenue_no_vat', 'get_revenue_inc_vat', 
+        'short_shipped_date', 'get_iv_number', 'product', 'quantity_shipped',
+        'get_revenue_no_vat', 'get_revenue_inc_vat',
         'get_dc_value', 'get_rebate_value',
         'is_revenue_confirmed', 'is_dc_confirmed', 'is_rebate_confirmed'
     )
@@ -5163,14 +5187,24 @@ class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     )
     list_filter_submit = True
     
-    search_fields = ('sales_order__so_number', 'product__name', 'product__barcodes__code') 
+    search_fields = ('sales_order__receipts__receipt_number', 'sales_order__so_number', 'product__name',
+                     'product__barcodes__code')
     ordering = ('-shipped_date', 'sales_order__so_number')
 
     def get_queryset(self, request):
         # แถวรับคืนจากใบลดหนี้ไม่เข้าหน้านี้ — ยอดลดหนี้หักจากยอดค้างรับของใบสั่งขายโดยตรงแล้ว
+        # เลข IV = ใบกำกับของ SO + วันที่ส่ง (1 วันส่งของ = 1 ใบ, ดู sync_receipts_for_sales_order)
+        iv = (SalesReceipt.objects.filter(sales_order=OuterRef('sales_order'), is_cancelled=False,
+                                          shipped_date=OuterRef('ship_day'))
+              .values('receipt_number')[:1])
+
+        def month_of(kind):
+            return Subquery(SalesPayment.objects.filter(deduction_log=OuterRef('pk'), deduction_kind=kind)
+                            .values('deduct_month')[:1])
         return super().get_queryset(request).filter(credit_note_item__isnull=True).select_related(
             'sales_order', 'sales_order__customer', 'product'
-        )
+        ).annotate(ship_day=TruncDate('shipped_date')).annotate(
+            iv_number=Subquery(iv), dc_month=month_of('DC'), rebate_month=month_of('REBATE'))
 
     # --- ให้การค้นหา ใช้ รูปแบบ และ หรือ ได้ ---
     def get_search_results(self, request, queryset, search_term):
@@ -5272,28 +5306,28 @@ class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         return f"{obj.shipment_value:,.2f}"
     get_revenue_no_vat.short_description = "excl.VAT"
 
-    def get_dc_value(self, obj):
-        dc_amt = obj.dc_amount or Decimal('0')
-        if not dc_amt:
+    @staticmethod
+    def _amount_with_month(amount, month):
+        if not amount:
             return "-"
-        return format_html('<b>฿{}</b>', f"{dc_amt:,.2f}")
+        if month:
+            return format_html('<b>฿{}</b><br><small style="color:#2563eb">หัก {}</small>',
+                               f"{amount:,.2f}", thai_month_label(month))
+        return format_html('<b>฿{}</b>', f"{amount:,.2f}")
+
+    def get_dc_value(self, obj):
+        return self._amount_with_month(obj.dc_amount or Decimal('0'), getattr(obj, 'dc_month', None))
     get_dc_value.short_description = "ยอดDC"
 
     def get_rebate_value(self, obj):
-        reb_amt = obj.rebate_amount or Decimal('0')
-        if not reb_amt:
-            return "-"
-        return format_html('<b>฿{}</b>', f"{reb_amt:,.2f}")
+        return self._amount_with_month(obj.rebate_amount or Decimal('0'), getattr(obj, 'rebate_month', None))
     get_rebate_value.short_description = "ยอดRebate"
 
     # 🎯 5. ยอด ที่ยืนยันทั้งหมด จะถูกบันทึกย้อนไปใน salesorder และ incomereport
-    def save_model(self, request, obj, form, change):
-        super().save_model(request, obj, form, change)
-        from .models import SalesPayment
+    def _confirm_revenue(self, obj):
         # SO ที่ขายแฟคตอริ่งแล้ว มีแถวรับเงิน (เบิกล่วงหน้า + ส่วนที่เหลือ) ครบยอดอยู่แล้ว — ไม่สร้างยอดรับซ้ำ
         is_factored = obj.sales_order.payments.filter(factoring_role__gt='').exists()
         if obj.is_revenue_confirmed and not is_factored:
-
             SalesPayment.objects.update_or_create(
                 order=obj.sales_order,
                 remark__icontains=f"ยอดส่งของ {obj.shipping_no}",
@@ -5304,27 +5338,55 @@ class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                 }
             )
 
-        # 🎯 [SECTION 2] ยืนยันยอด Rebate (รายการหัก 1)
-        if obj.is_rebate_confirmed and obj.rebate_amount > 0:
-            rebate_ref = f"หัก Rebate จากใบส่งของ {obj.shipping_no}"
-            if not SalesPayment.objects.filter(order=obj.sales_order, remark__icontains=rebate_ref).exists():
-                SalesPayment.objects.create(
-                    order=obj.sales_order,
-                    amount=-obj.rebate_amount, # ติดลบเพื่อหักยอด
-                    payment_date=obj.confirmed_date or timezone.now(),
-                    remark=f"หักค่า Rebate สินค้า {obj.product.name} [REF-ID:{obj.id}]"
-                )
+    # 🎯 5. ยอดที่ยืนยันจะถูกบันทึกย้อนไปใน salesorder และ incomereport
+    # รายการหัก DC/Rebate: 1 แถวต่อรายการส่งของ + ประเภท (เดิมเช็คซ้ำด้วย remark ที่ไม่ตรงกัน -> บันทึกซ้ำแล้วหักซ้ำ)
+    # ในหน้าแก้ไข สร้าง/ลบเฉพาะตอนติ๊กเปลี่ยนจริง — รายการเก่าที่ติ๊กไว้โดยไม่มีรายการหัก (ล้างข้อมูลก่อน 26/7/69) ไม่ถูกสร้างย้อนหลัง
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        self._confirm_revenue(obj)
+        changed = form.changed_data if form is not None else []
+        for kind, flag in (('DC', 'is_dc_confirmed'), ('REBATE', 'is_rebate_confirmed')):
+            if flag not in changed:
+                continue
+            existing = obj.deductions.filter(deduction_kind=kind).first()
+            if getattr(obj, flag):
+                month = existing.deduct_month if existing else datetime.date.today().replace(day=1)
+                apply_dc_rebate_deduction(obj, kind, month)
+            elif existing:
+                existing.delete()
 
-        # 🎯 [SECTION 3] ยืนยันยอด DC (รายการหัก 2)
-        if obj.is_dc_confirmed and obj.dc_amount > 0:
-            dc_ref = f"หักค่า DC จากใบส่งของ {obj.shipping_no}"
-            if not SalesPayment.objects.filter(order=obj.sales_order, remark__icontains=dc_ref).exists():
-                SalesPayment.objects.create(
-                    order=obj.sales_order,
-                    amount=-obj.dc_amount, # ติดลบเพื่อหักยอด
-                    payment_date=obj.confirmed_date or timezone.now(),
-                    remark=f"หักค่า DC สินค้า {obj.product.name} [REF-ID:{obj.id}]"
-                )
+    def _confirm_with_month(self, request, queryset, kinds, revenue, action_name, title):
+        """ขั้นที่ 2 ของ action ยืนยัน DC/Rebate: เลือกรอบเดือนที่จะหัก (หักจากเงินเข้าของลูกค้าในเดือนนั้น)"""
+        if 'apply' in request.POST:
+            form = DeductMonthForm(request.POST)
+            if form.is_valid():
+                month = form.cleaned_data['month']
+                flags = {'DC': 'is_dc_confirmed', 'REBATE': 'is_rebate_confirmed'}
+                count = 0
+                for log in queryset.select_related('sales_order__customer', 'product'):
+                    if revenue and not log.is_revenue_confirmed:
+                        log.is_revenue_confirmed = True
+                        self.save_model(request, log, None, True)
+                    for kind in kinds:
+                        apply_dc_rebate_deduction(log, kind, month)
+                    # ติ๊กสถานะด้วย update — ไม่ต้อง save() ทั้งแถว (คำนวณสต็อก/IV ใหม่โดยไม่จำเป็น)
+                    type(log).objects.filter(pk=log.pk).update(**{flags[k]: True for k in kinds})
+                    count += 1
+                names = ' + '.join('DC' if k == 'DC' else 'Rebate' for k in kinds)
+                self.message_user(request, f"ยืนยัน {names} {count} รายการ หักรอบ {thai_month_label(month)} แล้ว",
+                                  messages.SUCCESS)
+                return None
+        else:
+            form = DeductMonthForm()
+        rows = list(queryset.select_related('sales_order__customer', 'product').order_by('shipped_date'))
+        return TemplateResponse(request, 'admin/stocks/shipmentaccounting/deduct_month.html', {
+            **self.admin_site.each_context(request),
+            'title': title, 'opts': self.model._meta, 'rows': rows, 'form': form,
+            'show_dc': 'DC' in kinds, 'show_rebate': 'REBATE' in kinds,
+            'total_dc': sum((r.dc_amount or 0 for r in rows), Decimal(0)),
+            'total_rebate': sum((r.rebate_amount or 0 for r in rows), Decimal(0)),
+            'action_name': action_name, 'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
+        })
 
     # --- ✅ Actions ---
     @admin.action(description="💰 ยืนยันเฉพาะยอดรับเงิน (Revenue)")
@@ -5334,42 +5396,26 @@ class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                 continue
             obj.is_revenue_confirmed = True
             # 🔥 บังคับเรียก save_model เพื่อให้สร้าง SalesPaymentLog
-            self.save_model(request, obj, None, True) 
+            self.save_model(request, obj, None, True)
         self.message_user(request, f"ยืนยันยอดรับเงิน {queryset.count()} รายการ และสร้างประวัติเงินแล้ว")
 
-    @admin.action(description="🚚 ยืนยันเฉพาะค่า DC")
+    @admin.action(description="🚚 ยืนยันเฉพาะค่า DC (เลือกรอบเดือนที่หัก)")
     def confirm_dc_only(self, request, queryset):
-        for obj in queryset:
-            if obj.is_dc_confirmed:
-                continue
-            obj.is_dc_confirmed = True
-            # 🔥 บังคับเรียก save_model เพื่อให้สร้างรายการหักเงิน
-            self.save_model(request, obj, None, True)
-        self.message_user(request, f"ยืนยันยอด DC {queryset.count()} รายการ และหักยอดจ่ายแล้ว")
+        return self._confirm_with_month(request, queryset, ['DC'], False, 'confirm_dc_only', "ยืนยันค่า DC")
 
-    @admin.action(description="🎁 ยืนยันเฉพาะยอด Rebate")
+    @admin.action(description="🎁 ยืนยันเฉพาะยอด Rebate (เลือกรอบเดือนที่หัก)")
     def confirm_rebate_only(self, request, queryset):
-        for obj in queryset:
-            if obj.is_rebate_confirmed:
-                continue
-            obj.is_rebate_confirmed = True
-            # 🔥 บังคับเรียก save_model เพื่อให้สร้างรายการหักเงิน
-            self.save_model(request, obj, None, True)
-        self.message_user(request, f"ยืนยันยอด Rebate {queryset.count()} รายการ และหักยอดจ่ายแล้ว")
+        return self._confirm_with_month(request, queryset, ['REBATE'], False, 'confirm_rebate_only',
+                                        "ยืนยันยอด Rebate")
 
-    @admin.action(description="✅ ยืนยันยอดทั้งหมด (ครบทุกส่วน)")
+    @admin.action(description="✅ ยืนยันยอดทั้งหมด (ครบทุกส่วน, เลือกรอบเดือนที่หัก DC/Rebate)")
     def confirm_selected_items(self, request, queryset):
-        for obj in queryset:
-            obj.is_revenue_confirmed = True
-            obj.is_dc_confirmed = True
-            obj.is_rebate_confirmed = True
-            # สั่ง Save ทีละตัวเพื่อให้ save_model ที่เราเขียนไว้ทำงาน
-            self.save_model(request, obj, None, True)
-        self.message_user(request, f"ยืนยันและบันทึกประวัติการเงิน {queryset.count()} รายการแล้ว")
+        return self._confirm_with_month(request, queryset, ['DC', 'REBATE'], True, 'confirm_selected_items',
+                                        "ยืนยันยอดทั้งหมด (รับเงิน + DC + Rebate)")
 
-    def get_so_number(self, obj):
-        return obj.sales_order.so_number
-    get_so_number.short_description = "เลขที่ SO"
+    @admin.display(description="เลขที่ IV", ordering='iv_number')
+    def get_iv_number(self, obj):
+        return getattr(obj, 'iv_number', None) or obj.sales_order.so_number
 
     class Media:
         js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
