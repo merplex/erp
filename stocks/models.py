@@ -3,7 +3,7 @@ from django.db import models
 from django.db.models import Sum
 from django.db.models.signals import post_delete, post_save
 from django.core.exceptions import ValidationError
-from django.core.validators import MinValueValidator
+from django.core.validators import MinValueValidator, MaxValueValidator
 from django.utils import timezone
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
@@ -124,6 +124,10 @@ class Customer(models.Model):
         verbose_name="วันที่ตัดรอบบัญชี",
         help_text="ระบุวันที่ 1-31"
     )
+    factoring_account = models.ForeignKey(
+        'BankAccount', on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
+        limit_choices_to={'account_type': 'FACTORING'}, verbose_name="บัญชีแฟคตอริ่ง",
+        help_text="ใช้กับ action \"ขายแฟคตอริ่ง\" ในหน้าใบสั่งขาย/สรุปรายรับ (เลือกเป็นราย SO)")
     class Meta: verbose_name_plural = "S1. ลูกค้า (Customer)"
 
 # 4. รายการสินค้า
@@ -885,6 +889,13 @@ class SalesPayment(models.Model):
     evidence = models.ImageField(upload_to='payment_evidence/', blank=True, null=True, verbose_name="หลักฐานการโอน")
     bank_account = models.ForeignKey('BankAccount', on_delete=models.PROTECT, null=True, blank=True,
                                      related_name='+', verbose_name="สมุดบัญชี")
+    # แถวที่ action "ขายแฟคตอริ่ง" สร้าง: ADVANCE = เบิกล่วงหน้า, REMAINDER = ส่วนที่เหลือตอนลูกค้าจ่าย
+    FACTORING_ROLES = [('ADVANCE', 'เบิกล่วงหน้า'), ('REMAINDER', 'ส่วนที่เหลือ')]
+    factoring_role = models.CharField(max_length=10, choices=FACTORING_ROLES, blank=True, default='',
+                                      editable=False, verbose_name="แฟคตอริ่ง")
+    # เก็บไว้ที่แถว REMAINDER: วันที่ลูกค้าจ่าย (จบการคิดดอกเบี้ย) + อัตราดอกเบี้ย ณ วันที่ทำรายการ
+    factoring_customer_paid_date = models.DateField(null=True, blank=True, editable=False)
+    factoring_rate = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True, editable=False)
 
     def __str__(self):
         return f"รับเงิน {self.amount:,.2f}"
@@ -2180,6 +2191,31 @@ class BankAccount(models.Model):
     is_active = models.BooleanField(default=True, verbose_name="ใช้งาน")
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
 
+    # ── เฉพาะบัญชีเครดิต ──
+    credit_limit = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True,
+                                       validators=[MinValueValidator(0)], verbose_name="วงเงินเครดิต")
+    due_day = models.PositiveSmallIntegerField(null=True, blank=True, verbose_name="วันครบกำหนดชำระ (ทุกวันที่)",
+                                               help_text="1-31 (เดือนที่ไม่มีวันนั้นใช้วันสิ้นเดือน)")
+    overdue_interest_rate = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True,
+                                                validators=[MinValueValidator(0)],
+                                                verbose_name="ดอกเบี้ยเมื่อเกินกำหนด (% ต่อปี)")
+
+    # ── เฉพาะบัญชีแฟคตอริ่ง ──
+    linked_account = models.ForeignKey('self', on_delete=models.PROTECT, null=True, blank=True, related_name='+',
+                                       verbose_name="บัญชีที่ผูกรับเงินโอน")
+    factoring_interest_rate = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True,
+                                                  validators=[MinValueValidator(0)],
+                                                  verbose_name="ดอกเบี้ยแฟคตอริ่ง (% ต่อปี)",
+                                                  help_text="คิดจากยอดเบิก ตั้งแต่วันรับเงินเบิกถึงวันที่ลูกค้าจ่าย")
+    advance_percent = models.DecimalField(max_digits=7, decimal_places=4, null=True, blank=True,
+                                          validators=[MinValueValidator(0), MaxValueValidator(100)],
+                                          verbose_name="% เบิกล่วงหน้า", help_text="เช่น 75 = จ่ายเข้าบัญชีที่ผูก 75%")
+    advance_days = models.PositiveSmallIntegerField(default=1, verbose_name="รับเงินเบิกหลังวันขาย (วัน)",
+                                                    help_text="เช่น 1 = ได้รับวันถัดจากวันที่ขาย")
+    settle_business_days = models.PositiveSmallIntegerField(
+        default=2, verbose_name="รับส่วนที่เหลือหลังลูกค้าจ่าย (วันทำการ)",
+        help_text="นับข้ามเสาร์-อาทิตย์ เช่น 2: ลูกค้าจ่ายวันศุกร์ -> ได้รับวันอังคาร")
+
     class Meta:
         verbose_name = "สมุดบัญชี"
         verbose_name_plural = "M1. สมุดบัญชี"
@@ -2189,10 +2225,39 @@ class BankAccount(models.Model):
         label = f"{self.name} ({self.get_account_type_display()})"
         return f"{label} {self.account_number}" if self.account_number else label
 
+    def clean(self):
+        errors = {}
+        if self.account_type == 'CREDIT':
+            if self.credit_limit is None:
+                errors['credit_limit'] = "บัญชีเครดิตต้องระบุวงเงิน"
+            if not self.due_day:
+                errors['due_day'] = "บัญชีเครดิตต้องระบุวันครบกำหนด"
+        if self.due_day is not None and not 1 <= self.due_day <= 31:
+            errors['due_day'] = "ระบุวันที่ 1-31"
+        if self.account_type == 'FACTORING':
+            if not self.linked_account_id:
+                errors['linked_account'] = "บัญชีแฟคตอริ่งต้องผูกบัญชีรับเงินโอน"
+            elif self.linked_account_id == self.pk or self.linked_account.account_type == 'FACTORING':
+                errors['linked_account'] = "ต้องเป็นบัญชีอื่นที่ไม่ใช่บัญชีแฟคตอริ่ง"
+            if self.advance_percent is None:
+                errors['advance_percent'] = "ระบุ % เบิกล่วงหน้า"
+            if self.factoring_interest_rate is None:
+                errors['factoring_interest_rate'] = "ระบุ % ดอกเบี้ย (0 ได้)"
+        if errors:
+            raise ValidationError(errors)
+
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
         if self.is_default:
             BankAccount.objects.filter(is_default=True).exclude(pk=self.pk).update(is_default=False)
+
+    def next_due_date(self, today=None):
+        """บัญชีเครดิต: วันครบกำหนดชำระรอบถัดไป (วันนี้หรือหลังจากนี้)"""
+        if not self.due_day:
+            return None
+        today = today or datetime.date.today()
+        this_month = add_months(today.replace(day=1), 0, self.due_day)
+        return this_month if this_month >= today else add_months(today.replace(day=1), 1, self.due_day)
 
     @property
     def current_balance(self):
@@ -2226,6 +2291,7 @@ class BankTransaction(models.Model):
         ('REBATE_PAYOUT', 'จ่าย Rebate ตามสัญญา (A6)'),
         ('LOAN_DISBURSE', 'รับเงินกู้ (M3)'),
         ('LOAN_PAYMENT', 'ผ่อนชำระเงินกู้ (M3)'),
+        ('FACTORING', 'แฟคตอริ่ง: ดอกเบี้ย/โอนเข้าบัญชีที่ผูก'),
     ]
     bank_account = models.ForeignKey(BankAccount, on_delete=models.PROTECT, null=True, blank=True,
                                      related_name='transactions', verbose_name="สมุดบัญชี")
@@ -2248,6 +2314,9 @@ class BankTransaction(models.Model):
                                              related_name='disbursement_txn', editable=False)
     loan_installment = models.OneToOneField('LoanInstallment', null=True, blank=True, on_delete=models.CASCADE,
                                             related_name='bank_txn', editable=False)
+    # แถวที่ระบบสร้างตามแถวรับเงินแฟคตอริ่ง (ADVANCE/REMAINDER) — 1 แถวรับเงินมีได้หลายแถว (ดอกเบี้ย/โอนออก/โอนเข้า)
+    factoring_payment = models.ForeignKey(SalesPayment, null=True, blank=True, on_delete=models.CASCADE,
+                                          related_name='factoring_txns', editable=False)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, editable=False,
                                    verbose_name="ผู้บันทึก")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -2263,12 +2332,12 @@ class BankTransaction(models.Model):
     @property
     def source_obj(self):
         return (self.sales_payment or self.purchase_payment or self.rebate_payout
-                or self.loan_disbursement or self.loan_installment)
+                or self.loan_disbursement or self.loan_installment or self.factoring_payment)
 
     @property
-    def is_loan_row(self):
-        # สมุดบัญชีของแถวเงินกู้ยึดตาม Loan.bank_account เสมอ (เปลี่ยนที่หน้า M3)
-        return bool(self.loan_disbursement_id or self.loan_installment_id)
+    def is_account_locked(self):
+        # สมุดบัญชีของแถวเงินกู้/แฟคตอริ่ง ระบบกำหนดเอง (เงินกู้: หน้า M3, แฟคตอริ่ง: บัญชีที่ผูกใน M1)
+        return bool(self.loan_disbursement_id or self.loan_installment_id or self.factoring_payment_id)
 
 
 def _as_date(value):
@@ -2280,6 +2349,12 @@ def _as_date(value):
 @receiver(models.signals.pre_save, sender=PurchasePaymentLog)
 def _payment_default_bank_account(sender, instance, **kwargs):
     if instance.pk is None and not instance.bank_account_id:
+        if sender is SalesPayment:
+            # SO ที่ขายแฟคตอริ่งแล้ว: ยอดหัก DC/Rebate (จาก A5) ไปหักที่บัญชีแฟคตอริ่ง -> หักจากยอดโอนส่วนที่เหลือ
+            fx = factoring_account_id_of(instance.order_id)
+            if fx:
+                instance.bank_account_id = fx
+                return
         instance.bank_account_id = default_bank_account_id()
 
 
@@ -2577,3 +2652,106 @@ def run_due_loan_installments():
                 BankTransaction.objects.create(loan_installment=inst, **inst.ledger_values())
         except IntegrityError:
             pass  # request คู่ขนานตัดงวดนี้ไปแล้ว (OneToOne กันซ้ำ)
+
+
+# ── แฟคตอริ่ง ──────────────────────────────────────────────────────────────
+# action "ขายแฟคตอริ่ง" (S2/A4) สร้าง SalesPayment 2 แถวเข้าบัญชีแฟคตอริ่งของลูกค้า:
+#   ADVANCE   = ยอดค้างรับ × % เบิกล่วงหน้า   วันที่ = วันที่ขาย + advance_days
+#   REMAINDER = ส่วนที่เหลือ                  วันที่ = วันที่ลูกค้าจ่าย (วันกำหนดรับเงิน) + settle_business_days วันทำการ
+# แล้ว sync_factoring_settlement() สร้างแถวในสมุด (source FACTORING) ให้เงินวิ่งต่อไปบัญชีที่ผูก:
+#   ADVANCE:   แฟคตอริ่ง -A  /  บัญชีที่ผูก +A
+#   REMAINDER: แฟคตอริ่ง -ดอกเบี้ย (A × % × วัน ÷ 365) แล้วโอนสุทธิ = R - ดอกเบี้ย - DC/Rebate ของ SO นี้
+#              (DC/Rebate ที่ยืนยันใน A5 ลงบัญชีแฟคตอริ่ง) — ยอดโอนติดลบได้ถ้า DC/Rebate มากกว่า
+def add_business_days(date, days):
+    while days > 0:
+        date += datetime.timedelta(days=1)
+        if date.weekday() < 5:
+            days -= 1
+    return date
+
+
+def factoring_account_id_of(order_id):
+    return (SalesPayment.objects.filter(order_id=order_id, factoring_role='ADVANCE')
+            .values_list('bank_account_id', flat=True).first())
+
+
+def factoring_customer_paid_date(order):
+    """วันที่ลูกค้าจ่าย = วันกำหนดรับเงินล่าสุดของการส่งของ (คิดจากวันตัดรอบบัญชี + เครดิต)"""
+    due = (order.delivery_logs.filter(credit_note_item__isnull=True, payment_due_date__isnull=False)
+           .order_by('-payment_due_date').values_list('payment_due_date', flat=True).first())
+    if due:
+        return due
+    term = order.customer.payment_term if order.customer_id else 0
+    return order.order_date + datetime.timedelta(days=term or 0)
+
+
+def create_factoring_payments(order):
+    """คืน (สร้างแล้วหรือไม่, ข้อความ)"""
+    customer = order.customer
+    account = customer.factoring_account if customer else None
+    if not account or account.account_type != 'FACTORING' or not account.linked_account_id:
+        return False, f"{order.so_number}: ลูกค้ายังไม่ได้ตั้งบัญชีแฟคตอริ่ง (หรือบัญชียังไม่ผูกบัญชีรับเงินโอน)"
+    if order.payments.filter(factoring_role__gt='').exists():
+        return False, f"{order.so_number}: ขายแฟคตอริ่งไปแล้ว"
+    balance = round_money(order.balance_due)
+    if balance <= 0:
+        return False, f"{order.so_number}: ไม่มียอดค้างรับ"
+    pct = account.advance_percent or Decimal(0)
+    advance = round_money(balance * pct / 100)
+    advance_date = order.order_date + datetime.timedelta(days=account.advance_days or 0)
+    paid_date = max(factoring_customer_paid_date(order), advance_date)
+    SalesPayment.objects.create(
+        order=order, amount=advance, payment_date=advance_date, bank_account=account, factoring_role='ADVANCE',
+        remark=f"แฟคตอริ่ง เบิกล่วงหน้า {pct.normalize():f}%")
+    SalesPayment.objects.create(
+        order=order, amount=balance - advance, bank_account=account, factoring_role='REMAINDER',
+        payment_date=add_business_days(paid_date, account.settle_business_days or 0),
+        factoring_customer_paid_date=paid_date, factoring_rate=account.factoring_interest_rate or 0,
+        remark=f"แฟคตอริ่ง ส่วนที่เหลือ (ลูกค้าจ่าย {paid_date:%d/%m/%Y})")
+    return True, ''
+
+
+def sync_factoring_settlement(order_id):
+    BankTransaction.objects.filter(factoring_payment__order_id=order_id).delete()
+    rows = list(SalesPayment.objects.filter(order_id=order_id, factoring_role__gt='')
+                .select_related('bank_account', 'order', 'order__customer'))
+    advance = next((p for p in rows if p.factoring_role == 'ADVANCE'), None)
+    for p in rows:
+        fx = p.bank_account
+        if not fx or fx.account_type != 'FACTORING' or not fx.linked_account_id:
+            continue
+        base = {'txn_date': p.payment_date, 'source_type': 'FACTORING', 'factoring_payment': p,
+                'reference': p.order.so_number or '',
+                'party': p.order.customer.company_name if p.order.customer_id else ''}
+        if p.factoring_role == 'ADVANCE':
+            net = p.amount
+            label = "เบิกล่วงหน้า"
+        else:
+            interest = Decimal(0)
+            if advance and p.factoring_rate and p.factoring_customer_paid_date:
+                days = max((p.factoring_customer_paid_date - advance.payment_date).days, 0)
+                interest = round_money(advance.amount * p.factoring_rate / 100 * days / 365)
+            if interest:
+                BankTransaction.objects.create(bank_account=fx, amount=-interest, **base,
+                                               description=f"ดอกเบี้ยแฟคตอริ่ง {p.factoring_rate.normalize():f}% "
+                                                           f"({days} วัน)")
+            # DC/Rebate (ติดลบ) ที่ลงบัญชีแฟคตอริ่งของ SO นี้ — หักจากยอดโอน
+            deductions = (SalesPayment.objects.filter(order_id=order_id, bank_account=fx, factoring_role='',
+                                                      amount__lt=0).aggregate(t=Sum('amount'))['t'] or 0)
+            net = p.amount - interest + deductions
+            label = "ส่วนที่เหลือ" + (f" (หัก DC/Rebate {-deductions:,.2f})" if deductions else "")
+        if net >= 0:
+            out_desc, in_desc = f"โอนเข้า {fx.linked_account.name}: {label}", f"รับโอนจากแฟคตอริ่ง {fx.name}: {label}"
+        else:  # DC/Rebate มากกว่าส่วนที่เหลือ -> ต้องจ่ายคืนแฟคตอริ่ง
+            out_desc = f"รับคืนจาก {fx.linked_account.name}: {label} ยอดติดลบ"
+            in_desc = f"จ่ายคืนแฟคตอริ่ง {fx.name}: {label} ยอดติดลบ"
+        BankTransaction.objects.create(bank_account=fx, amount=-net, **base, description=out_desc[:255])
+        BankTransaction.objects.create(bank_account=fx.linked_account, amount=net, **base, description=in_desc[:255])
+
+
+@receiver(post_save, sender=SalesPayment)
+@receiver(post_delete, sender=SalesPayment)
+def _factoring_resync(sender, instance, **kwargs):
+    if SalesPayment.objects.filter(order_id=instance.order_id, factoring_role__gt='').exists() \
+            or BankTransaction.objects.filter(factoring_payment__order_id=instance.order_id).exists():
+        sync_factoring_settlement(instance.order_id)

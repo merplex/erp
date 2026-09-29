@@ -1911,6 +1911,19 @@ class PurchaseOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockM
     class Media:
         js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js', 'js/purchase_order_supplier_filter.js', 'js/purchase_item_price_autofill.js', 'js/barcode_autofill_generic.js')
 
+@admin.action(description="💳 ขายแฟคตอริ่ง (สร้างรายการรับเงิน เบิกล่วงหน้า + ส่วนที่เหลือ)")
+def sell_factoring(modeladmin, request, queryset):
+    created = 0
+    for order in queryset.select_related('customer', 'customer__factoring_account'):
+        ok, msg = create_factoring_payments(order)
+        if ok:
+            created += 1
+        else:
+            modeladmin.message_user(request, msg, messages.WARNING)
+    if created:
+        modeladmin.message_user(request, f"สร้างรายการรับเงินแฟคตอริ่ง {created} ใบ", messages.SUCCESS)
+
+
 @admin.register(SalesOrder)
 class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('so_number', 'get_po_no_customer', 'customer', 'order_date', 'status', 'vat_percent','get_diff')
@@ -1927,7 +1940,7 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
     inlines = [SalesItemInline, SalesDeliveryLogInline, SalesPaymentInline]
     readonly_fields = ('created_by', 'status') # ล็อค status ให้ระบบจัดการออโต้
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
-    actions = ['mark_as_completed', 'export_to_excel']
+    actions = ['mark_as_completed', sell_factoring, 'export_to_excel']
 
     @admin.display(description="Customer PO", ordering='po_no_customer')
     def get_po_no_customer(self, obj):
@@ -4247,7 +4260,8 @@ class IncomeReportAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin)
     )
     list_filter_submit = True
     search_fields = ('so_number', 'customer__company_name')
-    actions = [settle_and_close_orders, settle_income_special, 'calculate_income_totals', 'export_to_excel']
+    actions = [settle_and_close_orders, settle_income_special, 'calculate_income_totals', sell_factoring,
+               'export_to_excel']
 
     def get_queryset(self, request):
         from django.db.models import Sum, F, ExpressionWrapper, DecimalField as DField, Q
@@ -5276,8 +5290,10 @@ class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
         from .models import SalesPayment
-        if obj.is_revenue_confirmed:
-            
+        # SO ที่ขายแฟคตอริ่งแล้ว มีแถวรับเงิน (เบิกล่วงหน้า + ส่วนที่เหลือ) ครบยอดอยู่แล้ว — ไม่สร้างยอดรับซ้ำ
+        is_factored = obj.sales_order.payments.filter(factoring_role__gt='').exists()
+        if obj.is_revenue_confirmed and not is_factored:
+
             SalesPayment.objects.update_or_create(
                 order=obj.sales_order,
                 remark__icontains=f"ยอดส่งของ {obj.shipping_no}",
@@ -6094,17 +6110,26 @@ def _money_html(value, color=None):
 @admin.register(BankAccount)
 class BankAccountAdmin(UnfoldModelAdmin):
     list_display = ('name', 'account_type', 'bank_name', 'account_number', 'get_opening',
-                    'get_balance', 'is_default', 'is_active', 'get_ledger_link')
+                    'get_balance', 'get_type_detail', 'is_default', 'is_active', 'get_ledger_link')
     list_filter = ('account_type', 'is_active')
     search_fields = ('name', 'bank_name', 'account_number')
-    fields = ('name', 'account_type', 'bank_name', 'branch', 'account_number',
-              'opening_balance', 'opening_date', 'is_default', 'is_active', 'notes')
+    autocomplete_fields = ['linked_account']
+    fieldsets = (
+        (None, {'fields': ('name', 'account_type', 'bank_name', 'branch', 'account_number',
+                           'opening_balance', 'opening_date', 'is_default', 'is_active', 'notes')}),
+        ("บัญชีเครดิต", {'fields': ('credit_limit', 'due_day', 'overdue_interest_rate')}),
+        ("บัญชีแฟคตอริ่ง", {'fields': ('linked_account', 'advance_percent', 'factoring_interest_rate',
+                                     'advance_days', 'settle_business_days')}),
+    )
+
+    class Media:
+        js = ('js/bank_account_type.js',)
 
     def get_queryset(self, request):
         moved = (BankTransaction.objects
                  .filter(bank_account=OuterRef('pk'), txn_date__gte=OuterRef('opening_date'))
                  .values('bank_account').annotate(s=Sum('amount')).values('s'))
-        return super().get_queryset(request).annotate(
+        return super().get_queryset(request).select_related('linked_account').annotate(
             balance=ExpressionWrapper(F('opening_balance') + Coalesce(Subquery(moved, output_field=MONEY),
                                                                      Value(0, output_field=MONEY)),
                                       output_field=MONEY))
@@ -6123,6 +6148,22 @@ class BankAccountAdmin(UnfoldModelAdmin):
     @admin.display(description="ยอดคงเหลือ", ordering='balance')
     def get_balance(self, obj):
         return format_html('<b>{}</b>', _money_html(obj.balance, '#dc2626' if obj.balance < 0 else None))
+
+    @admin.display(description="รายละเอียด")
+    def get_type_detail(self, obj):
+        if obj.account_type == 'CREDIT':
+            limit = obj.credit_limit or 0
+            nxt = obj.next_due_date()
+            return format_html('วงเงิน {} · คงเหลือ <b>{}</b><br>ครบกำหนด {} · เกินกำหนด {}%',
+                               f"{limit:,.2f}", f"{limit + obj.balance:,.2f}",
+                               nxt.strftime('%d/%m/%Y') if nxt else '-',
+                               f"{(obj.overdue_interest_rate or 0).normalize():f}")
+        if obj.account_type == 'FACTORING':
+            return format_html('ผูก {} · เบิก {}% · ดอก {}%/ปี',
+                               obj.linked_account.name if obj.linked_account_id else '⚠️ ยังไม่ผูก',
+                               f"{(obj.advance_percent or 0).normalize():f}",
+                               f"{(obj.factoring_interest_rate or 0).normalize():f}")
+        return ''
 
     @admin.display(description="")
     def get_ledger_link(self, obj):
@@ -6198,7 +6239,8 @@ class BankTransactionAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                  .filter(Q(txn_date__lt=OuterRef('txn_date')) | Q(txn_date=OuterRef('txn_date'), id__lte=OuterRef('id')))
                  .values('bank_account').annotate(s=Sum('amount')).values('s'))
         return super().get_queryset(request).select_related(
-            'bank_account', 'category', 'sales_payment', 'purchase_payment', 'loan_installment').annotate(
+            'bank_account', 'category', 'sales_payment', 'purchase_payment', 'loan_installment',
+            'factoring_payment').annotate(
             running_balance=ExpressionWrapper(
                 F('bank_account__opening_balance') + Coalesce(Subquery(prior, output_field=MONEY),
                                                              Value(0, output_field=MONEY)),
@@ -6213,7 +6255,7 @@ class BankTransactionAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         if obj and obj.source_type != 'MANUAL':
             # รายการจากเอกสารต้นทาง: แก้ได้แค่ "สมุดบัญชี" (ส่งกลับไปที่ต้นทางด้วย) ที่เหลือแก้ที่ต้นทาง
             # แถวเงินกู้: สมุดบัญชียึดตามหน้า M3 จึงแก้ที่นี่ไม่ได้
-            if obj.is_loan_row:
+            if obj.is_account_locked:
                 return self.source_fields
             return tuple(f for f in self.source_fields if f != 'bank_account')
         return ()
@@ -6230,14 +6272,14 @@ class BankTransactionAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         if not change:
             obj.created_by = request.user
         super().save_model(request, obj, form, change)
-        if obj.source_obj and not obj.is_loan_row and 'bank_account' in form.changed_data:
+        if obj.source_obj and not obj.is_account_locked and 'bank_account' in form.changed_data:
             type(obj.source_obj).objects.filter(pk=obj.source_obj.pk).update(bank_account=obj.bank_account)
 
     def changelist_view(self, request, extra_context=None):
         if request.method == 'POST' and request.POST.get('action') == 'delete_selected':
             ids = request.POST.getlist(helpers.ACTION_CHECKBOX_NAME)
             if BankTransaction.objects.filter(pk__in=ids).exclude(source_type='MANUAL').exists():
-                self.message_user(request, "ลบได้เฉพาะรายการที่บันทึกเอง — รายการจากเอกสาร (A3/A4/A5/A6/M3) "
+                self.message_user(request, "ลบได้เฉพาะรายการที่บันทึกเอง — รายการจากเอกสาร (A3/A4/A5/A6/M3/แฟคตอริ่ง) "
                                            "ให้แก้/ลบที่เอกสารต้นทาง", messages.ERROR)
                 return HttpResponseRedirect(request.get_full_path())
         response = super().changelist_view(request, extra_context)
@@ -6260,7 +6302,8 @@ class BankTransactionAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             form = AssignBankAccountForm(request.POST)
             if form.is_valid():
                 account = form.cleaned_data['bank_account']
-                loan_rows = queryset.filter(Q(loan_disbursement__isnull=False) | Q(loan_installment__isnull=False))
+                loan_rows = queryset.filter(Q(loan_disbursement__isnull=False) | Q(loan_installment__isnull=False)
+                                            | Q(factoring_payment__isnull=False))
                 skipped = loan_rows.count()
                 queryset = queryset.exclude(pk__in=list(loan_rows.values_list('pk', flat=True)))
                 rows = list(queryset)
@@ -6271,7 +6314,7 @@ class BankTransactionAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                 count = queryset.update(bank_account=account)
                 self.message_user(request, f"ย้าย {count} รายการไปที่ {account} แล้ว", messages.SUCCESS)
                 if skipped:
-                    self.message_user(request, f"ข้าม {skipped} รายการเงินกู้ (เปลี่ยนสมุดบัญชีที่หน้า M3 เงินกู้)",
+                    self.message_user(request, f"ข้าม {skipped} รายการเงินกู้/แฟคตอริ่ง (ระบบกำหนดสมุดบัญชีเอง)",
                                       messages.WARNING)
                 return None
         else:
@@ -6297,6 +6340,8 @@ class BankTransactionAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             url = reverse('admin:stocks_loan_change', args=[obj.loan_disbursement_id])
         elif obj.loan_installment_id:
             url = reverse('admin:stocks_loan_change', args=[obj.loan_installment.loan_id])
+        elif obj.factoring_payment_id:
+            url = reverse('admin:stocks_incomereport_change', args=[obj.factoring_payment.order_id])
         else:
             return '-'
         return format_html('<a href="{}" target="_blank">{} ↗</a>', url, obj.reference or 'เปิดเอกสาร')
