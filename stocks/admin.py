@@ -61,7 +61,9 @@ from unfold.contrib.filters.admin import (
     AutocompleteSelectMultipleFilter,
     MultipleChoicesDropdownFilter,
     BooleanRadioFilter,
+    RadioFilter as UnfoldRadioFilter,
 )
+from django.db.models import Exists
 from django.core.validators import EMPTY_VALUES
 from django.forms import ValidationError as FilterValidationError
 from unfold.utils import parse_datetime_str
@@ -5159,6 +5161,26 @@ class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
 
 # 2. ตั้งค่า Admin ตัวเดียวจบ
+# A5: SO มีรับเงินจริงแล้ว (ยอดบวก ไม่นับรายการหัก DC/Rebate)
+SO_HAS_RECEIVED = Exists(SalesPayment.objects.filter(order=OuterRef('sales_order'), amount__gt=0, deduction_kind=''))
+
+
+class PaidRadioFilter(UnfoldRadioFilter):
+    title = "Paid"
+    parameter_name = 'paid'
+
+    def lookups(self, request, model_admin):
+        return (('1', 'รับเงินแล้ว (บางส่วน/ทั้งหมด)'), ('0', 'ยังไม่รับ'))
+
+    def queryset(self, request, queryset):
+        paid = Q(is_revenue_confirmed=True) | Q(has_received=True)
+        if self.value() == '1':
+            return queryset.filter(paid)
+        if self.value() == '0':
+            return queryset.exclude(paid)
+        return queryset
+
+
 @admin.register(ShipmentAccounting)
 class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     # ✅ เพิ่ม Action ที่ต้องการให้โชว์แยกกันใน List นี้ครับ
@@ -5175,12 +5197,12 @@ class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         'short_shipped_date', 'get_iv_number', 'product', 'quantity_shipped',
         'get_revenue_no_vat', 'get_revenue_inc_vat',
         'get_dc_value', 'get_rebate_value',
-        'is_revenue_confirmed', 'is_dc_confirmed', 'is_rebate_confirmed'
+        'get_paid', 'is_dc_confirmed', 'is_rebate_confirmed'
     )
-    
+
     list_filter = (
         ('shipped_date', RangeDateTimeFilter),
-        ('is_revenue_confirmed', BooleanRadioFilter),
+        PaidRadioFilter,
         ('is_dc_confirmed', BooleanRadioFilter),
         ('is_rebate_confirmed', BooleanRadioFilter),
         ('sales_order__customer', AutocompleteSelectMultipleFilter),
@@ -5204,7 +5226,14 @@ class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         return super().get_queryset(request).filter(credit_note_item__isnull=True).select_related(
             'sales_order', 'sales_order__customer', 'product'
         ).annotate(ship_day=TruncDate('shipped_date')).annotate(
-            iv_number=Subquery(iv), dc_month=month_of('DC'), rebate_month=month_of('REBATE'))
+            iv_number=Subquery(iv), dc_month=month_of('DC'), rebate_month=month_of('REBATE'),
+            has_received=SO_HAS_RECEIVED)
+
+    @admin.display(description="Paid", boolean=True, ordering='is_revenue_confirmed')
+    def get_paid(self, obj):
+        # ✓ เมื่อยืนยันรับเงินแล้ว หรือ SO มีรับเงินแล้ว (บางส่วน/ทั้งหมด) — แสดงผลอย่างเดียว ไม่ติ๊ก flag จริง
+        # (flag ล็อคการแก้ SO / รายการรับเงินใน A4 ถ้าติ๊กเองตอนรับบางส่วน จะแก้รายการรับเงินต่อไม่ได้)
+        return bool(obj.is_revenue_confirmed or getattr(obj, 'has_received', False))
 
     # --- ให้การค้นหา ใช้ รูปแบบ และ หรือ ได้ ---
     def get_search_results(self, request, queryset, search_term):
