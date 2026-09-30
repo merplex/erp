@@ -2323,8 +2323,8 @@ class BankTransaction(models.Model):
                                             related_name='bank_txn', editable=False)
     rebate_payout = models.OneToOneField(RebatePayout, null=True, blank=True, on_delete=models.CASCADE,
                                          related_name='bank_txn', editable=False)
-    loan_disbursement = models.OneToOneField('Loan', null=True, blank=True, on_delete=models.CASCADE,
-                                             related_name='disbursement_txn', editable=False)
+    loan_drawdown = models.OneToOneField('LoanDrawdown', null=True, blank=True, on_delete=models.CASCADE,
+                                         related_name='bank_txn', editable=False)
     loan_installment = models.OneToOneField('LoanInstallment', null=True, blank=True, on_delete=models.CASCADE,
                                             related_name='bank_txn', editable=False)
     # แถวที่ระบบสร้างตามแถวรับเงินแฟคตอริ่ง (ADVANCE/REMAINDER) — 1 แถวรับเงินมีได้หลายแถว (ดอกเบี้ย/โอนออก/โอนเข้า)
@@ -2348,12 +2348,12 @@ class BankTransaction(models.Model):
     @property
     def source_obj(self):
         return (self.sales_payment or self.purchase_payment or self.rebate_payout
-                or self.loan_disbursement or self.loan_installment or self.factoring_payment)
+                or self.loan_drawdown or self.loan_installment or self.factoring_payment)
 
     @property
     def is_account_locked(self):
         # สมุดบัญชีของแถวเงินกู้/แฟคตอริ่ง ระบบกำหนดเอง (เงินกู้: หน้า M3, แฟคตอริ่ง: บัญชีที่ผูกใน M1)
-        return bool(self.loan_disbursement_id or self.loan_installment_id or self.factoring_payment_id
+        return bool(self.loan_drawdown_id or self.loan_installment_id or self.factoring_payment_id
                     or self.transfer_peer_id)
 
 
@@ -2462,9 +2462,10 @@ class Loan(models.Model):
     lender = models.CharField(max_length=255, verbose_name="ผู้ให้กู้")
     bank_account = models.ForeignKey(BankAccount, on_delete=models.PROTECT, related_name='loans',
                                      verbose_name="สมุดบัญชี (รับเงินกู้/ตัดชำระ)")
-    principal = models.DecimalField(max_digits=18, decimal_places=4, validators=[MinValueValidator(0)],
-                                    verbose_name="ยอดกู้")
-    loan_date = models.DateField(default=datetime.date.today, verbose_name="วันที่รับเงินกู้")
+    # รวมจาก LoanDrawdown (รับเงินต้นได้หลายครั้ง) — ระบบคำนวณเอง ดู refresh_principal()
+    principal = models.DecimalField(max_digits=18, decimal_places=4, default=0, editable=False,
+                                    verbose_name="เงินต้นรวม")
+    loan_date = models.DateField(null=True, blank=True, editable=False, verbose_name="วันที่รับเงินต้นครั้งแรก")
     first_due_date = models.DateField(verbose_name="วันครบกำหนดงวดแรก",
                                       help_text="งวดถัดไปครบกำหนดวันเดียวกันของทุกเดือน")
     term_months = models.PositiveSmallIntegerField(validators=[MinValueValidator(1)],
@@ -2476,8 +2477,8 @@ class Loan(models.Model):
                                              help_text="ใช้กับวิธี \"ระบุยอดผ่อนต่องวดเอง\"")
     interest_method = models.CharField(max_length=10, choices=INTEREST_METHODS, default='MONTHLY',
                                        verbose_name="วิธีคิดดอกเบี้ย")
-    record_disbursement = models.BooleanField(default=True, verbose_name="บันทึกเงินกู้เข้าสมุดบัญชี",
-                                              help_text="สร้างรายการเงินเข้า (ยอดกู้) ในวันที่รับเงินกู้")
+    record_disbursement = models.BooleanField(default=True, verbose_name="บันทึกเงินต้นที่รับเข้าสมุดบัญชี",
+                                              help_text="สร้างรายการเงินเข้าตามวันที่รับเงินต้นแต่ละครั้ง")
     is_active = models.BooleanField(default=True, verbose_name="ใช้งาน",
                                     help_text="ปิด = หยุดตัดชำระงวดที่ถึงกำหนดอัตโนมัติ")
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
@@ -2491,10 +2492,14 @@ class Loan(models.Model):
         return f"{self.name} ({self.lender})"
 
     def clean(self):
+        # วันครบกำหนดงวดแรก vs วันที่รับเงินต้นครั้งแรก ตรวจที่ inline รับเงินต้น (LoanDrawdownFormSet)
         if self.repayment_method == 'FIXED_PAYMENT' and not self.installment_amount:
             raise ValidationError({'installment_amount': "วิธีผ่อนนี้ต้องระบุยอดผ่อนต่องวด"})
-        if self.first_due_date and self.loan_date and self.first_due_date < self.loan_date:
-            raise ValidationError({'first_due_date': "วันครบกำหนดงวดแรกต้องไม่ก่อนวันที่รับเงินกู้"})
+
+    def refresh_principal(self):
+        agg = self.drawdowns.aggregate(total=Sum('amount'), first=models.Min('draw_date'))
+        self.principal, self.loan_date = agg['total'] or Decimal(0), agg['first']
+        Loan.objects.filter(pk=self.pk).update(principal=self.principal, loan_date=self.loan_date)
 
     def is_schedule_ready(self):
         return bool(self.principal and self.term_months and self.first_due_date and self.rates.exists()
@@ -2518,26 +2523,45 @@ class Loan(models.Model):
                 best, best_start = r.annual_rate, start
         return best
 
+    def _period_interest(self, balance, draws_in_period, prev_date, due, rate):
+        """ดอกเบี้ยงวด: ยอดยกมาต้นงวดคิดตามวิธีที่เลือก + เงินต้นที่รับระหว่างงวดคิดรายวันนับจากวันที่รับ"""
+        yearly = rate / 100
+        if self.interest_method == 'DAILY':
+            interest = balance * yearly * Decimal((due - prev_date).days) / 365
+        else:
+            interest = balance * rate / 1200
+        for draw_date, amount in draws_in_period:
+            interest += amount * yearly * Decimal((due - draw_date).days) / 365
+        return round_money(interest)
+
     def generate_schedule(self):
-        """ลบงวดที่ยังไม่ตัดบัญชี แล้วคำนวณงวดที่เหลือใหม่จากเงินต้นคงเหลือ (งวดที่ตัดบัญชีแล้วเก็บไว้ตามเดิม)"""
+        """ลบงวดที่ยังไม่ตัดบัญชี แล้วคำนวณงวดที่เหลือใหม่จากเงินต้นคงเหลือ (งวดที่ตัดบัญชีแล้วเก็บไว้ตามเดิม)
+        เงินต้นรับได้หลายครั้ง: ก้อนที่รับระหว่างงวดคิดดอกเบี้ยนับจากวันที่รับ แล้วรวมเข้าเงินต้นที่ต้องผ่อนตั้งแต่งวดนั้น"""
         self.installments.filter(bank_txn__isnull=True).delete()
         posted = list(self.installments.order_by('period_no'))
-        balance = self.principal - sum((i.principal_amount for i in posted), Decimal(0))
-        prev_date = posted[-1].due_date if posted else self.loan_date
+        draws = list(self.drawdowns.order_by('draw_date', 'id').values_list('draw_date', 'amount'))
+        if not draws:
+            return
+        prev_date = posted[-1].due_date if posted else draws[0][0]
+        balance = (sum((a for d, a in draws if d <= prev_date), Decimal(0))
+                   - sum((i.principal_amount for i in posted), Decimal(0)))
+        pending = [(d, a) for d, a in draws if d > prev_date]
         start_n = posted[-1].period_no + 1 if posted else 1
         due_dates = self.due_dates()
         rates = list(self.rates.all())
         rows = []
         for n in range(start_n, self.term_months + 1):
-            if balance <= 0:
-                break
             due = due_dates[n - 1]
+            in_period = [(d, a) for d, a in pending if d <= due]
+            pending = [(d, a) for d, a in pending if d > due]
+            if balance <= 0 and not in_period:
+                if not pending:
+                    break
+                prev_date = due  # ยังไม่มีเงินต้นค้าง รอรับก้อนถัดไป
+                continue
             rate = self.rate_for(due, due_dates, rates)
-            if self.interest_method == 'DAILY':
-                interest = balance * rate / 100 * Decimal((due - prev_date).days) / 365
-            else:
-                interest = balance * rate / 1200
-            interest = round_money(interest)
+            interest = self._period_interest(balance, in_period, prev_date, due, rate)
+            balance += sum((a for d, a in in_period), Decimal(0))
             remaining = self.term_months - n + 1
             if self.repayment_method == 'EQUAL_PRINCIPAL':
                 principal = balance / remaining
@@ -2559,10 +2583,12 @@ class Loan(models.Model):
         LoanInstallment.objects.bulk_create(rows)
 
     def recalc_balances(self):
-        """หลังแก้ยอดในตารางผ่อนเอง: คำนวณเงินต้นคงเหลือของทุกงวดใหม่"""
-        balance = self.principal
+        """หลังแก้ยอดในตารางผ่อนเอง: เงินต้นคงเหลือแต่ละงวด = เงินต้นที่รับถึงวันครบกำหนด - เงินต้นที่ผ่อนสะสม"""
+        draws = list(self.drawdowns.values_list('draw_date', 'amount'))
+        repaid = Decimal(0)
         for inst in self.installments.order_by('period_no', 'due_date'):
-            balance -= inst.principal_amount
+            repaid += inst.principal_amount
+            balance = sum((a for d, a in draws if d <= inst.due_date), Decimal(0)) - repaid
             if inst.balance_after != balance:
                 LoanInstallment.objects.filter(pk=inst.pk).update(balance_after=balance)
 
@@ -2570,6 +2596,44 @@ class Loan(models.Model):
     def outstanding_principal(self):
         paid = self.installments.filter(bank_txn__isnull=False).aggregate(t=Sum('principal_amount'))['t']
         return self.principal - (paid or 0)
+
+
+class LoanDrawdown(models.Model):
+    """รับเงินต้นเงินกู้ (รับได้หลายครั้ง) — ดอกเบี้ยของแต่ละก้อนนับจากวันที่รับ"""
+    loan = models.ForeignKey(Loan, on_delete=models.CASCADE, related_name='drawdowns')
+    draw_date = models.DateField(default=datetime.date.today, verbose_name="วันที่รับเงินต้น")
+    amount = models.DecimalField(max_digits=18, decimal_places=4, validators=[MinValueValidator(Decimal('0.01'))],
+                                 verbose_name="เงินต้นที่รับ")
+    notes = models.CharField(max_length=200, blank=True, verbose_name="หมายเหตุ")
+
+    class Meta:
+        verbose_name = "รับเงินต้น"
+        verbose_name_plural = "รับเงินต้น (รับได้หลายครั้ง — ดอกเบี้ยนับจากวันที่รับ)"
+        ordering = ('draw_date', 'id')
+
+    def __str__(self):
+        return f"{self.loan.name} {self.draw_date:%d/%m/%Y} {self.amount:,.2f}"
+
+
+def sync_drawdown_ledger(drawdown):
+    loan = drawdown.loan
+    if not loan.record_disbursement:
+        BankTransaction.objects.filter(loan_drawdown=drawdown).delete()
+        return
+    BankTransaction.objects.update_or_create(loan_drawdown=drawdown, defaults={
+        'bank_account_id': loan.bank_account_id,
+        'txn_date': drawdown.draw_date,
+        'amount': drawdown.amount,
+        'source_type': 'LOAN_DISBURSE',
+        'reference': loan.name[:100],
+        'party': loan.lender,
+        'description': f"รับเงินต้นเงินกู้ {loan.name}{': ' + drawdown.notes if drawdown.notes else ''}"[:255],
+    })
+
+
+@receiver(post_save, sender=LoanDrawdown)
+def _drawdown_sync_ledger(sender, instance, **kwargs):
+    sync_drawdown_ledger(instance)
 
 
 class LoanRate(models.Model):
@@ -2642,18 +2706,9 @@ def _loan_installment_sync_ledger(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender=Loan)
 def _loan_sync_ledger(sender, instance, **kwargs):
-    if instance.record_disbursement:
-        BankTransaction.objects.update_or_create(loan_disbursement=instance, defaults={
-            'bank_account_id': instance.bank_account_id,
-            'txn_date': instance.loan_date,
-            'amount': instance.principal,
-            'source_type': 'LOAN_DISBURSE',
-            'reference': instance.name[:100],
-            'party': instance.lender,
-            'description': f"รับเงินกู้ {instance.name}"[:255],
-        })
-    else:
-        BankTransaction.objects.filter(loan_disbursement=instance).delete()
+    # เปลี่ยนสมุดบัญชี/ชื่อ/ติ๊กบันทึกเงินต้น -> รายการรับเงินต้นทุกครั้งตาม
+    for drawdown in instance.drawdowns.all():
+        sync_drawdown_ledger(drawdown)
     BankTransaction.objects.filter(loan_installment__loan=instance).update(
         bank_account_id=instance.bank_account_id, reference=instance.name[:100], party=instance.lender)
 

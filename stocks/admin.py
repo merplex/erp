@@ -6326,7 +6326,7 @@ class BankTransactionAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                  .values('bank_account').annotate(s=Sum('amount')).values('s'))
         return super().get_queryset(request).select_related(
             'bank_account', 'category', 'sales_payment', 'purchase_payment', 'loan_installment',
-            'factoring_payment').annotate(
+            'factoring_payment', 'loan_drawdown').annotate(
             running_balance=ExpressionWrapper(
                 F('bank_account__opening_balance') + Coalesce(Subquery(prior, output_field=MONEY),
                                                              Value(0, output_field=MONEY)),
@@ -6401,7 +6401,7 @@ class BankTransactionAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             form = AssignBankAccountForm(request.POST)
             if form.is_valid():
                 account = form.cleaned_data['bank_account']
-                loan_rows = queryset.filter(Q(loan_disbursement__isnull=False) | Q(loan_installment__isnull=False)
+                loan_rows = queryset.filter(Q(loan_drawdown__isnull=False) | Q(loan_installment__isnull=False)
                                             | Q(factoring_payment__isnull=False) | Q(transfer_peer__isnull=False))
                 skipped = loan_rows.count()
                 queryset = queryset.exclude(pk__in=list(loan_rows.values_list('pk', flat=True)))
@@ -6435,8 +6435,8 @@ class BankTransactionAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             url = reverse('admin:stocks_financereport_change', args=[obj.purchase_payment.purchase_order_id])
         elif obj.rebate_payout_id:
             url = reverse('admin:stocks_rebatepayout_change', args=[obj.rebate_payout_id])
-        elif obj.loan_disbursement_id:
-            url = reverse('admin:stocks_loan_change', args=[obj.loan_disbursement_id])
+        elif obj.loan_drawdown_id:
+            url = reverse('admin:stocks_loan_change', args=[obj.loan_drawdown.loan_id])
         elif obj.loan_installment_id:
             url = reverse('admin:stocks_loan_change', args=[obj.loan_installment.loan_id])
         elif obj.factoring_payment_id:
@@ -6476,6 +6476,27 @@ class BankTransactionAdmin(ExportToExcelMixin, UnfoldModelAdmin):
 class BankTransactionCategoryAdmin(UnfoldModelAdmin):
     list_display = ('name',)
     search_fields = ('name',)
+
+
+class LoanDrawdownFormSet(forms.BaseInlineFormSet):
+    def clean(self):
+        super().clean()
+        rows = [f.cleaned_data for f in self.forms
+                if f.cleaned_data and not f.cleaned_data.get('DELETE') and f.cleaned_data.get('amount')]
+        if not rows:
+            raise ValidationError("ต้องมีรายการรับเงินต้นอย่างน้อย 1 ครั้ง")
+        first = min(r['draw_date'] for r in rows if r.get('draw_date'))
+        due = self.instance.first_due_date
+        if due and first and due < first:
+            raise ValidationError(f"วันครบกำหนดงวดแรก ({due:%d/%m/%Y}) ต้องไม่ก่อนวันที่รับเงินต้นครั้งแรก "
+                                  f"({first:%d/%m/%Y})")
+
+
+class LoanDrawdownInline(UnfoldTabularInline):
+    model = LoanDrawdown
+    formset = LoanDrawdownFormSet
+    extra = 1
+    fields = ('draw_date', 'amount', 'notes')
 
 
 class LoanRateInline(UnfoldTabularInline):
@@ -6531,9 +6552,10 @@ class LoanAdmin(UnfoldModelAdmin):
     list_filter = ('is_active', 'bank_account')
     search_fields = ('name', 'lender')
     autocomplete_fields = ['bank_account']
-    inlines = [LoanRateInline, LoanInstallmentInline]
+    inlines = [LoanDrawdownInline, LoanRateInline, LoanInstallmentInline]
+    readonly_fields = ('get_principal', 'loan_date')
     fieldsets = (
-        (None, {'fields': ('name', 'lender', 'bank_account', 'principal', 'loan_date', 'record_disbursement')}),
+        (None, {'fields': ('name', 'lender', 'bank_account', 'get_principal', 'loan_date', 'record_disbursement')}),
         ("เงื่อนไขการผ่อน", {'fields': ('first_due_date', 'term_months', 'repayment_method', 'installment_amount',
                                        'interest_method', 'regenerate_schedule')}),
         (None, {'fields': ('is_active', 'notes')}),
@@ -6542,20 +6564,24 @@ class LoanAdmin(UnfoldModelAdmin):
     def save_related(self, request, form, formsets, change):
         super().save_related(request, form, formsets, change)
         loan = form.instance
+        loan.refresh_principal()
         has_pending = loan.installments.filter(bank_txn__isnull=True).exists()
-        # สร้างเองเมื่อยังไม่มีงวดค้าง (เพิ่งกรอกเงื่อนไขครบ หรือลบงวดใน inline ทิ้งหมด) หรือเมื่อติ๊กสร้างใหม่
-        if form.cleaned_data.get('regenerate_schedule') or (not has_pending and loan.outstanding_principal > 0):
+        drawdowns_changed = any(fs.model is LoanDrawdown and fs.has_changed() for fs in formsets)
+        # สร้างเองเมื่อ: ยังไม่มีงวดค้าง (เพิ่งกรอกเงื่อนไขครบ/ลบงวดทิ้งหมด), เพิ่ม/แก้การรับเงินต้น, หรือติ๊กสร้างใหม่
+        if (form.cleaned_data.get('regenerate_schedule') or (change and drawdowns_changed)
+                or (not has_pending and loan.outstanding_principal > 0)):
             if loan.is_schedule_ready():
                 loan.generate_schedule()
-                self.message_user(request, "สร้างตารางผ่อนชำระแล้ว", messages.SUCCESS)
+                self.message_user(request, "สร้างตารางผ่อนชำระแล้ว (งวดที่ตัดบัญชีแล้วเก็บไว้ตามเดิม)",
+                                  messages.SUCCESS)
             else:
-                self.message_user(request, "ยังสร้างตารางผ่อนไม่ได้: กรอกยอดกู้, วันครบกำหนดงวดแรก, จำนวนงวด "
+                self.message_user(request, "ยังสร้างตารางผ่อนไม่ได้: กรอกรับเงินต้น, วันครบกำหนดงวดแรก, จำนวนงวด "
                                            "และอัตราดอกเบี้ยอย่างน้อย 1 แถว (0 ได้)", messages.WARNING)
         else:
             loan.recalc_balances()
         run_due_loan_installments()  # งวดที่เลยกำหนดแล้ว (เช่น กรอกเงินกู้ย้อนหลัง) ลงสมุดทันที
 
-    @admin.display(description="ยอดกู้", ordering='principal')
+    @admin.display(description="เงินต้นรวม", ordering='principal')
     def get_principal(self, obj):
         return f"{obj.principal:,.2f}"
 
