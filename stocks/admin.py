@@ -2305,7 +2305,10 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
                 for d in batch_dates
             ]
 
-            sales_items = SalesItem.objects.filter(sales_order=obj).select_related('barcode_obj', 'product')
+            # 🎯 order_by('id') = เรียงตามลำดับที่คีย์ในใบสั่งขาย — ไม่ใส่ DB จะคืนลำดับมั่ว (แถวที่ถูก
+            # update บ่อยมักไปอยู่ท้าย) และลำดับนี้ไหลต่อไปถึงลำดับ log ส่งของ/ใบส่งสินค้าที่พิมพ์ด้วย
+            sales_items = (SalesItem.objects.filter(sales_order=obj)
+                           .select_related('barcode_obj', 'product').order_by('id'))
             pending_map = {}
             for item in sales_items:
                 if not item.barcode_obj_id:
