@@ -4878,6 +4878,11 @@ class CustomerAdmin(DetailedHistoryMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('company_name', 'contact_person', 'phone', 'tax_id')
     search_fields = ('company_name', 'contact_person', 'phone', 'tax_id', 'buyer_code')
     inlines = [CustomerProductContractInline]
+    # แสดงช่องตามรอบวางบิลที่เลือก (Alpine.js ของ Unfold — เปลี่ยน dropdown แล้วช่องขึ้น/ซ่อนทันที)
+    conditional_fields = {
+        'payment_day_2': "billing_cycle == 'HALF_MONTH'",
+        'billing_ranges': "billing_cycle == 'CUSTOM'",
+    }
 
 # --- 3. ส่วนหน้าจัดการสัญญาโดยเฉพาะ (T2. ราคาสัญญา&DC/Rebate) ---
 @admin.register(CustomerProductContract)

@@ -137,8 +137,12 @@ class Customer(models.Model):
         default=25,
         validators=[MinValueValidator(1), MaxValueValidator(31)],
         verbose_name="วันกำหนดชำระเงิน",
-        help_text="ระบุวันที่ 1-31 (เกินวันสิ้นเดือน = สิ้นเดือน)"
+        help_text="ระบุวันที่ 1-31 (เกินวันสิ้นเดือน = สิ้นเดือน) — รอบครึ่งเดือน: ใช้กับรอบ 1-15"
     )
+    payment_day_2 = models.PositiveSmallIntegerField(
+        null=True, blank=True, validators=[MinValueValidator(1), MaxValueValidator(31)],
+        verbose_name="วันกำหนดชำระเงิน รอบ 16-สิ้นเดือน",
+        help_text="ใช้กับรอบครึ่งเดือน เช่น รอบ 1-15 จ่ายวันที่ 18 / รอบ 16-สิ้นเดือน จ่ายวันที่ 3 (ว่าง = ใช้วันเดียวกับรอบ 1-15)")
     shift_weekend_to_monday = models.BooleanField(
         default=True, verbose_name="ครบกำหนดตรงเสาร์-อาทิตย์ เลื่อนเป็นวันจันทร์")
 
@@ -207,6 +211,9 @@ class Customer(models.Model):
         import calendar
         last_day = lambda d: calendar.monthrange(d.year, d.month)[1]
         due = self.billing_period_end(ref_date)
+        pay_day = self.payment_day
+        if self.billing_cycle == 'HALF_MONTH' and due.day > 15 and self.payment_day_2:
+            pay_day = self.payment_day_2  # รอบ 16-สิ้นเดือน มีวันจ่ายของตัวเอง
         months, days = divmod(self.payment_term or 0, 30)
         if months:
             # สิ้นเดือนเลื่อนไปสิ้นเดือน (28 ก.พ. + 1 เดือน = 31 มี.ค.)
@@ -221,10 +228,10 @@ class Customer(models.Model):
                 due += datetime.timedelta(days=15)
         elif days:
             due += datetime.timedelta(days=days)
-        if self.payment_day:
-            pay = add_months(due, 0, self.payment_day)
+        if pay_day:
+            pay = add_months(due, 0, pay_day)
             if pay < due:
-                pay = add_months(due, 1, self.payment_day)
+                pay = add_months(due, 1, pay_day)
             due = pay
         if self.shift_weekend_to_monday and due.weekday() >= 5:
             due += datetime.timedelta(days=7 - due.weekday())
