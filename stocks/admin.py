@@ -16,7 +16,7 @@ from .models import (
     IncomeReport, ShipmentAccounting, InternationalPurchaseTracking,
     SalesReport  # 👈 เพิ่มตัวที่ทำพังเมื่อกี้เข้าไปแล้วครับ!
 )
-from .models import DocumentLock, round_money
+from .models import DocumentLock, round_money, _delivery_local_date
 # 1. เปลี่ยนชื่อที่ปรากฏบนหัวเอกสาร (Header สีน้ำเงิน)
 admin.site.site_header = "Meebun ERP"
 
@@ -2879,15 +2879,18 @@ def _receivable_rows(queryset):
     """แยกใบที่เลือกเป็น (รับได้, ข้าม) — ข้าม: ยกเลิก / รับครบแล้ว / ปิดยอด / SO ขายแฟคตอริ่ง (ไม่ทับรายการที่ระบบสร้าง)"""
     receipts = list(queryset.select_related('sales_order__customer').order_by('due_date', 'shipped_date', 'id'))
     states = receipt_payment_states({r.sales_order_id for r in receipts})
-    factoring = set(SalesPayment.objects.filter(order_id__in={r.sales_order_id for r in receipts})
-                    .exclude(factoring_role='').values_list('order_id', flat=True))
+    # ขายแฟคตอริ่งแล้ว: ทั้ง SO (แถวไม่ผูกใบ) หรือเฉพาะใบนั้น
+    fx_rows = (SalesPayment.objects.filter(order_id__in={r.sales_order_id for r in receipts})
+               .exclude(factoring_role='').values_list('order_id', 'receipt_id'))
+    factoring_so = {so for so, rid in fx_rows if rid is None}
+    factoring_iv = {rid for so, rid in fx_rows if rid}
     ok, skipped = [], []
     labels = dict(RECEIPT_PAY_STATES)
     for r in receipts:
         state = states.get(r.pk)
         if r.is_cancelled or not state:
             skipped.append((r, "ใบถูกยกเลิก"))
-        elif r.sales_order_id in factoring:
+        elif r.sales_order_id in factoring_so or r.pk in factoring_iv:
             skipped.append((r, "ขายแฟคตอริ่ง — ระบบสร้างรายการรับเงินให้แล้ว"))
         elif state[0] in ('PAID', 'SETTLED') or state[1] <= 0:
             skipped.append((r, labels[state[0]]))
@@ -3061,12 +3064,19 @@ class SalesReceiptAdmin(ColumnTotalsMixin, TaxReportActionsMixin, UnfoldModelAdm
             'action_name': 'receive_payment', 'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
         })
 
-    @admin.action(description="💳 ขายแฟคตอริ่ง (ทั้งใบสั่งขายของใบที่เลือก)")
+    @admin.action(description="💳 ขายแฟคตอริ่ง (เฉพาะใบที่เลือก)")
     def sell_factoring_by_receipt(self, request, queryset):
-        # แฟคตอริ่งทำเป็นราย SO (ยอดค้างรับทั้ง SO) — ใบ IV หลายใบใน SO เดียวกัน = ทำครั้งเดียว
-        so_ids = queryset.filter(is_cancelled=False).values_list('sales_order_id', flat=True).distinct()
-        orders = SalesOrder.objects.filter(pk__in=so_ids)
-        sell_factoring(self, request, orders)
+        # ขายเฉพาะยอดค้างของใบ IV ที่เลือก (ไม่ใช่ทั้ง SO) — แถวรับเงินผูกใบ + เลข IV ในหมายเหตุ
+        created = 0
+        for receipt in queryset.select_related('sales_order__customer__factoring_account').order_by('due_date', 'id'):
+            with transaction.atomic():
+                ok, msg = create_factoring_payments(receipt.sales_order, receipt)
+            if ok:
+                created += 1
+            else:
+                self.message_user(request, msg, messages.WARNING)
+        if created:
+            self.message_user(request, f"สร้างรายการรับเงินแฟคตอริ่ง {created} ใบ", messages.SUCCESS)
 
     @admin.display(description="สถานะรับเงิน", ordering='due_date')
     def get_payment_status(self, obj):
@@ -5590,7 +5600,9 @@ class ShipmentAccountingAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModel
     # 🎯 5. ยอด ที่ยืนยันทั้งหมด จะถูกบันทึกย้อนไปใน salesorder และ incomereport
     def _confirm_revenue(self, obj):
         # SO ที่ขายแฟคตอริ่งแล้ว มีแถวรับเงิน (เบิกล่วงหน้า + ส่วนที่เหลือ) ครบยอดอยู่แล้ว — ไม่สร้างยอดรับซ้ำ
-        is_factored = obj.sales_order.payments.filter(factoring_role__gt='').exists()
+        receipt = obj.sales_order.receipts.filter(
+            is_cancelled=False, shipped_date=_delivery_local_date(obj.shipped_date)).first()
+        is_factored = factoring_blocker(obj.sales_order, receipt) is not None
         if obj.is_revenue_confirmed and not is_factored:
             SalesPayment.objects.update_or_create(
                 order=obj.sales_order,

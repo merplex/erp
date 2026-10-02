@@ -2964,30 +2964,56 @@ def factoring_customer_paid_date(order):
     return order.order_date + datetime.timedelta(days=term or 0)
 
 
-def create_factoring_payments(order):
-    """คืน (สร้างแล้วหรือไม่, ข้อความ)"""
+def factoring_blocker(order, receipt=None):
+    """ข้อความถ้าขายแฟคตอริ่ง/รับเงินซ้ำไม่ได้ (None = ทำได้)
+    - ขายทั้ง SO แล้ว (แถวแฟคตอริ่งที่ไม่ผูกใบ IV) -> ทุกใบของ SO ถือว่าขายแล้ว
+    - ขายราย IV แล้ว (แถวแฟคตอริ่งผูกใบนั้น) -> เฉพาะใบนั้น"""
+    rows = SalesPayment.objects.filter(order=order).exclude(factoring_role='')
+    if rows.filter(receipt__isnull=True).exists():
+        return "ขายแฟคตอริ่งทั้งใบสั่งขายไปแล้ว"
+    if receipt is not None and rows.filter(receipt=receipt).exists():
+        return "ขายแฟคตอริ่งไปแล้ว"
+    return None
+
+
+def create_factoring_payments(order, receipt=None):
+    """ขายแฟคตอริ่งทั้ง SO (receipt=None: S2/A4) หรือเฉพาะใบ IV ที่เลือก (A1/A2) — คืน (สร้างแล้วหรือไม่, ข้อความ)
+    ราย IV: ยอด = ยอดค้างของใบนั้น, วันลูกค้าจ่าย = วันครบกำหนดของใบ, แถวรับเงินผูกใบ + เลข IV ในหมายเหตุ"""
     customer = order.customer
     account = customer.factoring_account if customer else None
+    label = receipt.receipt_number if receipt is not None else order.so_number
     if not account or account.account_type != 'FACTORING' or not account.linked_account_id:
-        return False, f"{order.so_number}: ลูกค้ายังไม่ได้ตั้งบัญชีแฟคตอริ่ง (หรือบัญชียังไม่ผูกบัญชีรับเงินโอน)"
-    if order.payments.filter(factoring_role__gt='').exists():
-        return False, f"{order.so_number}: ขายแฟคตอริ่งไปแล้ว"
-    balance = round_money(order.balance_due)
+        return False, f"{label}: ลูกค้ายังไม่ได้ตั้งบัญชีแฟคตอริ่ง (หรือบัญชียังไม่ผูกบัญชีรับเงินโอน)"
+    if receipt is None:
+        if order.payments.filter(factoring_role__gt='', receipt__isnull=True).exists():
+            return False, f"{label}: ขายแฟคตอริ่งไปแล้ว"
+        balance = round_money(order.balance_due)
+        paid_date = factoring_customer_paid_date(order)
+    else:
+        blocker = factoring_blocker(order, receipt)
+        if blocker:
+            return False, f"{label}: {blocker}"
+        if receipt.is_cancelled:
+            return False, f"{label}: ใบถูกยกเลิก"
+        state = receipt_payment_states([order.pk]).get(receipt.pk)
+        balance = round_money(state[1]) if state and state[0] not in ('PAID', 'SETTLED') else Decimal(0)
+        paid_date = receipt.due_date or factoring_customer_paid_date(order)
     if balance <= 0:
-        return False, f"{order.so_number}: ไม่มียอดค้างรับ"
+        return False, f"{label}: ไม่มียอดค้างรับ"
     pct = account.advance_percent or Decimal(0)
     advance = round_money(balance * pct / 100)
     # เงินเบิกได้รับหลังวันที่ "กด action" (ยื่นขายแฟคตอริ่ง) ไม่ใช่วันที่ขาย
     advance_date = datetime.date.today() + datetime.timedelta(days=account.advance_days or 0)
-    paid_date = max(factoring_customer_paid_date(order), advance_date)
+    paid_date = max(paid_date, advance_date)
+    prefix = f"{receipt.receipt_number} " if receipt is not None else ""
     SalesPayment.objects.create(
-        order=order, amount=advance, payment_date=advance_date, bank_account=account, factoring_role='ADVANCE',
-        remark=f"แฟคตอริ่ง เบิกล่วงหน้า {pct.normalize():f}%")
+        order=order, receipt=receipt, amount=advance, payment_date=advance_date, bank_account=account,
+        factoring_role='ADVANCE', remark=f"{prefix}แฟคตอริ่ง เบิกล่วงหน้า {pct.normalize():f}%")
     SalesPayment.objects.create(
-        order=order, amount=balance - advance, bank_account=account, factoring_role='REMAINDER',
+        order=order, receipt=receipt, amount=balance - advance, bank_account=account, factoring_role='REMAINDER',
         payment_date=add_business_days(paid_date, account.settle_business_days or 0),
         factoring_customer_paid_date=paid_date, factoring_rate=account.factoring_interest_rate or 0,
-        remark=f"แฟคตอริ่ง ส่วนที่เหลือ (ลูกค้าจ่าย {paid_date:%d/%m/%Y})")
+        remark=f"{prefix}แฟคตอริ่ง ส่วนที่เหลือ (ลูกค้าจ่าย {paid_date:%d/%m/%Y})")
     return True, ''
 
 
@@ -3053,7 +3079,9 @@ def resync_factoring_month(customer_id, month):
               .exclude(deduction_kind='').aggregate(t=Sum('amount'))['t'] or 0)
     for r in remainders:
         fx = r.bank_account
-        advance = SalesPayment.objects.filter(order_id=r.order_id, factoring_role='ADVANCE').first()
+        # เงินเบิกของชุดเดียวกัน (ทั้ง SO หรือใบ IV เดียวกัน)
+        advance = SalesPayment.objects.filter(order_id=r.order_id, factoring_role='ADVANCE',
+                                              receipt_id=r.receipt_id).first()
         interest, days = Decimal(0), 0
         if advance and r.factoring_rate and r.factoring_customer_paid_date:
             days = max((r.factoring_customer_paid_date - advance.payment_date).days, 0)
