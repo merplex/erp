@@ -37,6 +37,7 @@ from django.utils.html import format_html
 from django.core.exceptions import ValidationError
 from django.forms import TextInput
 from django.db import models # เพิ่มเพื่อรองรับ formfield_overrides
+from django.db import transaction
 from django.db.models import Subquery, OuterRef, Q, Sum, F, DecimalField, ExpressionWrapper, Case, When, IntegerField, Value
 from django.db.models.functions import TruncDate
 from django.db.models.functions import Coalesce, Greatest
@@ -62,6 +63,7 @@ from unfold.contrib.filters.admin import (
     MultipleChoicesDropdownFilter,
     BooleanRadioFilter,
     RadioFilter as UnfoldRadioFilter,
+    CheckboxFilter,
 )
 from django.db.models import Exists
 from django.core.validators import EMPTY_VALUES
@@ -2858,18 +2860,74 @@ class TaxReportActionsMixin:
 
 
 
+class ReceivePaymentForm(forms.Form):
+    """A1/A2 action รับเงินตามยอดค้าง: บัญชีที่รับเงินเข้า + วันที่รับ"""
+    bank_account = forms.ModelChoiceField(
+        label="รับเงินเข้าบัญชี", queryset=BankAccount.objects.none(),
+        help_text="ไม่แสดงบัญชีแฟคตอริ่ง — SO ที่ขายแฟคตอริ่งระบบจัดการรับเงินให้เอง")
+    payment_date = forms.DateField(label="วันที่รับเงิน", widget=forms.DateInput(attrs={'type': 'date'}))
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['bank_account'].queryset = (BankAccount.objects.filter(is_active=True)
+                                                .exclude(account_type='FACTORING').order_by('-is_default', 'name'))
+        self.fields['bank_account'].initial = default_bank_account_id()
+        self.fields['payment_date'].initial = timezone.localdate()
+
+
+def _receivable_rows(queryset):
+    """แยกใบที่เลือกเป็น (รับได้, ข้าม) — ข้าม: ยกเลิก / รับครบแล้ว / ปิดยอด / SO ขายแฟคตอริ่ง (ไม่ทับรายการที่ระบบสร้าง)"""
+    receipts = list(queryset.select_related('sales_order__customer').order_by('due_date', 'shipped_date', 'id'))
+    states = receipt_payment_states({r.sales_order_id for r in receipts})
+    factoring = set(SalesPayment.objects.filter(order_id__in={r.sales_order_id for r in receipts})
+                    .exclude(factoring_role='').values_list('order_id', flat=True))
+    ok, skipped = [], []
+    labels = dict(RECEIPT_PAY_STATES)
+    for r in receipts:
+        state = states.get(r.pk)
+        if r.is_cancelled or not state:
+            skipped.append((r, "ใบถูกยกเลิก"))
+        elif r.sales_order_id in factoring:
+            skipped.append((r, "ขายแฟคตอริ่ง — ระบบสร้างรายการรับเงินให้แล้ว"))
+        elif state[0] in ('PAID', 'SETTLED') or state[1] <= 0:
+            skipped.append((r, labels[state[0]]))
+        else:
+            r.outstanding = state[1]
+            ok.append(r)
+    return ok, skipped
+
+
+class ReceiptPayStateFilter(CheckboxFilter):
+    """A1/A2: สถานะรับเงินต่อใบ IV (ยังไม่ถึงกำหนด/ครบกำหนด/เกินกำหนด/รับบางส่วน/รับเงินแล้ว)
+    คำนวณใน Python (ไล่ตัดยอดรับเงินของ SO เข้าใบที่ครบกำหนดเก่าสุดก่อน) จึงกรองด้วย pk__in"""
+    title = "สถานะรับเงิน"
+    parameter_name = 'pay_state'
+
+    def lookups(self, request, model_admin):
+        return RECEIPT_PAY_STATES
+
+    def queryset(self, request, queryset):
+        wanted = set(self.value() or [])
+        if not wanted:
+            return queryset
+        so_ids = queryset.values_list('sales_order_id', flat=True).distinct()
+        ids = [rid for rid, (state, left, owed, due) in receipt_payment_states(so_ids).items()
+               if state in wanted or ('PARTIAL' in wanted and 0 < left < owed)]
+        return queryset.filter(pk__in=ids)
+
+
 @admin.register(SalesReceipt)
 class SalesReceiptAdmin(ColumnTotalsMixin, TaxReportActionsMixin, UnfoldModelAdmin):
     # 🎯 หน้านี้เป็น "ทะเบียนใบเสร็จ" — สร้าง/ลบเองไม่ได้ ระบบทำอัตโนมัติหลังส่งของ
     #    ผู้ใช้แก้ได้เฉพาะ "วันครบกำหนด" กับ "หมายเหตุ"
     list_display = ('get_shipped_date', 'receipt_number', 'get_customer', 'get_due_date',
-                    'get_grand_total', 'get_payment_status', 'print_button')
+                    'get_grand_total', 'get_outstanding', 'get_payment_status', 'print_button')
     list_filter = (
         ('shipped_date', DjangoDateRangeFilter),
         ('due_date', DjangoDateRangeFilter),
         'is_cancelled',
-        ('sales_order__payment_status', MultipleChoicesDropdownFilter),
         ('sales_order__customer', AutocompleteSelectMultipleFilter),
+        ReceiptPayStateFilter,  # ไว้ท้ายสุด — คำนวณเฉพาะ SO ที่ผ่านตัวกรองอื่นแล้ว
     )
     list_filter_submit = True
     date_hierarchy = 'shipped_date'
@@ -2878,7 +2936,7 @@ class SalesReceiptAdmin(ColumnTotalsMixin, TaxReportActionsMixin, UnfoldModelAdm
     search_fields = ('receipt_number', 'sales_order__so_number', 'sales_order__po_no_customer',
                      'sales_order__customer__company_name')
     ordering = ('-shipped_date', '-id')
-    actions = ['print_tax_report', 'export_to_excel']
+    actions = ['receive_payment', 'sell_factoring_by_receipt', 'print_tax_report', 'export_to_excel']
     fields = ('receipt_number', 'get_sales_order_link', 'shipped_date', 'due_date',
               'subtotal', 'vat_amount', 'grand_total', 'notes', 'get_items_preview',
               'created_at', 'updated_at')
@@ -2944,11 +3002,95 @@ class SalesReceiptAdmin(ColumnTotalsMixin, TaxReportActionsMixin, UnfoldModelAdm
     def get_grand_total(self, obj):
         return format_html('<b>{}</b>', f"{obj.grand_total:,.2f}")
 
-    @admin.display(description="สถานะ", ordering='sales_order__payment_status')
+    def get_changelist_instance(self, request):
+        # คำนวณสถานะรับเงินของทั้งหน้าทีเดียว (query คงที่) แล้วแปะไว้ที่ object ให้ get_payment_status ใช้
+        cl = super().get_changelist_instance(request)
+        states = receipt_payment_states({r.sales_order_id for r in cl.result_list})
+        for r in cl.result_list:
+            r._pay_state = states.get(r.pk)
+        return cl
+
+    def _state_of(self, obj):
+        if not hasattr(obj, '_pay_state'):
+            obj._pay_state = receipt_payment_states([obj.sales_order_id]).get(obj.pk)
+        return obj._pay_state
+
+    def fast_column_totals(self, queryset, fields):
+        # กล่องสรุปยอด: ยอดรวมสุทธิ = DB aggregate, ค้างรับ = คำนวณสถานะทุก SO ตามตัวกรองทีเดียว (ไม่ยิงทีละแถว)
+        totals = {}
+        if 'get_grand_total' in fields:
+            totals['get_grand_total'] = queryset.aggregate(t=Sum('grand_total'))['t'] or 0
+        if 'get_outstanding' in fields:
+            rows = list(queryset.values_list('pk', 'sales_order_id').distinct())
+            states = receipt_payment_states({so for _, so in rows})
+            totals['get_outstanding'] = sum((states[pk][1] for pk, _ in rows if pk in states), Decimal(0))
+        return totals
+
+    @admin.display(description="ค้างรับ")
+    def get_outstanding(self, obj):
+        if obj.is_cancelled:
+            return '-'
+        state = self._state_of(obj)
+        return f"{state[1]:,.2f}" if state else '-'
+
+    @admin.action(description="💰 รับเงินตามยอดค้าง (เลือกบัญชีที่รับ)")
+    def receive_payment(self, request, queryset):
+        ok, skipped = _receivable_rows(queryset)
+        form = ReceivePaymentForm(request.POST if 'apply' in request.POST else None)
+        if 'apply' in request.POST and form.is_valid():
+            if not ok:
+                self.message_user(request, "ไม่มีใบที่ต้องรับเงิน", messages.WARNING)
+                return None
+            account, pay_date = form.cleaned_data['bank_account'], form.cleaned_data['payment_date']
+            with transaction.atomic():
+                for r in ok:
+                    SalesPayment.objects.create(
+                        order=r.sales_order, receipt=r, amount=r.outstanding, payment_date=pay_date,
+                        bank_account=account, remark=f"รับชำระ {r.receipt_number}")
+            total = sum((r.outstanding for r in ok), Decimal(0))
+            msg = f"บันทึกรับเงิน {len(ok)} ใบ รวม {total:,.2f} บาท เข้าบัญชี {account}"
+            if skipped:
+                msg += f" (ข้าม {len(skipped)} ใบ)"
+            self.message_user(request, msg, messages.SUCCESS)
+            return None
+        return TemplateResponse(request, 'admin/stocks/salesreceipt/receive_payment.html', {
+            **self.admin_site.each_context(request),
+            'title': "รับเงินตามยอดค้าง", 'opts': self.model._meta, 'form': form,
+            'rows': ok, 'skipped': skipped, 'total': sum((r.outstanding for r in ok), Decimal(0)),
+            'selected_ids': list(queryset.values_list('pk', flat=True)),
+            'action_name': 'receive_payment', 'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
+        })
+
+    @admin.action(description="💳 ขายแฟคตอริ่ง (ทั้งใบสั่งขายของใบที่เลือก)")
+    def sell_factoring_by_receipt(self, request, queryset):
+        # แฟคตอริ่งทำเป็นราย SO (ยอดค้างรับทั้ง SO) — ใบ IV หลายใบใน SO เดียวกัน = ทำครั้งเดียว
+        so_ids = queryset.filter(is_cancelled=False).values_list('sales_order_id', flat=True).distinct()
+        orders = SalesOrder.objects.filter(pk__in=so_ids)
+        sell_factoring(self, request, orders)
+
+    @admin.display(description="สถานะรับเงิน", ordering='due_date')
     def get_payment_status(self, obj):
         if obj.is_cancelled:
             return mark_safe('<b style="color:#dc2626;">ยกเลิก</b>')
-        return obj.sales_order.get_payment_status_display()
+        self._state_of(obj)
+        if not obj._pay_state:
+            return '-'
+        state, left, owed, due = obj._pay_state
+        labels = dict(RECEIPT_PAY_STATES)
+        if state in ('PAID', 'SETTLED'):
+            return labels[state]
+        days = (due - timezone.localdate()).days if due else None
+        if state == 'NOT_DUE':
+            text = labels[state] + (f" (อีก {days} วัน)" if days is not None else "")
+        elif state == 'OVERDUE':
+            text = f"🔴 เกินกำหนด {-days} วัน"
+        else:
+            text = labels[state]
+        partial = f" · รับบางส่วน ค้าง {left:,.2f}" if left < owed else ""
+        color = {'OVERDUE': '#dc2626', 'DUE_TODAY': '#d97706'}.get(state)
+        if color:
+            return format_html('<b style="color:{};">{}{}</b>', color, text, partial)
+        return text + partial
 
     @admin.display(description="ใบสั่งขายอ้างอิง")
     def get_sales_order_link(self, obj):
@@ -3060,7 +3202,7 @@ class SalesInvoiceAdmin(SalesReceiptAdmin):
     # 🎯 เมนู "ใบกำกับภาษี/ใบส่งของ" — แถว/เลขที่เดียวกับ B7 ใบเสร็จรับเงิน (proxy model)
     #    ต่างกันแค่หน้าพิมพ์ (ใช้เลย์เอาต์ใบส่งของ/ใบกำกับภาษี แทนใบเสร็จรับเงิน)
     list_display = ('get_shipped_date', 'get_doc_number', 'get_customer', 'get_due_date',
-                    'get_grand_total', 'get_payment_status', 'print_button')
+                    'get_grand_total', 'get_outstanding', 'get_payment_status', 'print_button')
     fields = ('get_doc_number', 'get_sales_order_link', 'shipped_date', 'due_date',
               'subtotal', 'vat_amount', 'grand_total', 'notes', 'get_items_preview',
               'created_at', 'updated_at')

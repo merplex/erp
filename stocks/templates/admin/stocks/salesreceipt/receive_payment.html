@@ -1,0 +1,55 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<div style="padding:20px;max-width:1000px;">
+    <h2>{{ title }} ({{ rows|length }} ใบ)</h2>
+    <p>ระบบจะสร้างรายการรับเงินในใบสั่งขาย 1 รายการต่อใบ ตามยอดค้างของใบนั้น และผูกกับใบนั้นโดยตรง</p>
+    {% if rows %}
+    <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+        <thead><tr style="border-bottom:2px solid #dee2e6;">
+            <th style="padding:8px;text-align:left;">เลขที่</th>
+            <th style="padding:8px;text-align:left;">ลูกค้า</th>
+            <th style="padding:8px;text-align:left;">ใบสั่งขาย</th>
+            <th style="padding:8px;text-align:left;">วันครบกำหนด</th>
+            <th style="padding:8px;text-align:right;">ยอดของใบ</th>
+            <th style="padding:8px;text-align:right;">ยอดที่จะรับ</th>
+        </tr></thead>
+        <tbody>
+        {% for r in rows %}
+            <tr style="border-bottom:1px solid #eee;">
+                <td style="padding:8px;">{{ r.receipt_number }}</td>
+                <td style="padding:8px;">{{ r.sales_order.customer }}</td>
+                <td style="padding:8px;">{{ r.sales_order.so_number }}</td>
+                <td style="padding:8px;">{{ r.due_date|date:"d/m/Y"|default:"-" }}</td>
+                <td style="padding:8px;text-align:right;">{{ r.grand_total|floatformat:"2g" }}</td>
+                <td style="padding:8px;text-align:right;">{{ r.outstanding|floatformat:"2g" }}</td>
+            </tr>
+        {% endfor %}
+        <tr style="font-weight:bold;">
+            <td colspan="5" style="padding:8px;text-align:right;">รวม</td>
+            <td style="padding:8px;text-align:right;">{{ total|floatformat:"2g" }}</td>
+        </tr>
+        </tbody>
+    </table>
+    {% endif %}
+    {% if skipped %}
+    <div style="margin:16px 0;padding:10px 14px;background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;">
+        <b>ข้าม {{ skipped|length }} ใบ (ไม่สร้างรายการรับเงิน)</b>
+        <ul style="margin:6px 0 0 18px;">
+        {% for r, reason in skipped %}<li>{{ r.receipt_number }} {{ r.sales_order.customer }} — {{ reason }}</li>{% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+    {% if rows %}
+    <form method="post">{% csrf_token %}
+        {% for pk in selected_ids %}<input type="hidden" name="{{ action_checkbox_name }}" value="{{ pk }}">{% endfor %}
+        <input type="hidden" name="action" value="{{ action_name }}">
+        <input type="hidden" name="apply" value="1">
+        <div style="margin:16px 0;">{{ form.as_p }}</div>
+        <button type="submit" style="background:#2563eb;color:#fff;border:none;padding:10px 20px;border-radius:4px;cursor:pointer;">✅ ยืนยันรับเงิน</button>
+        <a href="#" onclick="window.history.back();" style="margin-left:10px;color:#666;">ยกเลิก</a>
+    </form>
+    {% else %}
+    <p><a href="#" onclick="window.history.back();">← กลับ</a></p>
+    {% endif %}
+</div>
+{% endblock %}

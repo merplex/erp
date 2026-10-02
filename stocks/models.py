@@ -119,11 +119,116 @@ class Customer(models.Model):
             self.buyer_code = None
         super().save(*args, **kwargs)
     def __str__(self): return self.company_name
-    account_close_day = models.IntegerField(
+    BILLING_CYCLE_CHOICES = [
+        ('MONTHLY', '1 เดือน (วันที่ 1 - สิ้นเดือน)'),
+        ('HALF_MONTH', 'ครึ่งเดือน (1-15 / 16-สิ้นเดือน)'),
+        ('TWO_MONTHS', '2 เดือน (ม.ค.-ก.พ. / มี.ค.-เม.ย. / ...)'),
+        ('CUSTOM', 'ระบุช่วงวันที่เอง'),
+    ]
+    billing_cycle = models.CharField(
+        max_length=20, choices=BILLING_CYCLE_CHOICES, default='MONTHLY', verbose_name="รอบวางบิล",
+        help_text="ยอดส่งของในรอบเดียวกันนับเครดิตจากวันสิ้นรอบ")
+    billing_ranges = models.CharField(
+        max_length=100, blank=True, verbose_name="ช่วงวันที่ (ระบุเอง)",
+        help_text="ใช้กับรอบ \"ระบุช่วงวันที่เอง\" — เช่น 1-10,11-20,21-31 (31 = วันสุดท้ายของเดือนนั้นเสมอ)")
+    # วันกำหนดชำระ: สิ้นรอบ + เครดิต แล้วเลื่อนไปวันที่นี้ถัดไป
+    # (เช่น เครดิต 75 วัน ชำระวันที่ 5: รอบ 1-15 มิ.ย. → 29 ส.ค. → 5 ก.ย.)
+    payment_day = models.IntegerField(
         default=25,
+        validators=[MinValueValidator(1), MaxValueValidator(31)],
         verbose_name="วันกำหนดชำระเงิน",
-        help_text="ระบุวันที่ 1-31"
+        help_text="ระบุวันที่ 1-31 (เกินวันสิ้นเดือน = สิ้นเดือน)"
     )
+    shift_weekend_to_monday = models.BooleanField(
+        default=True, verbose_name="ครบกำหนดตรงเสาร์-อาทิตย์ เลื่อนเป็นวันจันทร์")
+
+    @staticmethod
+    def parse_billing_ranges(text):
+        """'1-10,11-20,21-31' -> [10, 20, 31] (วันสิ้นแต่ละรอบ) — ต้องเริ่มที่ 1 ต่อกันไม่มีช่องว่าง และจบที่ 31"""
+        ends, expected_start = [], 1
+        for part in (text or '').replace(' ', '').split(','):
+            if not part:
+                continue
+            m = re.fullmatch(r'(\d{1,2})-(\d{1,2})', part)
+            if not m:
+                raise ValidationError(f'รูปแบบ "{part}" ไม่ถูกต้อง ต้องเป็น เริ่ม-สิ้นสุด เช่น 1-15')
+            start, end = int(m.group(1)), int(m.group(2))
+            if start != expected_start:
+                raise ValidationError(f'ช่วง "{part}" ต้องเริ่มที่วันที่ {expected_start}')
+            if not start <= end <= 31:
+                raise ValidationError(f'ช่วง "{part}" ไม่ถูกต้อง (วันที่ 1-31 และวันเริ่มต้องไม่เกินวันสิ้นสุด)')
+            ends.append(end)
+            expected_start = end + 1
+        if not ends:
+            raise ValidationError('กรุณาระบุช่วงวันที่ เช่น 1-15,16-31')
+        if ends[-1] != 31:
+            raise ValidationError('ช่วงสุดท้ายต้องจบที่ 31 (= วันสุดท้ายของเดือน)')
+        return ends
+
+    def clean(self):
+        super().clean()
+        if self.billing_cycle == 'CUSTOM':
+            try:
+                self.parse_billing_ranges(self.billing_ranges)
+            except ValidationError as e:
+                raise ValidationError({'billing_ranges': e.messages})
+
+    def billing_period_end(self, ref_date):
+        """วันสิ้นรอบวางบิลของยอดที่ส่งวันที่ ref_date"""
+        import calendar
+        last_day = lambda d: calendar.monthrange(d.year, d.month)[1]
+        cycle = self.billing_cycle
+        if cycle == 'HALF_MONTH':
+            ends = [15, 31]
+        elif cycle == 'TWO_MONTHS':
+            # รอบละ 2 เดือนปฏิทิน จบที่สิ้นเดือนคู่ (ก.พ., เม.ย., ...)
+            end_month = ref_date.replace(day=1) if ref_date.month % 2 == 0 else add_months(ref_date, 1, 1)
+            return end_month.replace(day=last_day(end_month))
+        elif cycle == 'CUSTOM':
+            try:
+                ends = self.parse_billing_ranges(self.billing_ranges)
+            except ValidationError:
+                ends = [31]
+        else:  # MONTHLY
+            ends = [31]
+        for end in ends:
+            d = ref_date.replace(day=min(end, last_day(ref_date)))
+            if ref_date <= d:
+                return d
+        nxt = add_months(ref_date, 1, 1)
+        return nxt.replace(day=min(ends[0], last_day(nxt)))
+
+    def compute_payment_due_date(self, ref_date):
+        """วันกำหนดรับเงิน = สิ้นรอบวางบิล + เครดิต -> เลื่อนไป "วันกำหนดชำระเงิน" ถัดไป
+        -> ตรงเสาร์/อาทิตย์เลื่อนเป็นวันจันทร์ (ถ้าเปิด)
+
+        เครดิตนับเป็นเดือนตามปฏิทิน ไม่นับวันเป๊ะๆ: 30 วัน = 1 เดือน, 15 วัน = ครึ่งเดือน
+        เช่น สิ้นรอบ 15 มิ.ย. + 75 วัน (2.5 เดือน) -> 15 ส.ค. -> 31 ส.ค. (ไม่ใช่ 29 ส.ค.)"""
+        import calendar
+        last_day = lambda d: calendar.monthrange(d.year, d.month)[1]
+        due = self.billing_period_end(ref_date)
+        months, days = divmod(self.payment_term or 0, 30)
+        if months:
+            # สิ้นเดือนเลื่อนไปสิ้นเดือน (28 ก.พ. + 1 เดือน = 31 มี.ค.)
+            target = add_months(due, months, 1)
+            due = target.replace(day=last_day(target) if due.day == last_day(due) else min(due.day, last_day(target)))
+        if days == 15:
+            if due.day == last_day(due):
+                due = add_months(due, 1, 15)
+            elif due.day == 15:
+                due = due.replace(day=last_day(due))
+            else:
+                due += datetime.timedelta(days=15)
+        elif days:
+            due += datetime.timedelta(days=days)
+        if self.payment_day:
+            pay = add_months(due, 0, self.payment_day)
+            if pay < due:
+                pay = add_months(due, 1, self.payment_day)
+            due = pay
+        if self.shift_weekend_to_monday and due.weekday() >= 5:
+            due += datetime.timedelta(days=7 - due.weekday())
+        return due
     factoring_account = models.ForeignKey(
         'BankAccount', on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
         limit_choices_to={'account_type': 'FACTORING'}, verbose_name="บัญชีแฟคตอริ่ง",
@@ -942,6 +1047,9 @@ class SalesPayment(models.Model):
                                       editable=False, verbose_name="หัก")
     deduct_month = models.DateField(null=True, blank=True, editable=False, db_index=True,
                                     verbose_name="หักรอบเดือน")
+    # รับเงินจาก action "รับเงินตามยอดค้าง" ใน A1/A2 — ผูกใบ IV ไว้ให้ตัดยอดใบนั้นก่อน (ว่าง = ตัดใบเก่าสุดก่อน)
+    receipt = models.ForeignKey('SalesReceipt', on_delete=models.SET_NULL, null=True, blank=True,
+                                related_name='payments', editable=False, verbose_name="ใบเสร็จ/ใบกำกับ")
 
     def __str__(self):
         return f"รับเงิน {self.amount:,.2f}"
@@ -1210,27 +1318,8 @@ class SalesDeliveryLog(models.Model):
         # shipped_date เปลี่ยน (ไม่ใช่แค่ตอนสร้างแถวใหม่) เผื่อแก้วันที่ย้อนหลัง (ดู
         # SalesOrderAdmin.ship_batch_view → edit_batch_date) ---
         if (is_new or shipped_date_changed) and self.sales_order.customer:
-            close_day = self.sales_order.customer.account_close_day
-            term = self.sales_order.customer.payment_term
             ref_date = self.shipped_date.date() if hasattr(self.shipped_date, 'date') else self.shipped_date
-
-            try:
-                current_closing = ref_date.replace(day=close_day)
-            except ValueError:
-                next_month = ref_date.replace(day=28) + datetime.timedelta(days=4)
-                current_closing = next_month - datetime.timedelta(days=next_month.day)
-
-            if ref_date > current_closing:
-                first_of_next = (current_closing.replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
-                try:
-                    base_date = first_of_next.replace(day=close_day)
-                except ValueError:
-                    next_next = first_of_next.replace(day=28) + datetime.timedelta(days=4)
-                    base_date = next_next - datetime.timedelta(days=next_next.day)
-            else:
-                base_date = current_closing
-
-            self.payment_due_date = base_date + datetime.timedelta(days=term)
+            self.payment_due_date = self.sales_order.customer.compute_payment_due_date(ref_date)
 
         # บันทึกลงฐานข้อมูลจริง
         super().save(*args, **kwargs)
@@ -1340,6 +1429,92 @@ class SalesInvoice(SalesReceipt):
         proxy = True
         verbose_name = "ใบกำกับภาษี/ใบส่งของ"
         verbose_name_plural = "A2. ใบกำกับภาษี/ใบส่งของ (Invoice)"
+
+
+# ── สถานะรับเงินต่อใบ IV ──────────────────────────────────────────────────────
+# รายการรับเงิน (SalesPayment) ผูกกับ SO -> รายการที่ผูกใบ IV (รับจาก action ใน A1/A2) ตัดใบนั้นก่อน
+# ที่เหลือ (ยอดรับเงินจริง ไม่นับรายการหัก DC/Rebate + ใบลดหนี้ที่ไม่ได้อ้างอิงใบ) ไล่ตัดใบที่ครบกำหนดเก่าสุดก่อน
+RECEIPT_PAY_STATES = [
+    ('NOT_DUE', '⚪ ยังไม่ถึงกำหนด'),
+    ('DUE_TODAY', '🟠 ครบกำหนดวันนี้'),
+    ('OVERDUE', '🔴 เกินกำหนด'),
+    ('PARTIAL', '🟡 รับบางส่วน'),
+    ('PAID', '🟢 รับเงินแล้ว'),
+    ('SETTLED', '⚪ ปิดยอดกรณีพิเศษ'),
+]
+
+
+def receipt_payment_states(sales_order_ids, today=None):
+    """{receipt_id: (state, ยอดคงค้าง, ยอดของใบ, วันครบกำหนด)} ของใบ IV ที่ไม่ยกเลิกทั้งหมดใน SO ที่ระบุ
+    state: PAID / SETTLED / NOT_DUE / DUE_TODAY / OVERDUE (ยังค้างอยู่ — รับบางส่วน = 0 < ยอดคงค้าง < ยอดของใบ)
+    ใบที่รายการส่งของทุกแถวติ๊ก Paid (is_revenue_confirmed — เช่นรายการเก่าก่อน 26 ก.ค. 2569) = รับเงินแล้ว"""
+    from django.db.models.functions import TruncDate
+    today = today or timezone.localdate()
+    so_ids = set(sales_order_ids)
+    if not so_ids:
+        return {}
+    receipts = list(SalesReceipt.objects.filter(sales_order_id__in=so_ids, is_cancelled=False)
+                    .values_list('id', 'sales_order_id', 'shipped_date', 'due_date', 'grand_total'))
+    so_status = dict(SalesOrder.objects.filter(id__in=so_ids).values_list('id', 'payment_status'))
+    pool = {so: Decimal(0) for so in so_ids}
+    direct = {}
+    for so, rid, total in (SalesPayment.objects.filter(order_id__in=so_ids, deduction_kind='')
+                           .values('order_id', 'receipt_id').annotate(t=Sum('amount'))
+                           .values_list('order_id', 'receipt_id', 't')):
+        if rid:
+            direct[rid] = (so, total or 0)
+        else:
+            pool[so] += total or 0
+    cn_by_receipt = {}
+    for so, rid, total in CreditNote.objects.filter(sales_order_id__in=so_ids).values_list(
+            'sales_order_id', 'receipt_id', 'grand_total'):
+        if rid:
+            cn_by_receipt[rid] = cn_by_receipt.get(rid, Decimal(0)) + (total or 0)
+        else:
+            pool[so] += total or 0
+    # รอบส่งของที่ยืนยันรับเงินครบทุกแถวแล้ว
+    batch_flags = {}
+    for so, day, confirmed in (SalesDeliveryLog.objects.filter(sales_order_id__in=so_ids, credit_note_item__isnull=True)
+                               .annotate(day=TruncDate('shipped_date'))
+                               .values_list('sales_order_id', 'day', 'is_revenue_confirmed')):
+        batch_flags[(so, day)] = batch_flags.get((so, day), True) and confirmed
+
+    owed_by = {rid: max((total or 0) - cn_by_receipt.get(rid, 0), Decimal(0))
+               for rid, so, shipped, due, total in receipts}
+    # รับเงินผูกใบ: ตัดใบนั้นก่อน ส่วนเกิน (หรือผูกใบที่ยกเลิกไปแล้ว) กลับเข้ากองกลางของ SO
+    remaining = dict(owed_by)
+    live = set(owed_by)
+    for rid, (so, amount) in direct.items():
+        if rid not in live:
+            pool[so] += amount
+            continue
+        used = min(max(amount, Decimal(0)), remaining[rid])
+        remaining[rid] -= used
+        pool[so] += amount - used
+
+    result = {}
+    receipts.sort(key=lambda r: (r[3] or datetime.date.max, r[2], r[0]))
+    for rid, so, shipped, due, total in receipts:
+        owed = owed_by[rid]
+        if so_status.get(so) == 'SETTLED':
+            result[rid] = ('SETTLED', Decimal(0), owed, due)
+            continue
+        used = min(max(pool[so], Decimal(0)), remaining[rid])
+        pool[so] -= used  # ใบที่ติ๊ก Paid ก็ตัดยอดด้วย (A5 ยืนยันรับเงินสร้างรายการรับเงินไว้) — ไม่ให้ล้นไปใบถัดไป
+        if batch_flags.get((so, shipped)):
+            result[rid] = ('PAID', Decimal(0), owed, due)
+            continue
+        left = round_money(remaining[rid] - used)
+        if left <= 0:
+            state = 'PAID'
+        elif not due or due > today:
+            state = 'NOT_DUE'
+        elif due == today:
+            state = 'DUE_TODAY'
+        else:
+            state = 'OVERDUE'
+        result[rid] = (state, max(left, Decimal(0)), owed, due)
+    return result
 
 
 # ── ใบลดหนี้ (CN) ─────────────────────────────────────────────────────────────
@@ -2938,7 +3113,7 @@ def _factoring_resync(sender, instance, **kwargs):
 
 def deduction_date_in_month(customer, month):
     """วันที่ลงรายการหัก DC/Rebate ในรอบเดือนที่เลือก = "วันกำหนดชำระเงิน" ของลูกค้าในเดือนนั้น"""
-    day = customer.account_close_day if customer and customer.account_close_day else 1
+    day = customer.payment_day if customer and customer.payment_day else 1
     return add_months(month.replace(day=1), 0, max(1, min(day, 31)))
 
 
