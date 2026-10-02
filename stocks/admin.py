@@ -1707,11 +1707,16 @@ class ProductAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelMixin, 
 
 @admin.register(BOM)
 class BOMAdmin(DocumentLockMixin, UnfoldModelAdmin):
-    list_display = ('name', 'product', 'total_cost_display', 'unit', 'production_time', 'created_by')
-    list_filter = (('product__category', AutocompleteSelectMultipleFilter),)
+    list_display = ('name', 'product', 'get_customer', 'total_cost_display', 'unit', 'production_time', 'created_by')
+    list_filter = (('product__category', AutocompleteSelectMultipleFilter),
+                   ('customer', AutocompleteSelectMultipleFilter))
     list_filter_submit = True
-    autocomplete_fields = ['product']
-    search_fields = ['name', 'product__name', 'product__code', 'product__barcodes__code']
+    autocomplete_fields = ['product', 'customer']
+    search_fields = ['name', 'product__name', 'product__code', 'product__barcodes__code', 'customer__company_name']
+
+    @admin.display(description="ลูกค้า", ordering='customer__company_name')
+    def get_customer(self, obj):
+        return obj.customer.company_name if obj.customer_id else "ทุกลูกค้า"
     inlines = [BOMIngredientInline]
     readonly_fields = ('created_by', 'updated_by')
 
@@ -2510,15 +2515,17 @@ class SalesOrderAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelMixi
         if not getattr(sales_item.product, 'has_bom', False):
             return "NOT_MANUFACTURED" # คืนค่าบอกว่าตัวนี้ไม่ใช่สินค้าผลิต
 
-        bom_to_use = sales_item.bom 
-    
-        if not bom_to_use:
-        # ถ้าในบรรทัดนั้นไม่มี BOM จริงๆ ค่อยลองหาตัวล่าสุด (Backup plan)
-            bom_to_use = BOM.objects.filter(product=sales_item.product).order_by('-id').first()
+        # สูตรที่ใช้: สูตรเฉพาะลูกค้าของ SO นี้ > สูตรทุกลูกค้า (pick_bom)
+        # ใช้สูตรที่ติดมากับบรรทัดตรงๆ เฉพาะเมื่อเป็นสูตรของลูกค้ารายนี้ — ถ้าเป็นสูตรทุกลูกค้า (เช่น ตั้งไว้ก่อนมี
+        # สูตรเฉพาะลูกค้า) หรือของลูกค้ารายอื่น ให้เลือกใหม่ตามลูกค้า
+        customer_id = sales_item.sales_order.customer_id
+        bom_to_use = sales_item.bom
+        if not bom_to_use or bom_to_use.customer_id != customer_id:
+            bom_to_use = pick_bom(sales_item.product, sales_item.barcode_obj, customer_id) or (
+                bom_to_use if bom_to_use and bom_to_use.customer_id is None else None)
 
-        # 2. เช็กว่ามีสูตร BOM ในระบบจริงไหม
-        bom_obj = BOM.objects.filter(product=sales_item.product).first()
-        if not bom_obj:
+        # 2. เช็กว่ามีสูตร BOM ที่ใช้กับลูกค้ารายนี้ได้จริงไหม
+        if not bom_to_use:
             return "NO_BOM_FORMULA" # คืนค่าบอกว่ายังไม่ได้ทำสูตร
 
         # 3. ตรวจสอบจำนวนสั่งซื้อ
@@ -2551,18 +2558,19 @@ class SalesOrderAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelMixi
             for item in so.items.all():
                 # เรียกใช้ฟังก์ชัน Engine ที่เราปรับปรุง
                 new_pd = self.create_auto_production_order(item, request.user)
-                
-                if new_pd:
+
+                # ฟังก์ชันคืน ProductionOrder เมื่อสำเร็จ / คืนรหัส error เป็นข้อความ (เดิมนับข้อความเป็น "สำเร็จ")
+                if not isinstance(new_pd, str):
                     created_count += 1
-                else:
+                elif new_pd == "NO_BOM_FORMULA":
                     fail_list.append(f"{item.product.name} ({so.so_number})")
 
         # สรุปผลบนแถบแจ้งเตือน
         if created_count > 0:
             self.message_user(request, f"✅ สร้างสำเร็จ {created_count} รายการ", messages.SUCCESS)
-        
+
         if fail_list:
-            msg = "⚠️ ข้ามรายการที่ไม่มี BOM: " + ", ".join(fail_list)
+            msg = "⚠️ ข้ามรายการที่ไม่มีสูตรผลิตสำหรับลูกค้ารายนี้: " + ", ".join(fail_list)
             self.message_user(request, msg, messages.WARNING)
             
     # ✅ ฟังก์ชันสร้างใบผลิตอัตโนมัติ

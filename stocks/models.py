@@ -437,6 +437,10 @@ class BOM(models.Model):
     # แก้ไขจาก OneToOneField เป็น ForeignKey และเปลี่ยน related_name เป็นพหูพจน์
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='bom_formulas')
     name = models.CharField(max_length=255, verbose_name="ชื่อสูตร")
+    # สูตรเฉพาะลูกค้า: ชื่อสูตรเดียวกันมีได้หลายสูตรถ้าลูกค้าต่างกัน, ว่าง = ทุกลูกค้า (ดู pick_bom)
+    customer = models.ForeignKey('Customer', on_delete=models.PROTECT, null=True, blank=True,
+                                 related_name='bom_formulas', verbose_name="ลูกค้า",
+                                 help_text="ว่าง = ทุกลูกค้า (All) / ระบุ = ใช้สูตรนี้เฉพาะ SO ของลูกค้ารายนี้")
     unit = models.CharField(max_length=50, default="ชิ้น", verbose_name="หน่วยผลิต")
     production_time = models.IntegerField(default=1, verbose_name="เวลาผลิต (วัน)")
     created_at = models.DateTimeField(auto_now_add=True, null=True)
@@ -451,11 +455,45 @@ class BOM(models.Model):
             # ดึงชื่อสินค้า และ ชื่อสูตร (บาร์โค้ด) มาโชว์
             p_name = self.product.name if self.product else "ไม่ระบุสินค้า"
             b_name = self.name if self.name else "ไม่มีชื่อสูตร"
-            return f"{p_name} - {b_name}"
+            c_name = self.customer.company_name if self.customer_id else "ทุกลูกค้า"
+            return f"{p_name} - {b_name} [{c_name}]"
         except Exception:
             return f"BOM ID: {self.id}" # ไม้ตายสุดท้ายถ้าพังจริงๆ ให้โชว์ ID แทน
-        
+
+    def clean(self):
+        # ชื่อสูตรซ้ำได้เฉพาะเมื่อลูกค้าต่างกัน (ไม่ใส่เป็น DB constraint เพราะข้อมูลเดิมอาจมีชื่อซ้ำอยู่แล้ว)
+        if self.name:
+            dup = BOM.objects.filter(name=self.name, customer_id=self.customer_id).exclude(pk=self.pk)
+            if dup.exists():
+                who = self.customer.company_name if self.customer_id else "ทุกลูกค้า"
+                raise ValidationError({'name': f"มีสูตรชื่อ \"{self.name}\" สำหรับ {who} อยู่แล้ว"})
+
     class Meta: verbose_name_plural = "O1. สูตรการผลิต (BOM)"
+
+
+def pick_bom(product, barcode=None, customer=None):
+    """เลือกสูตรผลิตให้รายการขาย/ใบสั่งผลิต
+    สูตรที่ตรงบาร์โค้ด (ชื่อสูตร == รหัสบาร์โค้ด) ก่อน แล้วค่อยสูตรใดๆ ของสินค้า — ในแต่ละชั้น:
+    สูตรเฉพาะลูกค้ารายนี้ > สูตรทุกลูกค้า (ไม่ระบุลูกค้า) ไม่ใช้สูตรที่ระบุเป็นของลูกค้ารายอื่นเด็ดขาด"""
+    if not product:
+        return None
+    product_id = getattr(product, 'pk', product)
+    customer_id = getattr(customer, 'pk', customer)
+    base = BOM.objects.filter(product_id=product_id)
+    tiers = []
+    code = getattr(barcode, 'code', None)
+    if code:
+        tiers.append(base.filter(name=code))
+    tiers.append(base)
+    for qs in tiers:
+        if customer_id:
+            bom = qs.filter(customer_id=customer_id).order_by('-id').first()
+            if bom:
+                return bom
+        bom = qs.filter(customer__isnull=True).order_by('-id').first()
+        if bom:
+            return bom
+    return None
 
 class BOMIngredient(models.Model):
     bom = models.ForeignKey(BOM, on_delete=models.CASCADE, related_name='ingredients')
@@ -1060,20 +1098,15 @@ class SalesItem(models.Model):
             factor = getattr(self.barcode_obj, 'conversion_factor', 1) or 1
             self.quantity_ordered = self.quantity_unit * factor
             
-            # เลือก BOM ตามบาร์โค้ด (ถ้าว่าง)
+            # เลือก BOM ตามบาร์โค้ด + ลูกค้าของ SO (ถ้าว่าง)
             if not self.bom:
-                from .models import BOM
-                target_bom = BOM.objects.filter(name=self.barcode_obj.code).first()
-                if not target_bom:
-                    target_bom = BOM.objects.filter(product=self.product).order_by('-id').first()
-                self.bom = target_bom
+                self.bom = pick_bom(self.product, self.barcode_obj, self.sales_order.customer_id)
         else:
             # กรณีไม่มีบาร์โค้ด (เลือกสินค้าเอง)
             self.quantity_ordered = self.quantity_unit
-            # ดึง BOM ล่าสุดของสินค้านั้น
+            # สูตรของลูกค้ารายนี้ > สูตรทุกลูกค้า (ล่าสุด)
             if self.product and not self.bom:
-                from .models import BOM
-                self.bom = BOM.objects.filter(product=self.product).order_by('-id').first()
+                self.bom = pick_bom(self.product, None, self.sales_order.customer_id)
 
         # 🎯 ขั้นที่ 2: จัดการเรื่องราคา (ดึงจากสัญญา T2.1)
         # เช็คว่ามี product หรือยัง (ป้องกันพังถ้ากรอกไม่ครบ)
@@ -1527,8 +1560,8 @@ class ProductionOrder(models.Model):
         
         # 2. Auto ดึง BOM ล่าสุดมาแปะถ้ายังไม่ได้เลือก
         if not self.bom and self.product:
-            # ใช้ related_name 'bom_formulas' ตามที่เปรมตั้งไว้ใน BOM
-            self.bom = self.product.bom_formulas.order_by('-id').first()
+            # ใบสั่งผลิตไม่ผูกลูกค้า -> สูตรทุกลูกค้า (ไม่หยิบสูตรเฉพาะลูกค้ามาใช้เอง)
+            self.bom = pick_bom(self.product)
 
         # 3. ตรรกะสถานะ (ของเปรม)
         if self.status not in ['Completed', 'Cancelled']:
@@ -1610,7 +1643,7 @@ class ProductionLog(models.Model):
         prod_order.product.save()
 
         # 2. คืนสต็อกวัตถุดิบ (บวกกลับเข้าสต็อก)
-        bom = prod_order.bom or prod_order.product.bom_formulas.first()
+        bom = prod_order.bom or pick_bom(prod_order.product)
         if bom:
             for ing in bom.ingredients.all():
                 return_qty = ing.quantity_base * self.quantity_finished

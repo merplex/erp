@@ -286,13 +286,11 @@ def product_bom_by_barcode_api(request):
     if not product_id:
         return JsonResponse({})
 
-    bom = None
-    if barcode_id:
-        barcode = ProductBarcode.objects.filter(pk=barcode_id).first()
-        if barcode:
-            bom = BOM.objects.filter(product_id=product_id, name=barcode.code).first()
-    if not bom:
-        bom = BOM.objects.filter(product_id=product_id).order_by('-id').first()
+    from .models import pick_bom
+    barcode = ProductBarcode.objects.filter(pk=barcode_id).first() if barcode_id.isdigit() else None
+    customer_id = request.GET.get('customer_id', '').strip()
+    # สูตรเฉพาะลูกค้า (ถ้าส่ง customer_id มา) > สูตรทุกลูกค้า — ไม่หยิบสูตรของลูกค้ารายอื่น
+    bom = pick_bom(product_id, barcode, int(customer_id) if customer_id.isdigit() else None)
 
     if not bom:
         return JsonResponse({})
