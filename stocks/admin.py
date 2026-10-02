@@ -111,6 +111,77 @@ class RangeDateTimeFilter(DjangoDateTimeRangeFilter):
             return None
 
 
+_NUMBER_RE = re.compile(r'-?\d[\d,]*(?:\.\d+)?')
+
+
+def _display_number(value):
+    """ค่าที่แสดงในคอลัมน์ -> ตัวเลข (รองรับ HTML/฿/คอมมา, เอาตัวเลขแรกของเซลล์)"""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float, Decimal)):
+        return Decimal(str(value))
+    from django.utils.html import strip_tags
+    match = _NUMBER_RE.search(strip_tags(str(value)))
+    return Decimal(match.group().replace(',', '')) if match else None
+
+
+class ColumnTotalsMixin:
+    """กล่องสรุปยอด (js/admin_sum_selected.js): ไม่ได้ติ๊ก/ติ๊กทั้งหน้า = ยอดรวมทุกรายการตามตัวกรอง (ทุกหน้า)
+    endpoint <changelist>/column-totals/?_col=<field>&<ตัวกรองเดิม> คำนวณจากค่าที่แสดงในคอลัมน์จริงทีละแถว
+    - fast_column_totals(qs, fields): คืน {field: ยอด} ด้วย DB aggregate สำหรับหน้าที่แถวเยอะ
+    - column_totals_auto_limit: เกินจำนวนนี้ (และคำนวณแบบเร็วไม่ครบ) ให้ผู้ใช้กดคำนวณเอง กัน server หนัก"""
+    column_totals_auto_limit = 3000
+
+    def get_urls(self):
+        info = self.model._meta.app_label, self.model._meta.model_name
+        return [path('column-totals/', self.admin_site.admin_view(self.column_totals_view),
+                     name='%s_%s_column_totals' % info)] + super().get_urls()
+
+    def fast_column_totals(self, queryset, fields):
+        return {}
+
+    def column_totals_view(self, request):
+        from django.http import JsonResponse
+        from django.contrib.admin.utils import lookup_field
+        if not self.has_view_or_change_permission(request):
+            return JsonResponse({'error': 'forbidden'}, status=403)
+        fields = request.GET.getlist('_col')
+        force = request.GET.get('_force') == '1'
+        params = request.GET.copy()
+        for key in ('_col', '_force'):
+            params.pop(key, None)
+        request.GET = params
+        try:
+            cl = self.get_changelist_instance(request)
+        except Exception:
+            return JsonResponse({'error': 'bad filter'}, status=400)
+        display = [f for f in cl.list_display if isinstance(f, str)]
+        fields = [f for f in fields if f in display]
+        qs = cl.queryset
+        count = cl.result_count
+        totals = {f: v for f, v in self.fast_column_totals(qs, fields).items() if f in fields}
+        slow = [f for f in fields if f not in totals]
+        if slow and count > self.column_totals_auto_limit and not force:
+            return JsonResponse({'count': count, 'too_many': True, 'totals': {}})
+        if slow:
+            sums = {f: Decimal(0) for f in slow}
+            seen = set()  # ค้นหาที่ join ตารางอื่นอาจได้แถวซ้ำ
+            for obj in qs.iterator(chunk_size=500) if not qs._prefetch_related_lookups else qs:
+                if obj.pk in seen:
+                    continue
+                seen.add(obj.pk)
+                for f in slow:
+                    try:
+                        value = lookup_field(f, obj, self)[2]
+                    except Exception:
+                        continue
+                    number = _display_number(value)
+                    if number is not None:
+                        sums[f] += number
+            totals.update(sums)
+        return JsonResponse({'count': count, 'totals': {f: float(v or 0) for f, v in totals.items()}})
+
+
 class ExportToExcelMixin:
     """เพิ่ม action Export Excel ให้ ModelAdmin ใดก็ได้"""
 
@@ -631,8 +702,8 @@ class ProductBarcodeAdmin(UnfoldModelAdmin):
     list_display = ['code', 'product', 'unit_name', 'conversion_factor']
     autocomplete_fields = ['product']
 
-    # 🎯 กรอง Autocomplete ของช่อง barcode_obj ให้เห็นเฉพาะบาร์โค้ดของสินค้า/วัตถุดิบที่กำลังเลือกอยู่
-    # (JS ที่ส่ง material_id/product_id มา: bom_ingredient_barcode_filter.js)
+    # 🎯 กรอง Autocomplete ของช่อง barcode_obj ถ้ามี material_id/product_id แนบมา
+    # (เดิม BOM ส่งมาเพื่อจำกัดบาร์โค้ด — เลิกใช้แล้ว ให้เลือกบาร์โค้ดสินค้าอื่นได้ แล้ว product_barcode_sync.js เปลี่ยนวัตถุดิบตาม)
     def get_search_results(self, request, queryset, search_term):
         queryset, use_distinct = super().get_search_results(request, queryset, search_term)
         if 'autocomplete' in request.path:
@@ -1384,7 +1455,8 @@ def _forecast_for_period(events, today, period_days):
 
 
 @admin.register(Product)
-class ProductAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
+class ProductAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
+    column_totals_auto_limit = 0  # คอลัมน์คำนวณหนักต่อแถว -> ให้กดคำนวณยอดรวมเอง
     list_display = ('name', 'display_tags', 'get_latest_barcode', 'get_buy_price_display', 'get_production_cost', 'sale_price', 'stock_quantity', 'min_stock', 'unit','get_total_stock_value', 'has_bom', 'created_by')
     list_filter = (
         ('category', AutocompleteSelectMultipleFilter),
@@ -1659,10 +1731,10 @@ class BOMAdmin(DocumentLockMixin, UnfoldModelAdmin):
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     class Media:
-        js = ('js/barcode_autofill_generic.js', 'js/bom_ingredient_barcode_filter.js', 'js/bom_name_barcode_autofill.js')
+        js = ('js/product_barcode_sync.js', 'js/bom_name_barcode_autofill.js')
 
 @admin.register(PurchaseOrder)
-class PurchaseOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
+class PurchaseOrderAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('po_number', 'supplier', 'order_date', 'status', 'get_diff')
     list_filter = (
         ('status', MultipleChoicesDropdownFilter),
@@ -1911,7 +1983,7 @@ class PurchaseOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockM
         return color_diff(received - ordered)
 
     class Media:
-        js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js', 'js/purchase_order_supplier_filter.js', 'js/purchase_item_price_autofill.js', 'js/barcode_autofill_generic.js')
+        js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js', 'js/purchase_order_supplier_filter.js', 'js/purchase_item_price_autofill.js', 'js/product_barcode_sync.js')
 
 @admin.action(description="💳 ขายแฟคตอริ่ง (สร้างรายการรับเงิน เบิกล่วงหน้า + ส่วนที่เหลือ)")
 def sell_factoring(modeladmin, request, queryset):
@@ -1927,7 +1999,7 @@ def sell_factoring(modeladmin, request, queryset):
 
 
 @admin.register(SalesOrder)
-class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
+class SalesOrderAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('so_number', 'get_po_no_customer', 'customer', 'order_date', 'status', 'vat_percent','get_diff')
     list_filter = (
         ('status', MultipleChoicesDropdownFilter),
@@ -2583,7 +2655,7 @@ class SalesOrderAdmin(DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixi
         # submit event ของฟอร์มหลักไว้ก่อน (เพื่อรอ auto-save ที่ยังค้างอยู่ให้เสร็จก่อนค่อยปล่อยให้
         # submit จริง) ถ้าโหลดสลับกัน ตัวกันกด submit ซ้ำใน smart_delivery_inline.js จะบล็อคการ
         # re-submit ทีหลังของมันไปด้วย (เพราะ set flag "submitted" ไปแล้วตั้งแต่รอบแรก)
-        js = ('js/admin_sum_selected.js', 'js/delivery_barcode_select2.js', 'js/smart_delivery_inline.js', 'js/sales_item_barcode_autofill.js', 'js/sales_item_row_number.js', 'js/sales_item_autocomplete_delay.js')
+        js = ('js/admin_sum_selected.js', 'js/delivery_barcode_select2.js', 'js/smart_delivery_inline.js', 'js/sales_item_barcode_autofill.js', 'js/product_barcode_sync.js', 'js/sales_item_row_number.js', 'js/sales_item_autocomplete_delay.js')
 
 
 def _receipt_line_items(deliveries):
@@ -2779,7 +2851,7 @@ class TaxReportActionsMixin:
 
 
 @admin.register(SalesReceipt)
-class SalesReceiptAdmin(TaxReportActionsMixin, UnfoldModelAdmin):
+class SalesReceiptAdmin(ColumnTotalsMixin, TaxReportActionsMixin, UnfoldModelAdmin):
     # 🎯 หน้านี้เป็น "ทะเบียนใบเสร็จ" — สร้าง/ลบเองไม่ได้ ระบบทำอัตโนมัติหลังส่งของ
     #    ผู้ใช้แก้ได้เฉพาะ "วันครบกำหนด" กับ "หมายเหตุ"
     list_display = ('get_shipped_date', 'receipt_number', 'get_customer', 'get_due_date',
@@ -2993,12 +3065,12 @@ class SalesInvoiceAdmin(SalesReceiptAdmin):
 
     def get_urls(self):
         # ข้าม SalesReceiptAdmin.get_urls (มันตั้งชื่อ url เป็น stocks_salesreceipt_print ตายตัว)
-        # ไปเรียก base โดยตรง แล้วผูกชื่อ url ของเมนูนี้เอง
+        # ไปเรียก ColumnTotalsMixin (url column-totals ตั้งชื่อตาม model เอง) -> base แล้วผูกชื่อ url ของเมนูนี้เอง
         custom_urls = [
             path('<int:object_id>/print/', self.admin_site.admin_view(self.print_view),
                  name='stocks_salesinvoice_print'),
         ]
-        return custom_urls + UnfoldModelAdmin.get_urls(self)
+        return custom_urls + ColumnTotalsMixin.get_urls(self)
 
     @admin.display(description="พิมพ์")
     def print_button(self, obj):
@@ -3109,7 +3181,7 @@ class ProductionMaterialUsageInline(UnfoldTabularInline):
     get_projected_stock.short_description = "ยอดสต็อกคาดการณ์"
 
 @admin.register(ProductionOrder)
-class ProductionOrderAdmin(DocumentLockMixin, UnfoldModelAdmin):
+class ProductionOrderAdmin(ColumnTotalsMixin, DocumentLockMixin, UnfoldModelAdmin):
     fields = ['product', 'bom', 'quantity_planned', 'quantity_actual', 'created_by','status', 'notes']
     list_display = ('pd_number', 'product', 'quantity_planned', 'quantity_actual', 'get_diff', 'status')
     list_filter = (
@@ -3436,7 +3508,8 @@ class StockForecastAdmin(UnfoldModelAdmin):
 
 
 @admin.register(StockPlanning)
-class StockPlanningAdmin(ExportToExcelMixin, UnfoldModelAdmin):
+class StockPlanningAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
+    column_totals_auto_limit = 0  # คอลัมน์คำนวณหนักต่อแถว -> ให้กดคำนวณยอดรวมเอง
     list_display = ('name', 'category', 'stock_quantity', 'min_stock', 'get_pending_in', 'get_pending_out', 'get_pending_prod', 'get_available', 'buy_price', 'get_total_inventory_value')
     list_filter = (
         ('category', AutocompleteSelectMultipleFilter),
@@ -4104,7 +4177,7 @@ def settle_and_close_orders(modeladmin, request, queryset):
     return HttpResponse(Template(html_template).render(RequestContext(request, context)))
 
 @admin.register(FinanceReport)
-class FinanceReportAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
+class FinanceReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     # หน้ารวม: ดูง่ายๆ ว่าใบไหนค้างจ่าย
     search_fields = ('po_number', 'supplier__company_name')
     actions = [settle_and_close_orders, settle_purchase_special, 'calculate_finance_totals', 'export_to_excel']
@@ -4277,7 +4350,7 @@ class FinanceReportAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin
 
 # 2. หน้า Admin ของ Income Report
 @admin.register(IncomeReport)
-class IncomeReportAdmin(ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
+class IncomeReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     # ✅ ปรับ list_display ให้เอาตัวที่มีสีมาโชว์เลย จะได้ดูง่ายๆ
     list_display = ('so_number', 'get_po_no_customer', 'get_customer_truncated', 'get_grand_total_display', 'get_balance_due_display', 'payment_status')
     list_filter = (
@@ -4714,7 +4787,8 @@ class StockAdjustmentAdmin(UnfoldModelAdmin):
     search_fields = ['product__name', 'reason']
 
 @admin.register(SalesReport)
-class SalesReportAdmin(ExportToExcelMixin, UnfoldModelAdmin):
+class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
+    column_totals_auto_limit = 0  # คอลัมน์คำนวณหนักต่อแถว -> ให้กดคำนวณยอดรวมเอง
     list_display = (
         'get_name_link', 'get_total_qty', 'get_total_revenue',
         'get_total_cost_buy', 'get_profit_margin'
@@ -5185,7 +5259,7 @@ class PaidRadioFilter(UnfoldRadioFilter):
 
 
 @admin.register(ShipmentAccounting)
-class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
+class ShipmentAccountingAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
     # ✅ เพิ่ม Action ที่ต้องการให้โชว์แยกกันใน List นี้ครับ
     actions = [
         'confirm_selected_items',
@@ -5264,7 +5338,8 @@ class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     # --- 📅 จัดการวันที่ ---
     def short_shipped_date(self, obj):
         if obj.shipped_date:
-            return obj.shipped_date.strftime('%d/%m/%y %H:%M')
+            # เก็บเป็น UTC — แปลงเป็นเวลาไทยก่อนแสดง (เดิมโชว์ 03:00 แทน 10:00)
+            return timezone.localtime(obj.shipped_date).strftime('%d/%m/%y %H:%M')
         return "-"
     short_shipped_date.short_description = "วันที่ส่ง"
     short_shipped_date.admin_order_field = 'shipped_date'
@@ -5308,26 +5383,33 @@ class ShipmentAccountingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         )
         self.message_user(request, msg, messages.SUCCESS)
 
-    # --- 📊 สรุปยอดเงิน (Banner สีเหลือง) ---
-    def changelist_view(self, request, extra_context=None):
-        cl = self.get_changelist_instance(request)
-        qs = cl.get_queryset(request)
-
-        from django.db.models import Sum
-        totals = qs.aggregate(
-            sum_vat=Sum('shipment_value'),
-            sum_dc=Sum('dc_amount'),
-            sum_rebate=Sum('rebate_amount'),
-        )
-        sum_vat = totals['sum_vat'] or Decimal('0')
-        sum_dc = totals['sum_dc'] or Decimal('0')
-        sum_rebate = totals['sum_rebate'] or Decimal('0')
-
-        if qs.exists():
-            msg = f"📊 สรุปยอดช่วงที่เลือก: ยอดรวม ฿{sum_vat:,.2f} | DC ฿{sum_dc:,.2f} | Rebate ฿{sum_rebate:,.2f}"
-            messages.info(request, msg)
-
-        return super().changelist_view(request, extra_context=extra_context)
+    # --- 📊 สรุปยอด: กล่องสรุป (admin_sum_selected.js) แทนแบนเนอร์เดิมที่ไม่เปลี่ยนตามการติ๊ก ---
+    # แถวเยอะ (หลายพันรายการ) -> รวมด้วย DB ทีเดียว แทนการไล่คำนวณทีละแถว
+    def fast_column_totals(self, queryset, fields):
+        exprs = {
+            'quantity_shipped': Sum('quantity_shipped'),
+            'get_revenue_no_vat': Sum('shipment_value'),
+            'get_dc_value': Sum('dc_amount'),
+            'get_rebate_value': Sum('rebate_amount'),
+        }
+        wanted = {f: exprs[f] for f in fields if f in exprs}
+        totals = {}
+        # ค้นหาที่ join ตารางอื่น (เช่น บาร์โค้ดของสินค้า) ทำให้แถวซ้ำ -> รวมจากชุด pk ที่ไม่ซ้ำ
+        queryset = self.model.objects.filter(pk__in=queryset.values('pk'))
+        if wanted:
+            result = queryset.order_by().aggregate(**wanted)
+            totals = {f: (v or Decimal(0)) for f, v in result.items()}
+        if 'get_revenue_inc_vat' in fields:
+            # รวม VAT แบบเดียวกับ calculate_revenue_total (VAT ของ SO -> ของลูกค้า) — รวมยอดแยกตามอัตราแล้วคูณใน Python
+            total = Decimal(0)
+            for row in (queryset.order_by().values('sales_order__vat_percent', 'sales_order__customer__vat')
+                        .annotate(s=Sum('shipment_value'))):
+                vat = row['sales_order__vat_percent']
+                if vat is None:
+                    vat = row['sales_order__customer__vat'] or 0
+                total += (row['s'] or 0) * (1 + Decimal(str(vat)) / 100)
+            totals['get_revenue_inc_vat'] = total
+        return totals
 
     # --- 💰 ฟังก์ชันคำนวณเงินต่างๆ ---
     def get_revenue_inc_vat(self, obj):
@@ -5880,7 +5962,7 @@ class SalesQuotationAdmin(UnfoldModelAdmin):
     actions = ['sync_to_customer_contract']
 
     class Media:
-        js = ('js/quotation_price_autofill.js',)
+        js = ('js/quotation_price_autofill.js', 'js/product_barcode_sync.js')
 
     def get_queryset(self, request):
         return super().get_queryset(request).prefetch_related('items')

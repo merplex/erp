@@ -109,6 +109,15 @@ input[type="number"]::-webkit-inner-spin-button {
 input.vDateField {
     max-width: 130px !important;
 }
+/* ช่องวันที่ในตัวกรอง (date_range_picker.js แปลงเป็น type=date) มีไอคอนปฏิทินต่อท้าย
+   130px ไม่พอ -> ไอคอนทับเลขปี */
+input.vDateField[type="date"],
+#changelist-filter input[type="date"] {
+    max-width: none !important;
+    min-width: 165px;
+    width: 100%;
+    padding-right: 8px !important;
+}
 input.vTimeField {
     max-width: 90px !important;
 }
