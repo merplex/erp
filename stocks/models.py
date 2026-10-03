@@ -2962,6 +2962,10 @@ def run_due_loan_installments():
 #              เหลือเท่าไรโอนเข้าบัญชีที่ผูก ถ้าไม่เหลือ/ติดลบ: ไม่สร้างรายการโอน ยอดติดลบค้างในบัญชีแฟคตอริ่ง
 #              ให้ผู้ใช้โอนชดเชยเองจากหน้า M2 — ทั้งหมดคำนวณใหม่ต่อ "ลูกค้า + เดือน" ที่ resync_factoring_month()
 def add_business_days(date, days):
+    # 0 วัน = วันเดียวกัน แต่ถ้าตรงเสาร์-อาทิตย์ เลื่อนเป็นวันจันทร์ (เงินไม่เข้าบัญชีวันหยุด)
+    if days <= 0:
+        while date.weekday() >= 5:
+            date += datetime.timedelta(days=1)
     while days > 0:
         date += datetime.timedelta(days=1)
         if date.weekday() < 5:
