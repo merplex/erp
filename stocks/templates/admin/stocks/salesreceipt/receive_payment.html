@@ -2,7 +2,7 @@
 {% block content %}
 <div style="padding:20px;max-width:1000px;">
     <h2>{{ title }} ({{ rows|length }} ใบ)</h2>
-    <p>ระบบจะสร้างรายการรับเงินในใบสั่งขาย 1 รายการต่อใบ ตามยอดค้างของใบนั้น และผูกกับใบนั้นโดยตรง</p>
+    <p>ระบบจะสร้างรายการรับเงินในใบสั่งขาย 1 รายการต่อใบ ตามยอดค้างของใบนั้น และผูกกับใบนั้นโดยตรง — เงินเข้า "บัญชีรับโอน" ของลูกค้า (S1)</p>
     {% if rows %}
     <table style="width:100%;border-collapse:collapse;margin:16px 0;">
         <thead><tr style="border-bottom:2px solid #dee2e6;">
@@ -12,6 +12,7 @@
             <th style="padding:8px;text-align:left;">วันครบกำหนด</th>
             <th style="padding:8px;text-align:right;">ยอดของใบ</th>
             <th style="padding:8px;text-align:right;">ยอดที่จะรับ</th>
+            <th style="padding:8px;text-align:left;">เข้าบัญชี</th>
         </tr></thead>
         <tbody>
         {% for r in rows %}
@@ -22,11 +23,13 @@
                 <td style="padding:8px;">{{ r.due_date|date:"d/m/Y"|default:"-" }}</td>
                 <td style="padding:8px;text-align:right;">{{ r.grand_total|floatformat:"2g" }}</td>
                 <td style="padding:8px;text-align:right;">{{ r.outstanding|floatformat:"2g" }}</td>
+                <td style="padding:8px;">{% if r.target_account %}{{ r.target_account }}{% if r.target_account.account_type == "FACTORING" %} <span style="color:#64748b;">(เข้า 100% แล้วโอนต่อเข้า {{ r.target_account.linked_account|default:"-" }})</span>{% endif %}{% else %}<span style="color:#64748b;">ตามที่เลือกด้านล่าง</span>{% endif %}</td>
             </tr>
         {% endfor %}
         <tr style="font-weight:bold;">
             <td colspan="5" style="padding:8px;text-align:right;">รวม</td>
             <td style="padding:8px;text-align:right;">{{ total|floatformat:"2g" }}</td>
+            <td></td>
         </tr>
         </tbody>
     </table>

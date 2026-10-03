@@ -1995,7 +1995,7 @@ class PurchaseOrderAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelM
 @admin.action(description="💳 ขายแฟคตอริ่ง (สร้างรายการรับเงิน เบิกล่วงหน้า + ส่วนที่เหลือ)")
 def sell_factoring(modeladmin, request, queryset):
     created = 0
-    for order in queryset.select_related('customer', 'customer__factoring_account'):
+    for order in queryset.select_related('customer', 'customer__receiving_account'):
         ok, msg = create_factoring_payments(order)
         if ok:
             created += 1
@@ -2863,21 +2863,26 @@ class TaxReportActionsMixin:
 class ReceivePaymentForm(forms.Form):
     """A1/A2 action รับเงินตามยอดค้าง: บัญชีที่รับเงินเข้า + วันที่รับ"""
     bank_account = forms.ModelChoiceField(
-        label="รับเงินเข้าบัญชี", queryset=BankAccount.objects.none(),
-        help_text="ไม่แสดงบัญชีแฟคตอริ่ง — SO ที่ขายแฟคตอริ่งระบบจัดการรับเงินให้เอง")
+        label="บัญชีสำหรับลูกค้าที่ไม่ได้ตั้งบัญชีรับโอน", queryset=BankAccount.objects.none(),
+        help_text="ลูกค้าที่ตั้ง \"บัญชีรับโอน\" ใน S1 แล้ว เงินเข้าบัญชีนั้นเสมอ "
+                  "(บัญชีแฟคตอริ่ง = เข้า 100% แล้วโอนต่อเข้าบัญชีที่ผูก)")
     payment_date = forms.DateField(label="วันที่รับเงิน", widget=forms.DateInput(attrs={'type': 'date'}))
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, need_fallback=True, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields['bank_account'].queryset = (BankAccount.objects.filter(is_active=True)
-                                                .exclude(account_type='FACTORING').order_by('-is_default', 'name'))
-        self.fields['bank_account'].initial = default_bank_account_id()
+        if need_fallback:
+            self.fields['bank_account'].queryset = (BankAccount.objects.filter(is_active=True)
+                                                    .exclude(account_type='FACTORING').order_by('-is_default', 'name'))
+            self.fields['bank_account'].initial = default_bank_account_id()
+        else:
+            del self.fields['bank_account']
         self.fields['payment_date'].initial = timezone.localdate()
 
 
 def _receivable_rows(queryset):
     """แยกใบที่เลือกเป็น (รับได้, ข้าม) — ข้าม: ยกเลิก / รับครบแล้ว / ปิดยอด / SO ขายแฟคตอริ่ง (ไม่ทับรายการที่ระบบสร้าง)"""
-    receipts = list(queryset.select_related('sales_order__customer').order_by('due_date', 'shipped_date', 'id'))
+    receipts = list(queryset.select_related('sales_order__customer__receiving_account__linked_account')
+                    .order_by('due_date', 'shipped_date', 'id'))
     states = receipt_payment_states({r.sales_order_id for r in receipts})
     # ขายแฟคตอริ่งแล้ว: ทั้ง SO (แถวไม่ผูกใบ) หรือเฉพาะใบนั้น
     fx_rows = (SalesPayment.objects.filter(order_id__in={r.sales_order_id for r in receipts})
@@ -2896,6 +2901,8 @@ def _receivable_rows(queryset):
             skipped.append((r, labels[state[0]]))
         else:
             r.outstanding = state[1]
+            customer = r.sales_order.customer
+            r.target_account = customer.receiving_account if customer and customer.receiving_account_id else None
             ok.append(r)
     return ok, skipped
 
@@ -3039,19 +3046,21 @@ class SalesReceiptAdmin(ColumnTotalsMixin, TaxReportActionsMixin, UnfoldModelAdm
     @admin.action(description="💰 รับเงินตามยอดค้าง (เลือกบัญชีที่รับ)")
     def receive_payment(self, request, queryset):
         ok, skipped = _receivable_rows(queryset)
-        form = ReceivePaymentForm(request.POST if 'apply' in request.POST else None)
+        form = ReceivePaymentForm(request.POST if 'apply' in request.POST else None,
+                                  need_fallback=any(r.target_account is None for r in ok))
         if 'apply' in request.POST and form.is_valid():
             if not ok:
                 self.message_user(request, "ไม่มีใบที่ต้องรับเงิน", messages.WARNING)
                 return None
-            account, pay_date = form.cleaned_data['bank_account'], form.cleaned_data['payment_date']
+            fallback, pay_date = form.cleaned_data.get('bank_account'), form.cleaned_data['payment_date']
             with transaction.atomic():
                 for r in ok:
+                    # เข้าบัญชีรับโอนของลูกค้าเสมอ (บัญชีแฟคตอริ่ง: signal โอนต่อเข้าบัญชีที่ผูก 100%)
                     SalesPayment.objects.create(
                         order=r.sales_order, receipt=r, amount=r.outstanding, payment_date=pay_date,
-                        bank_account=account, remark=f"รับชำระ {r.receipt_number}")
+                        bank_account=r.target_account or fallback, remark=f"รับชำระ {r.receipt_number}")
             total = sum((r.outstanding for r in ok), Decimal(0))
-            msg = f"บันทึกรับเงิน {len(ok)} ใบ รวม {total:,.2f} บาท เข้าบัญชี {account}"
+            msg = f"บันทึกรับเงิน {len(ok)} ใบ รวม {total:,.2f} บาท"
             if skipped:
                 msg += f" (ข้าม {len(skipped)} ใบ)"
             self.message_user(request, msg, messages.SUCCESS)
@@ -3068,7 +3077,7 @@ class SalesReceiptAdmin(ColumnTotalsMixin, TaxReportActionsMixin, UnfoldModelAdm
     def sell_factoring_by_receipt(self, request, queryset):
         # ขายเฉพาะยอดค้างของใบ IV ที่เลือก (ไม่ใช่ทั้ง SO) — แถวรับเงินผูกใบ + เลข IV ในหมายเหตุ
         created = 0
-        for receipt in queryset.select_related('sales_order__customer__factoring_account').order_by('due_date', 'id'):
+        for receipt in queryset.select_related('sales_order__customer__receiving_account').order_by('due_date', 'id'):
             with transaction.atomic():
                 ok, msg = create_factoring_payments(receipt.sales_order, receipt)
             if ok:

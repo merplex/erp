@@ -236,10 +236,13 @@ class Customer(models.Model):
         if self.shift_weekend_to_monday and due.weekday() >= 5:
             due += datetime.timedelta(days=7 - due.weekday())
         return due
-    factoring_account = models.ForeignKey(
+    # บัญชีที่ลูกค้าโอนเงินเข้าปกติ — เป็นบัญชีแฟคตอริ่งได้: เงินทุกใบเข้าแฟคตอริ่งก่อน แล้วโอนต่อเข้าบัญชีที่ผูก
+    # (ใบที่ไม่ได้ขายแฟคตอริ่ง = ผ่าน 100% ไม่หัก ไม่มีดอกเบี้ย / ใบที่ขาย = เบิกล่วงหน้า+ส่วนที่เหลือตาม % ของบัญชี)
+    receiving_account = models.ForeignKey(
         'BankAccount', on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
-        limit_choices_to={'account_type': 'FACTORING'}, verbose_name="บัญชีแฟคตอริ่ง",
-        help_text="ใช้กับ action \"ขายแฟคตอริ่ง\" ในหน้าใบสั่งขาย/สรุปรายรับ (เลือกเป็นราย SO)")
+        limit_choices_to={'is_active': True}, verbose_name="บัญชีรับโอน",
+        help_text="บัญชีที่ลูกค้าโอนเงินเข้า (รับเงินจาก A1/A2 และรายการรับเงินที่ไม่ได้เลือกบัญชีจะเข้าบัญชีนี้) "
+                  "— ถ้าเป็นบัญชีแฟคตอริ่ง ยอดทั้งหมดเข้าแฟคตอริ่งก่อนแล้วโอนต่อเข้าบัญชีที่ผูกไว้ และใช้กับ action \"ขายแฟคตอริ่ง\"")
     class Meta: verbose_name_plural = "S1. ลูกค้า (Customer)"
 
 # 4. รายการสินค้า
@@ -2589,7 +2592,12 @@ def _as_date(value):
 def _payment_default_bank_account(sender, instance, **kwargs):
     # รายการหัก DC/Rebate ที่ลูกค้าจ่ายเดือนนั้นผ่านแฟคตอริ่ง: resync_factoring_month ย้ายไปบัญชีแฟคตอริ่งให้เอง
     if instance.pk is None and not instance.bank_account_id:
-        instance.bank_account_id = default_bank_account_id()
+        # รับเงินขาย: เข้าบัญชีรับโอนของลูกค้าก่อน (ไม่ตั้ง = บัญชีหลัก)
+        customer = getattr(getattr(instance, 'order', None), 'customer', None) if sender is SalesPayment else None
+        if customer is not None and customer.receiving_account_id and not instance.deduction_kind:
+            instance.bank_account_id = customer.receiving_account_id
+        else:
+            instance.bank_account_id = default_bank_account_id()
 
 
 @receiver(post_save, sender=SalesPayment)
@@ -2987,10 +2995,10 @@ def create_factoring_payments(order, receipt=None):
     """ขายแฟคตอริ่งทั้ง SO (receipt=None: S2/A4) หรือเฉพาะใบ IV ที่เลือก (A1/A2) — คืน (สร้างแล้วหรือไม่, ข้อความ)
     ราย IV: ยอด = ยอดค้างของใบนั้น, วันลูกค้าจ่าย = วันครบกำหนดของใบ, แถวรับเงินผูกใบ + เลข IV ในหมายเหตุ"""
     customer = order.customer
-    account = customer.factoring_account if customer else None
+    account = customer.receiving_account if customer else None
     label = receipt.receipt_number if receipt is not None else order.so_number
     if not account or account.account_type != 'FACTORING' or not account.linked_account_id:
-        return False, f"{label}: ลูกค้ายังไม่ได้ตั้งบัญชีแฟคตอริ่ง (หรือบัญชียังไม่ผูกบัญชีรับเงินโอน)"
+        return False, f"{label}: บัญชีรับโอนของลูกค้าไม่ใช่บัญชีแฟคตอริ่ง (หรือบัญชียังไม่ผูกบัญชีรับเงินโอน)"
     if receipt is None:
         if order.payments.filter(factoring_role__gt='', receipt__isnull=True).exists():
             return False, f"{label}: ขายแฟคตอริ่งไปแล้ว"
@@ -3049,6 +3057,17 @@ def sync_factoring_advance(order_id):
             'bank_account__linked_account', 'order__customer'):
         if _is_factoring(p.bank_account) and p.amount > 0:
             _factoring_transfer(p.bank_account, p, p.amount, "เบิกล่วงหน้า")
+
+
+def sync_factoring_passthrough(payment):
+    """รับเงินปกติ (ไม่ได้ขายแฟคตอริ่ง) เข้าบัญชีแฟคตอริ่ง -> โอนต่อเข้าบัญชีที่ผูก 100% วันเดียวกัน (ไม่หัก ไม่มีดอกเบี้ย)"""
+    BankTransaction.objects.filter(factoring_payment=payment).delete()
+    if payment.factoring_role or payment.deduction_kind or payment.amount <= 0:
+        return
+    account = (BankAccount.objects.select_related('linked_account').filter(pk=payment.bank_account_id).first()
+               if payment.bank_account_id else None)
+    if _is_factoring(account):
+        _factoring_transfer(account, payment, round_money(payment.amount), "รับเงิน (ไม่ได้ขายแฟคตอริ่ง)")
 
 
 def resync_factoring_month(customer_id, month):
@@ -3144,6 +3163,8 @@ def _factoring_resync(sender, instance, **kwargs):
     elif instance.deduction_kind:
         for month in {instance.deduct_month, getattr(instance, '_old_deduct_month', None)} - {None}:
             resync_factoring_month(customer_id, month)
+    elif kwargs.get('signal') is post_save:
+        sync_factoring_passthrough(instance)
 
 
 def deduction_date_in_month(customer, month):
