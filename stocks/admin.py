@@ -72,7 +72,8 @@ from unfold.utils import parse_datetime_str
 from unfold.widgets import UnfoldAdminRadioSelectWidget, INPUT_CLASSES, SELECT_CLASSES
 
 # ช่องในหน้ายืนยันของ action (TemplateResponse เอง ไม่ผ่าน ModelAdmin) — ให้เป็นกล่องชัดๆ แบบช่องของ Unfold
-BOX_SELECT = forms.Select(attrs={'class': ' '.join(SELECT_CLASSES)})
+def box_select(width):
+    return forms.Select(attrs={'class': ' '.join(SELECT_CLASSES), 'style': f'max-width:{width}px;'})
 BOX_DATE_ATTRS = {'type': 'date', 'class': ' '.join(INPUT_CLASSES), 'style': 'max-width:220px;'}
 import re
 import openpyxl
@@ -2897,7 +2898,7 @@ class TaxReportActionsMixin:
 class ReceivePaymentForm(forms.Form):
     """A1/A2 action รับเงินตามยอดค้าง: บัญชีที่รับเงินเข้า + วันที่รับ"""
     bank_account = forms.ModelChoiceField(
-        label="บัญชีสำหรับลูกค้าที่ไม่ได้ตั้งบัญชีรับโอน", queryset=BankAccount.objects.none(), widget=BOX_SELECT,
+        label="บัญชีสำหรับลูกค้าที่ไม่ได้ตั้งบัญชีรับโอน", queryset=BankAccount.objects.none(), widget=box_select(320),
         help_text="ลูกค้าที่ตั้ง \"บัญชีรับโอน\" ใน S1 แล้ว เงินเข้าบัญชีนั้นเสมอ "
                   "(บัญชีแฟคตอริ่ง = เข้า 100% แล้วโอนต่อเข้าบัญชีที่ผูก)")
     payment_date = forms.DateField(label="วันที่รับเงิน",
@@ -4265,7 +4266,7 @@ def _deduct_month_choices():
 class DeductMonthForm(forms.Form):
     """A5: รอบเดือนที่จะหัก DC/Rebate ออกจากเงินเข้าของลูกค้า"""
     month = forms.TypedChoiceField(
-        label="หักรอบเดือน", choices=_deduct_month_choices, widget=BOX_SELECT,
+        label="หักรอบเดือน", choices=_deduct_month_choices, widget=box_select(200),
         coerce=datetime.date.fromisoformat,
         initial=lambda: datetime.date.today().replace(day=1).isoformat(),
         help_text="ยอดจะถูกหักจากเงินเข้าของลูกค้าในเดือนนี้ (ลงวันที่ตาม \"วันกำหนดชำระเงิน\" ของลูกค้า) "
