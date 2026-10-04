@@ -23,15 +23,19 @@ input[type="checkbox"][id$="-DELETE"]:checked {
 
 /* ── Radio filter (เช่น "เป็นสินค้ามีสต๊อก", "มี BOM") → จุดที่เลือกอยู่มองไม่เห็น
    เพราะ Tailwind checked:bg-primary-600 / checked:after:bg-white ไม่ถูก apply ในบางเคส
-   บังคับด้วย plain CSS ให้เห็นชัดเจนแทน ────────────────────────────────────── */
-#changelist-filter input[type="radio"] {
+   บังคับด้วย plain CSS ให้เห็นชัดเจนแทน — ใช้กับ radio ของ Unfold ในฟอร์มด้วย
+   (เช่น เงินเข้า/เงินออก ในรายการเดินบัญชี) ──────────────────────────────── */
+#changelist-filter input[type="radio"],
+input[type="radio"].appearance-none {
     position: relative;
 }
-#changelist-filter input[type="radio"]:checked {
+#changelist-filter input[type="radio"]:checked,
+input[type="radio"].appearance-none:checked {
     background-color: #2563eb !important;
     border-color: #2563eb !important;
 }
-#changelist-filter input[type="radio"]:checked::after {
+#changelist-filter input[type="radio"]:checked::after,
+input[type="radio"].appearance-none:checked::after {
     content: "";
     position: absolute;
     top: 50%;
