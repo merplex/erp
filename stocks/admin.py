@@ -69,7 +69,11 @@ from django.db.models import Exists
 from django.core.validators import EMPTY_VALUES
 from django.forms import ValidationError as FilterValidationError
 from unfold.utils import parse_datetime_str
-from unfold.widgets import UnfoldAdminRadioSelectWidget
+from unfold.widgets import UnfoldAdminRadioSelectWidget, INPUT_CLASSES, SELECT_CLASSES
+
+# ช่องในหน้ายืนยันของ action (TemplateResponse เอง ไม่ผ่าน ModelAdmin) — ให้เป็นกล่องชัดๆ แบบช่องของ Unfold
+BOX_SELECT = forms.Select(attrs={'class': ' '.join(SELECT_CLASSES)})
+BOX_DATE_ATTRS = {'type': 'date', 'class': ' '.join(INPUT_CLASSES), 'style': 'max-width:220px;'}
 import re
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -1992,17 +1996,47 @@ class PurchaseOrderAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelM
     class Media:
         js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js', 'js/purchase_order_supplier_filter.js', 'js/purchase_item_price_autofill.js', 'js/product_barcode_sync.js')
 
+class FactoringDateForm(forms.Form):
+    advance_date = forms.DateField(
+        label="วันเงินเบิกเข้า", widget=forms.DateInput(attrs=BOX_DATE_ATTRS, format='%Y-%m-%d'),
+        help_text="ค่าเริ่มต้น = พรุ่งนี้ (ตรงเสาร์-อาทิตย์ เลื่อนเป็นวันจันทร์) กดไอคอนปฏิทินเพื่อเลือกวันเอง")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['advance_date'].initial = next_business_day()
+
+
+def factoring_confirm(modeladmin, request, pairs, action_name, selected_ids):
+    """หน้ายืนยันขายแฟคตอริ่ง (เลือกวันเงินเบิกเข้า) — pairs = [(order, receipt หรือ None)]"""
+    form = FactoringDateForm(request.POST if 'apply' in request.POST else None)
+    if 'apply' in request.POST and form.is_valid():
+        created = 0
+        for order, receipt in pairs:
+            with transaction.atomic():
+                ok, msg = create_factoring_payments(order, receipt, form.cleaned_data['advance_date'])
+            if ok:
+                created += 1
+            else:
+                modeladmin.message_user(request, msg, messages.WARNING)
+        if created:
+            modeladmin.message_user(request, f"สร้างรายการรับเงินแฟคตอริ่ง {created} ใบ", messages.SUCCESS)
+        return None
+    rows = [{'doc': receipt.receipt_number if receipt else order.so_number, 'customer': order.customer,
+             'account': order.customer.receiving_account if order.customer_id else None,
+             'amount': factoring_preview_amount(order, receipt)} for order, receipt in pairs]
+    return TemplateResponse(request, 'admin/stocks/factoring_confirm.html', {
+        **modeladmin.admin_site.each_context(request),
+        'title': "ขายแฟคตอริ่ง", 'opts': modeladmin.model._meta, 'form': form, 'rows': rows,
+        'total': sum((r['amount'] for r in rows), Decimal(0)), 'selected_ids': selected_ids,
+        'action_name': action_name, 'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
+    })
+
+
 @admin.action(description="💳 ขายแฟคตอริ่ง (สร้างรายการรับเงิน เบิกล่วงหน้า + ส่วนที่เหลือ)")
 def sell_factoring(modeladmin, request, queryset):
-    created = 0
-    for order in queryset.select_related('customer', 'customer__receiving_account'):
-        ok, msg = create_factoring_payments(order)
-        if ok:
-            created += 1
-        else:
-            modeladmin.message_user(request, msg, messages.WARNING)
-    if created:
-        modeladmin.message_user(request, f"สร้างรายการรับเงินแฟคตอริ่ง {created} ใบ", messages.SUCCESS)
+    orders = list(queryset.select_related('customer__receiving_account').order_by('so_number'))
+    return factoring_confirm(modeladmin, request, [(o, None) for o in orders], 'sell_factoring',
+                             [o.pk for o in orders])
 
 
 @admin.register(SalesOrder)
@@ -2863,10 +2897,11 @@ class TaxReportActionsMixin:
 class ReceivePaymentForm(forms.Form):
     """A1/A2 action รับเงินตามยอดค้าง: บัญชีที่รับเงินเข้า + วันที่รับ"""
     bank_account = forms.ModelChoiceField(
-        label="บัญชีสำหรับลูกค้าที่ไม่ได้ตั้งบัญชีรับโอน", queryset=BankAccount.objects.none(),
+        label="บัญชีสำหรับลูกค้าที่ไม่ได้ตั้งบัญชีรับโอน", queryset=BankAccount.objects.none(), widget=BOX_SELECT,
         help_text="ลูกค้าที่ตั้ง \"บัญชีรับโอน\" ใน S1 แล้ว เงินเข้าบัญชีนั้นเสมอ "
                   "(บัญชีแฟคตอริ่ง = เข้า 100% แล้วโอนต่อเข้าบัญชีที่ผูก)")
-    payment_date = forms.DateField(label="วันที่รับเงิน", widget=forms.DateInput(attrs={'type': 'date'}))
+    payment_date = forms.DateField(label="วันที่รับเงิน",
+                                   widget=forms.DateInput(attrs=BOX_DATE_ATTRS, format='%Y-%m-%d'))
 
     def __init__(self, *args, need_fallback=True, **kwargs):
         super().__init__(*args, **kwargs)
@@ -3076,16 +3111,9 @@ class SalesReceiptAdmin(ColumnTotalsMixin, TaxReportActionsMixin, UnfoldModelAdm
     @admin.action(description="💳 ขายแฟคตอริ่ง (เฉพาะใบที่เลือก)")
     def sell_factoring_by_receipt(self, request, queryset):
         # ขายเฉพาะยอดค้างของใบ IV ที่เลือก (ไม่ใช่ทั้ง SO) — แถวรับเงินผูกใบ + เลข IV ในหมายเหตุ
-        created = 0
-        for receipt in queryset.select_related('sales_order__customer__receiving_account').order_by('due_date', 'id'):
-            with transaction.atomic():
-                ok, msg = create_factoring_payments(receipt.sales_order, receipt)
-            if ok:
-                created += 1
-            else:
-                self.message_user(request, msg, messages.WARNING)
-        if created:
-            self.message_user(request, f"สร้างรายการรับเงินแฟคตอริ่ง {created} ใบ", messages.SUCCESS)
+        receipts = list(queryset.select_related('sales_order__customer__receiving_account').order_by('due_date', 'id'))
+        return factoring_confirm(self, request, [(r.sales_order, r) for r in receipts],
+                                 'sell_factoring_by_receipt', [r.pk for r in receipts])
 
     @admin.display(description="สถานะรับเงิน", ordering='due_date')
     def get_payment_status(self, obj):
@@ -4237,7 +4265,7 @@ def _deduct_month_choices():
 class DeductMonthForm(forms.Form):
     """A5: รอบเดือนที่จะหัก DC/Rebate ออกจากเงินเข้าของลูกค้า"""
     month = forms.TypedChoiceField(
-        label="หักรอบเดือน", choices=_deduct_month_choices,
+        label="หักรอบเดือน", choices=_deduct_month_choices, widget=BOX_SELECT,
         coerce=datetime.date.fromisoformat,
         initial=lambda: datetime.date.today().replace(day=1).isoformat(),
         help_text="ยอดจะถูกหักจากเงินเข้าของลูกค้าในเดือนนี้ (ลงวันที่ตาม \"วันกำหนดชำระเงิน\" ของลูกค้า) "
@@ -6455,7 +6483,7 @@ class BankAccountAdmin(UnfoldModelAdmin):
                            'opening_balance', 'opening_date', 'is_default', 'is_active', 'notes')}),
         ("บัญชีเครดิต", {'fields': ('credit_limit', 'due_day', 'overdue_interest_rate')}),
         ("บัญชีแฟคตอริ่ง", {'fields': ('linked_account', 'advance_percent', 'factoring_interest_rate',
-                                     'advance_days', 'settle_business_days')}),
+                                     'settle_business_days')}),
     )
 
     class Media:

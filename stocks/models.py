@@ -2439,9 +2439,6 @@ class BankAccount(models.Model):
     advance_percent = models.DecimalField(max_digits=7, decimal_places=4, null=True, blank=True,
                                           validators=[MinValueValidator(0), MaxValueValidator(100)],
                                           verbose_name="% เบิกล่วงหน้า", help_text="เช่น 75 = จ่ายเข้าบัญชีที่ผูก 75%")
-    advance_days = models.PositiveSmallIntegerField(default=1, verbose_name="วันที่จ่ายเงินเบิก (+วัน)",
-                                                    help_text="นับจากวันที่กด action ขายแฟคตอริ่ง: "
-                                                              "+1 = วันถัดไป, +2 = วันมะรืน")
     settle_business_days = models.PositiveSmallIntegerField(
         default=2, verbose_name="รับส่วนที่เหลือหลังลูกค้าจ่าย (วันทำการ)",
         help_text="นับข้ามเสาร์-อาทิตย์ เช่น 2: ลูกค้าจ่ายวันศุกร์ -> ได้รับวันอังคาร")
@@ -2953,7 +2950,7 @@ def run_due_loan_installments():
 
 # ── แฟคตอริ่ง ──────────────────────────────────────────────────────────────
 # action "ขายแฟคตอริ่ง" (S2/A4) สร้าง SalesPayment 2 แถวเข้าบัญชีแฟคตอริ่งของลูกค้า:
-#   ADVANCE   = ยอดค้างรับ × % เบิกล่วงหน้า   วันที่ = วันที่กด action + advance_days
+#   ADVANCE   = ยอดค้างรับ × % เบิกล่วงหน้า   วันที่ = วันเงินเบิกเข้าที่เลือกตอนกด action (ค่าเริ่มต้น = วันทำการถัดไป)
 #   REMAINDER = ส่วนที่เหลือ                  วันที่ = วันที่ลูกค้าจ่ายตามปกติ (วันกำหนดรับเงิน) + settle_business_days วันทำการ
 # แล้ว sync_factoring_settlement() สร้างแถวในสมุด (source FACTORING) ให้เงินวิ่งต่อไปบัญชีที่ผูก:
 #   ADVANCE:   แฟคตอริ่ง -A  /  บัญชีที่ผูก +A
@@ -2995,7 +2992,20 @@ def factoring_blocker(order, receipt=None):
     return None
 
 
-def create_factoring_payments(order, receipt=None):
+def next_business_day(today=None):
+    """พรุ่งนี้ ถ้าตรงเสาร์-อาทิตย์ เลื่อนเป็นวันจันทร์ — ค่าเริ่มต้นของวันเงินเบิกแฟคตอริ่งเข้า"""
+    return add_business_days(today or timezone.localdate(), 1)
+
+
+def factoring_preview_amount(order, receipt=None):
+    """ยอดที่จะขายแฟคตอริ่ง (แสดงในหน้ายืนยัน) — ทั้ง SO = ยอดค้างรับ SO / ราย IV = ยอดค้างของใบ"""
+    if receipt is None:
+        return round_money(order.balance_due)
+    state = receipt_payment_states([order.pk]).get(receipt.pk)
+    return round_money(state[1]) if state and state[0] not in ('PAID', 'SETTLED') else Decimal(0)
+
+
+def create_factoring_payments(order, receipt=None, advance_date=None):
     """ขายแฟคตอริ่งทั้ง SO (receipt=None: S2/A4) หรือเฉพาะใบ IV ที่เลือก (A1/A2) — คืน (สร้างแล้วหรือไม่, ข้อความ)
     ราย IV: ยอด = ยอดค้างของใบนั้น, วันลูกค้าจ่าย = วันครบกำหนดของใบ, แถวรับเงินผูกใบ + เลข IV ในหมายเหตุ"""
     customer = order.customer
@@ -3014,15 +3024,14 @@ def create_factoring_payments(order, receipt=None):
             return False, f"{label}: {blocker}"
         if receipt.is_cancelled:
             return False, f"{label}: ใบถูกยกเลิก"
-        state = receipt_payment_states([order.pk]).get(receipt.pk)
-        balance = round_money(state[1]) if state and state[0] not in ('PAID', 'SETTLED') else Decimal(0)
+        balance = factoring_preview_amount(order, receipt)
         paid_date = receipt.due_date or factoring_customer_paid_date(order)
     if balance <= 0:
         return False, f"{label}: ไม่มียอดค้างรับ"
     pct = account.advance_percent or Decimal(0)
     advance = round_money(balance * pct / 100)
-    # เงินเบิกได้รับหลังวันที่ "กด action" (ยื่นขายแฟคตอริ่ง) ไม่ใช่วันที่ขาย
-    advance_date = datetime.date.today() + datetime.timedelta(days=account.advance_days or 0)
+    # วันเงินเบิกเข้า = ที่ผู้ใช้เลือกในหน้ายืนยันของ action (ไม่ระบุ = วันทำการถัดไป)
+    advance_date = advance_date or next_business_day()
     paid_date = max(paid_date, advance_date)
     prefix = f"{receipt.receipt_number} " if receipt is not None else ""
     SalesPayment.objects.create(

@@ -1,0 +1,38 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<div style="padding:20px;max-width:1000px;">
+    <h2>{{ title }} ({{ rows|length }} รายการ)</h2>
+    <p>ระบบจะสร้างรายการรับเงินแฟคตอริ่ง (เบิกล่วงหน้า + ส่วนที่เหลือ) ตาม % ของบัญชีแฟคตอริ่งที่ตั้งเป็น "บัญชีรับโอน" ของลูกค้า
+       — รายการที่ทำไม่ได้ (ขายไปแล้ว / ไม่มียอดค้าง / บัญชีรับโอนไม่ใช่แฟคตอริ่ง) ระบบจะข้ามและแจ้งเตือน</p>
+    <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+        <thead><tr style="border-bottom:2px solid #dee2e6;">
+            <th style="padding:8px;text-align:left;">เลขที่</th>
+            <th style="padding:8px;text-align:left;">ลูกค้า</th>
+            <th style="padding:8px;text-align:left;">บัญชีรับโอน</th>
+            <th style="padding:8px;text-align:right;">ยอดที่จะขาย</th>
+        </tr></thead>
+        <tbody>
+        {% for r in rows %}
+            <tr style="border-bottom:1px solid #eee;">
+                <td style="padding:8px;">{{ r.doc }}</td>
+                <td style="padding:8px;">{{ r.customer|default:"-" }}</td>
+                <td style="padding:8px;">{{ r.account|default:"-" }}</td>
+                <td style="padding:8px;text-align:right;">{{ r.amount|floatformat:"2g" }}</td>
+            </tr>
+        {% endfor %}
+        <tr style="font-weight:bold;">
+            <td colspan="3" style="padding:8px;text-align:right;">รวม</td>
+            <td style="padding:8px;text-align:right;">{{ total|floatformat:"2g" }}</td>
+        </tr>
+        </tbody>
+    </table>
+    <form method="post">{% csrf_token %}
+        {% for pk in selected_ids %}<input type="hidden" name="{{ action_checkbox_name }}" value="{{ pk }}">{% endfor %}
+        <input type="hidden" name="action" value="{{ action_name }}">
+        <input type="hidden" name="apply" value="1">
+        <div style="margin:16px 0;">{{ form.as_p }}</div>
+        <button type="submit" style="background:#2563eb;color:#fff;border:none;padding:10px 20px;border-radius:4px;cursor:pointer;">✅ ยืนยันขายแฟคตอริ่ง</button>
+        <a href="#" onclick="window.history.back();" style="margin-left:10px;color:#666;">ยกเลิก</a>
+    </form>
+</div>
+{% endblock %}
