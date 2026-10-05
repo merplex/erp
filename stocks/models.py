@@ -1079,6 +1079,8 @@ class SalesPayment(models.Model):
     # เก็บไว้ที่แถว REMAINDER: วันที่ลูกค้าจ่าย (จบการคิดดอกเบี้ย) + อัตราดอกเบี้ย ณ วันที่ทำรายการ
     factoring_customer_paid_date = models.DateField(null=True, blank=True, editable=False)
     factoring_rate = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True, editable=False)
+    # เก็บไว้ที่แถว ADVANCE: % ค่าธรรมเนียม ณ วันที่ทำรายการ (คิดจากยอดขาย หักออกตอนโอนเงินเบิกเข้าบัญชีที่ผูก)
+    factoring_fee_percent = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True, editable=False)
     # รายการหัก DC/Rebate ที่สร้างจาก A5 (1 แถวต่อรายการส่งของ + ประเภท) และรอบเดือนที่เลือกให้หัก
     DEDUCTION_KINDS = [('DC', 'DC'), ('REBATE', 'Rebate')]
     deduction_log = models.ForeignKey('SalesDeliveryLog', on_delete=models.CASCADE, null=True, blank=True,
@@ -1441,8 +1443,9 @@ class SalesReceipt(models.Model):
     grand_total = models.DecimalField(max_digits=14, decimal_places=2, default=0, editable=False, verbose_name="ยอดรวมสุทธิ")
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True, editable=False)
-    # รอบส่งของถูกลบ/เปลี่ยนวันที่ -> ไม่ลบใบทิ้ง แต่ทำเครื่องหมายยกเลิก (เลขที่ยังอยู่ในทะเบียน/รายงานภาษีขาย
-    # และไม่ถูกนำกลับมาใช้ซ้ำ) — 1 ใบสั่งขาย + 1 วัน มีใบที่ "ยังไม่ยกเลิก" ได้แค่ 1 ใบ
+    # รอบส่งของถูกลบ/เปลี่ยนวันที่ -> ระบบ "ลบ" ใบเดิมทิ้ง (เลขที่ว่าง ใบถัดไปในเดือนนั้นใช้เลขนี้ต่อได้)
+    # ยกเลิก = ผู้ใช้กดปุ่ม "ยกเลิก" ในหน้าใบเอง (cancel()) -> ค้างเลขเดิมไว้ในทะเบียน/รายงานภาษีขาย ไม่ใช้ซ้ำ
+    # — 1 ใบสั่งขาย + 1 วัน มีใบที่ "ยังไม่ยกเลิก" ได้แค่ 1 ใบ
     is_cancelled = models.BooleanField(default=False, editable=False, db_index=True, verbose_name="ยกเลิก")
     cancelled_at = models.DateTimeField(null=True, blank=True, editable=False, verbose_name="วันที่ยกเลิก")
 
@@ -1458,6 +1461,24 @@ class SalesReceipt(models.Model):
         if not self.receipt_number:
             self.receipt_number = generate_number('IV', SalesReceipt, 'receipt_number', self.shipped_date)
         super().save(*args, **kwargs)
+
+    def cancel(self):
+        """ยกเลิกใบ (ปุ่ม "ยกเลิก" ใน A1/A2 — ใบเสร็จกับใบกำกับ/ใบส่งของคือแถวเดียวกัน ยกเลิกพร้อมกัน)
+        ค้างเลขเดิมไว้ ถ้ารอบส่งของยังอยู่ ระบบออกใบใหม่ (เลขใหม่) ให้รอบนั้นทันที แล้วย้ายรายการรับเงิน/
+        ใบลดหนี้ที่ผูกใบเดิมไปผูกใบใหม่ — คืนค่าใบใหม่ (None = รอบส่งของไม่มีแล้ว)"""
+        from django.db import transaction
+        if self.is_cancelled:
+            return None
+        with transaction.atomic():
+            self.is_cancelled = True
+            self.cancelled_at = timezone.now()
+            self.save(update_fields=['is_cancelled', 'cancelled_at', 'updated_at'])
+            sync_receipts_for_sales_order(self.sales_order)
+            new = self.sales_order.receipts.filter(is_cancelled=False, shipped_date=self.shipped_date).first()
+            if new is not None:
+                self.payments.update(receipt=new)
+                self.credit_notes.update(receipt=new)
+        return new
 
 
 # ── ใบกำกับภาษี/ใบส่งของ ──────────────────────────────────────────────────────
@@ -1657,7 +1678,9 @@ def sync_receipts_for_sales_order(sales_order):
 
     รวม query ให้น้อยที่สุด: ดึง delivery log ทั้งหมดของ SO ครั้งเดียว + ใบเสร็จเดิมครั้งเดียว
     แล้ว group/คำนวณในหน่วยความจำ ไม่ยิง query ต่อรอบ
-    - รอบที่ไม่มี log แล้ว -> ทำเครื่องหมายยกเลิก (เช่นแก้วันส่งของยกรอบ / ลบรายการส่งของ) ไม่ลบทิ้ง
+    - รอบที่ไม่มี log แล้ว (เช่นแก้วันส่งของยกรอบ / ลบรายการส่งของ) -> ลบใบทิ้ง เลขที่ว่างให้ใบถัดไปใช้ต่อ
+      (ไม่ใช่ยกเลิก — ยกเลิกแบบค้างเลขไว้ทำจากปุ่มในหน้าใบ) ถ้าเป็นการย้ายวัน 1 รอบ -> รายการรับเงิน/ใบลดหนี้
+      ที่ผูกใบเดิมย้ายไปผูกใบของวันใหม่; ย้ายไม่ได้ชัดเจนแต่มีใบลดหนี้อ้างอิง -> ลบไม่ได้ จึงยกเลิกแทน
     - วันครบกำหนด: ตั้งตอนสร้างใบใหม่ + รีเฟรชถ้ายังว่าง โดยอิง payment_due_date ที่
       SalesDeliveryLog.save() คำนวณจาก 'รอบบัญชี + เครดิตลูกค้า' ไว้แล้ว (แก้วันส่งของ ->
       log ถูก .save() ใหม่ -> เปลี่ยน key รอบ -> ได้ใบเสร็จใบใหม่พร้อมวันครบกำหนดที่คำนวณสด)
@@ -1677,9 +1700,22 @@ def sync_receipts_for_sales_order(sales_order):
 
     existing = {r.shipped_date: r for r in sales_order.receipts.filter(is_cancelled=False)}
 
-    stale_ids = [r.id for dt, r in existing.items() if dt not in by_date]
-    if stale_ids:
-        SalesReceipt.objects.filter(id__in=stale_ids).update(is_cancelled=True, cancelled_at=timezone.now())
+    stale = [r for dt, r in existing.items() if dt not in by_date]
+    new_dates = [dt for dt in by_date if dt not in existing]
+    # เปลี่ยนวันส่ง 1 รอบ (ใบเก่า 1 -> วันใหม่ 1) -> รายการรับเงิน/ใบลดหนี้ตามไปผูกใบของวันใหม่
+    carry_pay_ids, carry_cn_ids = [], []
+    if stale:
+        carry = stale[0] if len(stale) == 1 and len(new_dates) == 1 else None
+        if carry is not None:
+            carry_pay_ids = list(carry.payments.values_list('id', flat=True))
+            carry_cn_ids = list(carry.credit_notes.values_list('id', flat=True))
+            if carry_cn_ids:
+                CreditNote.objects.filter(id__in=carry_cn_ids).update(receipt=None)  # FK เป็น PROTECT
+        protected = set() if carry is not None else set(
+            CreditNote.objects.filter(receipt__in=stale).values_list('receipt_id', flat=True))
+        if protected:
+            SalesReceipt.objects.filter(id__in=protected).update(is_cancelled=True, cancelled_at=timezone.now())
+        SalesReceipt.objects.filter(id__in=[r.id for r in stale if r.id not in protected]).delete()
 
     vat_p = sales_order.vat_percent or Decimal('0')
     for dt, batch_logs in by_date.items():
@@ -1703,6 +1739,10 @@ def sync_receipts_for_sales_order(sales_order):
             receipt.vat_amount = vat_amount
             receipt.grand_total = grand_total
             receipt.save()
+
+        if dt in new_dates and (carry_pay_ids or carry_cn_ids):
+            SalesPayment.objects.filter(id__in=carry_pay_ids).update(receipt=receipt)
+            CreditNote.objects.filter(id__in=carry_cn_ids).update(receipt=receipt)
 
 
 @receiver(post_save, sender=SalesDeliveryLog)
@@ -2469,6 +2509,10 @@ class BankAccount(models.Model):
     advance_percent = models.DecimalField(max_digits=7, decimal_places=4, null=True, blank=True,
                                           validators=[MinValueValidator(0), MaxValueValidator(100)],
                                           verbose_name="% เบิกล่วงหน้า", help_text="เช่น 75 = จ่ายเข้าบัญชีที่ผูก 75%")
+    factoring_fee_percent = models.DecimalField(
+        max_digits=7, decimal_places=4, default=0, validators=[MinValueValidator(0), MaxValueValidator(100)],
+        verbose_name="% ค่าธรรมเนียม",
+        help_text="คิดจากยอดที่ขาย หักจากเงินเบิกล่วงหน้า เช่น ขาย 1,000 เบิก 80% ค่าธรรมเนียม 5% -> ได้รับ 800 - 50 = 750")
     settle_business_days = models.PositiveSmallIntegerField(
         default=2, verbose_name="รับส่วนที่เหลือหลังลูกค้าจ่าย (วันทำการ)",
         help_text="นับข้ามเสาร์-อาทิตย์ เช่น 2: ลูกค้าจ่ายวันศุกร์ -> ได้รับวันอังคาร")
@@ -3064,9 +3108,12 @@ def create_factoring_payments(order, receipt=None, advance_date=None):
     advance_date = advance_date or next_business_day()
     paid_date = max(paid_date, advance_date)
     prefix = f"{receipt.receipt_number} " if receipt is not None else ""
+    fee_pct = account.factoring_fee_percent or Decimal(0)
+    fee_note = f" หักค่าธรรมเนียม {fee_pct.normalize():f}%" if fee_pct else ""
     SalesPayment.objects.create(
         order=order, receipt=receipt, amount=advance, payment_date=advance_date, bank_account=account,
-        factoring_role='ADVANCE', remark=f"{prefix}แฟคตอริ่ง เบิกล่วงหน้า {pct.normalize():f}%")
+        factoring_role='ADVANCE', factoring_fee_percent=fee_pct,
+        remark=f"{prefix}แฟคตอริ่ง เบิกล่วงหน้า {pct.normalize():f}%{fee_note}")
     SalesPayment.objects.create(
         order=order, receipt=receipt, amount=balance - advance, bank_account=account, factoring_role='REMAINDER',
         payment_date=add_business_days(paid_date, account.settle_business_days or 0),
@@ -3092,14 +3139,35 @@ def _is_factoring(account):
     return bool(account and account.account_type == 'FACTORING' and account.linked_account_id)
 
 
+def factoring_fee_amount(sale_amount, fee_percent):
+    """ค่าธรรมเนียมแฟคตอริ่ง = ยอดที่ขาย × % ค่าธรรมเนียม"""
+    return round_money((sale_amount or 0) * (fee_percent or 0) / 100)
+
+
 def sync_factoring_advance(order_id):
-    """เงินเบิกล่วงหน้าของ SO: แฟคตอริ่ง -A / บัญชีที่ผูก +A"""
+    """เงินเบิกล่วงหน้าของ SO: แฟคตอริ่ง -ค่าธรรมเนียม -(A - ค่าธรรมเนียม) / บัญชีที่ผูก +(A - ค่าธรรมเนียม)
+    ค่าธรรมเนียม = (เบิก + ส่วนที่เหลือ ของชุดเดียวกัน = ยอดที่ขาย) × % ค่าธรรมเนียมที่เก็บไว้ในแถวเบิก"""
     BankTransaction.objects.filter(factoring_payment__order_id=order_id,
                                    factoring_payment__factoring_role='ADVANCE').delete()
     for p in SalesPayment.objects.filter(order_id=order_id, factoring_role='ADVANCE').select_related(
             'bank_account__linked_account', 'order__customer'):
-        if _is_factoring(p.bank_account) and p.amount > 0:
-            _factoring_transfer(p.bank_account, p, p.amount, "เบิกล่วงหน้า")
+        if not _is_factoring(p.bank_account):
+            continue
+        fee = Decimal(0)
+        if p.factoring_fee_percent:
+            remainder = (SalesPayment.objects.filter(order_id=order_id, factoring_role='REMAINDER',
+                                                     receipt_id=p.receipt_id)
+                         .aggregate(t=Sum('amount'))['t'] or 0)
+            fee = factoring_fee_amount(p.amount + remainder, p.factoring_fee_percent)
+        if fee:
+            BankTransaction.objects.create(
+                bank_account=p.bank_account, amount=-fee, **_factoring_base(p),
+                description=f"ค่าธรรมเนียมแฟคตอริ่ง {p.factoring_fee_percent.normalize():f}%")
+        net = p.amount - fee
+        # ค่าธรรมเนียมมากกว่าเงินเบิก -> ส่วนเกินติดลบค้างในบัญชีแฟคตอริ่ง (เหมือนกรณี DC/Rebate)
+        if net > 0:
+            _factoring_transfer(p.bank_account, p, net,
+                                "เบิกล่วงหน้า" + (f" (หักค่าธรรมเนียม {fee:,.2f})" if fee else ""))
 
 
 def sync_factoring_passthrough(payment):
@@ -3202,6 +3270,7 @@ def _factoring_resync(sender, instance, **kwargs):
     if instance.factoring_role == 'ADVANCE':
         sync_factoring_settlement(instance.order_id)
     elif instance.factoring_role == 'REMAINDER':
+        sync_factoring_advance(instance.order_id)  # ค่าธรรมเนียมคิดจากเบิก + ส่วนที่เหลือ
         resync_factoring_month(customer_id, _month_of(instance.factoring_customer_paid_date))
     elif instance.deduction_kind:
         for month in {instance.deduct_month, getattr(instance, '_old_deduct_month', None)} - {None}:

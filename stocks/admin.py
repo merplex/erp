@@ -70,6 +70,7 @@ from django.db.models import Exists
 from django.core.validators import EMPTY_VALUES
 from django.forms import ValidationError as FilterValidationError
 from unfold.utils import parse_datetime_str
+from unfold.decorators import action as unfold_action
 from unfold.widgets import UnfoldAdminRadioSelectWidget, INPUT_CLASSES, SELECT_CLASSES
 
 # ช่องในหน้ายืนยันของ action (TemplateResponse เอง ไม่ผ่าน ModelAdmin) — ให้เป็นกล่องชัดๆ แบบช่องของ Unfold
@@ -2023,13 +2024,22 @@ def factoring_confirm(modeladmin, request, pairs, action_name, selected_ids):
         if created:
             modeladmin.message_user(request, f"สร้างรายการรับเงินแฟคตอริ่ง {created} ใบ", messages.SUCCESS)
         return None
-    rows = [{'doc': receipt.receipt_number if receipt else order.so_number, 'customer': order.customer,
-             'account': order.customer.receiving_account if order.customer_id else None,
-             'amount': factoring_preview_amount(order, receipt)} for order, receipt in pairs]
+    rows = []
+    for order, receipt in pairs:
+        account = order.customer.receiving_account if order.customer_id else None
+        amount = factoring_preview_amount(order, receipt)
+        is_fx = account is not None and account.account_type == 'FACTORING'
+        advance = round_money(amount * (account.advance_percent or 0) / 100) if is_fx else Decimal(0)
+        fee = factoring_fee_amount(amount, account.factoring_fee_percent) if is_fx else Decimal(0)
+        rows.append({'doc': receipt.receipt_number if receipt else order.so_number, 'customer': order.customer,
+                     'account': account, 'amount': amount, 'advance': advance, 'fee': fee, 'net': advance - fee})
     return TemplateResponse(request, 'admin/stocks/factoring_confirm.html', {
         **modeladmin.admin_site.each_context(request),
         'title': "ขายแฟคตอริ่ง", 'opts': modeladmin.model._meta, 'form': form, 'rows': rows,
         'total': sum((r['amount'] for r in rows), Decimal(0)), 'selected_ids': selected_ids,
+        'total_advance': sum((r['advance'] for r in rows), Decimal(0)),
+        'total_fee': sum((r['fee'] for r in rows), Decimal(0)),
+        'total_net': sum((r['net'] for r in rows), Decimal(0)),
         'action_name': action_name, 'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
     })
 
@@ -2766,7 +2776,7 @@ def _tax_report_data(receipts):
             'date': r.shipped_date, 'doc_number': r.receipt_number,
             'customer': c.company_name if c else '-', 'tax_id': (c.tax_id if c else '') or '',
             'branch': (c.branch if c else '') or '',
-            # ใบที่ยกเลิก (ลบรอบส่ง/เปลี่ยนวันที่) ยังต้องโชว์เลขในรายงาน แต่ไม่นับยอด
+            # ใบที่ยกเลิก (กดปุ่มยกเลิกในหน้าใบ) ยังต้องโชว์เลขในรายงาน แต่ไม่นับยอด
             'cancelled': r.is_cancelled,
             'subtotal': Decimal('0') if r.is_cancelled else r.subtotal,
             'vat': Decimal('0') if r.is_cancelled else r.vat_amount,
@@ -2991,6 +3001,8 @@ class SalesReceiptAdmin(ColumnTotalsMixin, TaxReportActionsMixin, UnfoldModelAdm
                      'sales_order__customer__company_name')
     ordering = ('-shipped_date', '-id')
     actions = ['receive_payment', 'sell_factoring_by_receipt', 'print_tax_report', 'export_to_excel']
+    # ปุ่ม "ยกเลิก" ล่างขวาในหน้าใบ — ค้างเลขเดิมไว้ (ต่างจากแก้วันส่งของ/ลบรอบใน SO ที่ระบบลบใบทิ้งให้เลขว่าง)
+    actions_submit_line = ['cancel_document']
     fields = ('receipt_number', 'get_sales_order_link', 'shipped_date', 'due_date',
               'subtotal', 'vat_amount', 'grand_total', 'notes', 'get_items_preview',
               'created_at', 'updated_at')
@@ -3002,6 +3014,27 @@ class SalesReceiptAdmin(ColumnTotalsMixin, TaxReportActionsMixin, UnfoldModelAdm
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+    def get_actions_submit_line(self, request, object_id):
+        # ใบที่ยกเลิกไปแล้ว ไม่ต้องโชว์ปุ่มยกเลิก
+        if object_id and SalesReceipt.objects.filter(pk=object_id, is_cancelled=True).exists():
+            return []
+        return super().get_actions_submit_line(request, object_id)
+
+    @unfold_action(description="ยกเลิกใบนี้ (ค้างเลขเดิม)", permissions=['change'], attrs={
+        'onclick': "return confirm('ยกเลิกใบนี้? เลขที่เดิมจะค้างไว้ในสถานะยกเลิก (ใช้ซ้ำไม่ได้)\\n"
+                   "ใบเสร็จรับเงินกับใบกำกับภาษี/ใบส่งของเป็นเลขเดียวกัน จะถูกยกเลิกทั้งคู่\\n"
+                   "ถ้ารอบส่งของยังอยู่ ระบบจะออกใบใหม่ (เลขใหม่) ให้ทันที')",
+        'style': 'color:#dc2626;border-color:#dc2626;',
+    })
+    def cancel_document(self, request, obj):
+        old_no = obj.receipt_number
+        new = obj.cancel()
+        if new is not None:
+            self.message_user(request, f"ยกเลิก {old_no} แล้ว — ออกใบใหม่ให้รอบส่งของนี้เป็น {new.receipt_number}",
+                              messages.WARNING)
+        else:
+            self.message_user(request, f"ยกเลิก {old_no} แล้ว", messages.WARNING)
 
     def get_queryset(self, request):
         # หน้า list: select_related ครบ ไม่มี aggregate ต่อแถว (ยอดเงิน cache ในแถวแล้ว) => query คงที่
@@ -6491,7 +6524,8 @@ class BankAccountAdmin(UnfoldModelAdmin):
         (None, {'fields': ('name', 'account_type', 'bank_name', 'branch', 'account_number',
                            'opening_balance', 'opening_date', 'is_default', 'is_active', 'notes')}),
         ("บัญชีเครดิต", {'fields': ('credit_limit', 'due_day', 'overdue_interest_rate')}),
-        ("บัญชีแฟคตอริ่ง", {'fields': ('linked_account', 'advance_percent', 'factoring_interest_rate',
+        ("บัญชีแฟคตอริ่ง", {'fields': ('linked_account', 'advance_percent', 'factoring_fee_percent',
+                                     'factoring_interest_rate',
                                      'settle_business_days')}),
     )
 
@@ -6532,9 +6566,10 @@ class BankAccountAdmin(UnfoldModelAdmin):
                                nxt.strftime('%d/%m/%Y') if nxt else '-',
                                f"{(obj.overdue_interest_rate or 0).normalize():f}")
         if obj.account_type == 'FACTORING':
-            return format_html('ผูก {} · เบิก {}% · ดอก {}%/ปี',
+            return format_html('ผูก {} · เบิก {}% · ค่าธรรมเนียม {}% · ดอก {}%/ปี',
                                obj.linked_account.name if obj.linked_account_id else '⚠️ ยังไม่ผูก',
                                f"{(obj.advance_percent or 0).normalize():f}",
+                               f"{(obj.factoring_fee_percent or 0).normalize():f}",
                                f"{(obj.factoring_interest_rate or 0).normalize():f}")
         return ''
 

@@ -10,6 +10,9 @@
             <th style="padding:8px;text-align:left;">ลูกค้า</th>
             <th style="padding:8px;text-align:left;">บัญชีรับโอน</th>
             <th style="padding:8px;text-align:right;">ยอดที่จะขาย</th>
+            <th style="padding:8px;text-align:right;">เบิกล่วงหน้า</th>
+            <th style="padding:8px;text-align:right;">ค่าธรรมเนียม</th>
+            <th style="padding:8px;text-align:right;">ได้รับวันเงินเบิกเข้า</th>
         </tr></thead>
         <tbody>
         {% for r in rows %}
@@ -18,11 +21,17 @@
                 <td style="padding:8px;">{{ r.customer|default:"-" }}</td>
                 <td style="padding:8px;">{{ r.account|default:"-" }}</td>
                 <td style="padding:8px;text-align:right;">{{ r.amount|floatformat:"2g" }}</td>
+                <td style="padding:8px;text-align:right;">{{ r.advance|floatformat:"2g" }}</td>
+                <td style="padding:8px;text-align:right;color:#dc2626;">{% if r.fee %}-{{ r.fee|floatformat:"2g" }}{% else %}-{% endif %}</td>
+                <td style="padding:8px;text-align:right;font-weight:bold;">{{ r.net|floatformat:"2g" }}</td>
             </tr>
         {% endfor %}
         <tr style="font-weight:bold;">
             <td colspan="3" style="padding:8px;text-align:right;">รวม</td>
             <td style="padding:8px;text-align:right;">{{ total|floatformat:"2g" }}</td>
+            <td style="padding:8px;text-align:right;">{{ total_advance|floatformat:"2g" }}</td>
+            <td style="padding:8px;text-align:right;color:#dc2626;">{% if total_fee %}-{{ total_fee|floatformat:"2g" }}{% else %}-{% endif %}</td>
+            <td style="padding:8px;text-align:right;">{{ total_net|floatformat:"2g" }}</td>
         </tr>
         </tbody>
     </table>

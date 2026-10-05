@@ -33,7 +33,7 @@
         </a>
         {% if b.receipt_number %}
         <span style="font-weight:700;color:#1e293b;white-space:nowrap;flex-shrink:0;"
-              title="เลขที่ใบส่งของ/ใบเสร็จของรอบนี้ — ในวงเล็บคือเลขที่จะได้แทน ถ้าแก้วันที่ส่งของ">
+              title="เลขที่ใบส่งของ/ใบเสร็จของรอบนี้ — ในวงเล็บคือเลขที่จะได้แทน ถ้าแก้วันที่ส่งของ (ใบเดิมถูกลบ ไม่ค้างเป็นยกเลิก)">
             {{ b.receipt_number }}
             <span style="font-weight:400;color:#64748b;">(<span class="iv-next-number" data-date-input="new_date">{{ next_receipt_number }}</span>)</span>
         </span>
