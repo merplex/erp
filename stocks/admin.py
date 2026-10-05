@@ -6626,7 +6626,7 @@ class ManualBankTransactionForm(forms.ModelForm):
 
 
 @admin.register(BankTransaction)
-class BankTransactionAdmin(ExportToExcelMixin, UnfoldModelAdmin):
+class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
     list_display = ('get_date', 'bank_account', 'source_type', 'category', 'get_reference', 'party', 'description',
                     'get_in', 'get_out', 'get_balance')
     list_display_links = ('get_date',)
@@ -6643,6 +6643,15 @@ class BankTransactionAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     actions = ['assign_bank_account', 'export_to_excel']
     source_fields = ('source_type', 'get_source_link', 'bank_account', 'txn_date', 'amount', 'reference', 'party',
                      'description')
+
+    class Media:
+        js = ('js/admin_sum_selected.js', 'js/amount_comma_preview.js')
+
+    def fast_column_totals(self, queryset, fields):
+        # กล่องสรุปยอด: เงินเข้า/เงินออก รวมด้วย DB ทีเดียว
+        result = queryset.order_by().aggregate(i=Sum('amount', filter=Q(amount__gt=0)),
+                                               o=Sum('amount', filter=Q(amount__lt=0)))
+        return {'get_in': result['i'] or Decimal(0), 'get_out': -(result['o'] or Decimal(0))}
 
     def get_form(self, request, obj=None, **kwargs):
         if obj is None or obj.source_type == 'MANUAL':
