@@ -6564,13 +6564,13 @@ class BankAccountAdmin(UnfoldModelAdmin):
             return format_html('วงเงิน {} · คงเหลือ <b>{}</b><br>ครบกำหนด {} · เกินกำหนด {}%',
                                f"{limit:,.2f}", f"{limit + obj.balance:,.2f}",
                                nxt.strftime('%d/%m/%Y') if nxt else '-',
-                               f"{(obj.overdue_interest_rate or 0).normalize():f}")
+                               f"{(obj.overdue_interest_rate or Decimal(0)).normalize():f}")
         if obj.account_type == 'FACTORING':
             return format_html('ผูก {} · เบิก {}% · ค่าธรรมเนียม {}% · ดอก {}%/ปี',
                                obj.linked_account.name if obj.linked_account_id else '⚠️ ยังไม่ผูก',
-                               f"{(obj.advance_percent or 0).normalize():f}",
-                               f"{(obj.factoring_fee_percent or 0).normalize():f}",
-                               f"{(obj.factoring_interest_rate or 0).normalize():f}")
+                               f"{(obj.advance_percent or Decimal(0)).normalize():f}",
+                               f"{(obj.factoring_fee_percent or Decimal(0)).normalize():f}",
+                               f"{(obj.factoring_interest_rate or Decimal(0)).normalize():f}")
         return ''
 
     @admin.display(description="")
