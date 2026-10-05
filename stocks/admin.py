@@ -39,7 +39,8 @@ from django.forms import TextInput
 from django.db import models # เพิ่มเพื่อรองรับ formfield_overrides
 from django.db import transaction
 from django.db.models import Subquery, OuterRef, Q, Sum, F, DecimalField, ExpressionWrapper, Case, When, IntegerField, Value
-from django.db.models.functions import TruncDate
+from django.db.models.functions import TruncDate, Substr
+from django.db.models import Max
 from django.db.models.functions import Coalesce, Greatest
 from django import forms # ✅ เพิ่มบรรทัดนี้ครับ ทำระบบ tag checkbox
 from django.utils.safestring import mark_safe # ✅ ต้องมีบรรทัดนี้ครับ
@@ -2449,8 +2450,15 @@ class SalesOrderAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelMixi
 
             shipment_panel_html = render_to_string('admin/sales_shipment_panel.html', {
                 'batches': batches,
-                # เลข IV ที่ใบถัดไปจะได้ (ยังไม่จองเลข) — รอบใหม่จะได้เลขนี้ / รอบเดิมถ้าแก้วันที่ก็ได้เลขนี้แทน
-                'next_receipt_number': generate_number('IV', SalesReceipt, 'receipt_number'),
+                # เลข IV ที่ใบถัดไปจะได้ (ยังไม่จองเลข) — เดือนในเลขตามวันที่ส่งของ เลยต้องคิดตามวันที่ที่เลือก:
+                # ส่งเลขล่าสุดของแต่ละเดือนไปให้ JS ในหน้า panel คำนวณใหม่ทุกครั้งที่เปลี่ยนวันที่
+                'next_receipt_number': generate_number('IV', SalesReceipt, 'receipt_number', timezone.localdate()),
+                'iv_last_seq': {
+                    row['m']: int(row['last'].split('-')[-1])
+                    for row in (SalesReceipt.objects.filter(receipt_number__regex=r'^IV-[0-9]{6}-[0-9]+$')
+                                .annotate(m=Substr('receipt_number', 4, 6))
+                                .values('m').annotate(last=Max('receipt_number')))
+                },
                 'pending_items': list(pending_map.values()),
                 'next_batch_no': len(batches) + 1,
                 'ship_url': reverse('admin:stocks_salesorder_ship', args=[obj.pk]),

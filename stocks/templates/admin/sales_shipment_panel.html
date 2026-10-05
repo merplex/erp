@@ -35,7 +35,7 @@
         <span style="font-weight:700;color:#1e293b;white-space:nowrap;flex-shrink:0;"
               title="เลขที่ใบส่งของ/ใบเสร็จของรอบนี้ — ในวงเล็บคือเลขที่จะได้แทน ถ้าแก้วันที่ส่งของ">
             {{ b.receipt_number }}
-            <span style="font-weight:400;color:#64748b;">({{ next_receipt_number }})</span>
+            <span style="font-weight:400;color:#64748b;">(<span class="iv-next-number" data-date-input="new_date">{{ next_receipt_number }}</span>)</span>
         </span>
         {% endif %}
     </form>
@@ -61,7 +61,7 @@
                 {% endfor %}
             </select>
             <span style="font-weight:700;color:#1e293b;margin-left:10px;white-space:nowrap;flex-shrink:0;"
-                  title="เลขที่ใบส่งของ/ใบเสร็จที่รอบนี้จะได้เมื่อกดบันทึก">
+                  title="เลขที่ใบส่งของ/ใบเสร็จที่รอบนี้จะได้เมื่อกดบันทึก" class="iv-next-number" data-date-input="shipped_date">
                 {{ next_receipt_number }}
             </span>
         </div>
@@ -109,11 +109,34 @@
             💾 บันทึกอย่างเดียว
         </button>
         <span style="font-weight:700;color:#1e293b;margin-left:10px;white-space:nowrap;"
-              title="เลขที่ใบส่งของ/ใบเสร็จที่รอบนี้จะได้เมื่อกดบันทึก">
+              title="เลขที่ใบส่งของ/ใบเสร็จที่รอบนี้จะได้เมื่อกดบันทึก" class="iv-next-number" data-date-input="shipped_date">
             {{ next_receipt_number }}
         </span>
     </form>
     {% else %}
     <div style="color:#16a34a;font-weight:600;">✅ ส่งของครบตามจำนวนสั่งแล้วทุกรายการ</div>
     {% endif %}
+    {{ iv_last_seq|json_script:"iv-last-seq" }}
+    <script>
+    // เลข IV = IV-<ปีเดือนของวันที่ส่งของ>-<ลำดับต่อจากเลขล่าสุดของเดือนนั้น> — อัปเดตตัวอย่างเลขตามวันที่ที่เลือก
+    (function () {
+        var lastSeq = JSON.parse(document.getElementById('iv-last-seq').textContent);
+        function nextNumber(iso) {
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || '')) return null;
+            var m = iso.slice(0, 4) + iso.slice(5, 7);
+            return 'IV-' + m + '-' + String((lastSeq[m] || 0) + 1).padStart(4, '0');
+        }
+        function refresh(form) {
+            form.querySelectorAll('.iv-next-number').forEach(function (el) {
+                var input = form.querySelector('input[name="' + el.dataset.dateInput + '"]');
+                var n = input && nextNumber(input.value);
+                if (n) el.textContent = n;
+            });
+        }
+        document.addEventListener('change', function (e) {
+            if (e.target.matches && e.target.matches('.shipment-panel input[type="date"]')) refresh(e.target.form);
+        });
+        document.querySelectorAll('.shipment-panel form').forEach(refresh);
+    })();
+    </script>
 </div>

@@ -43,9 +43,11 @@ def get_random_color():
     return "#{:06x}".format(random.randint(0, 0xFFFFFF))
 
 # --- ฟังก์ชันช่วยรันเลขที่เอกสาร ---
-def generate_number(prefix, model_class, field_name):
-    today = datetime.date.today()
-    date_str = today.strftime('%Y%m')
+def generate_number(prefix, model_class, field_name, ref_date=None):
+    # ref_date = วันที่ของเอกสาร (เช่นวันที่ส่งของ/วันเปิดใบ) -> เดือนในเลขที่ตามวันที่เอกสาร
+    # ไม่ส่งมา = ใช้วันนี้ (แบบเดิม) — ลำดับเลขรันต่อท้ายเลขล่าสุดของเดือนนั้นเสมอ
+    ref_date = _as_date(ref_date) if ref_date else datetime.date.today()
+    date_str = ref_date.strftime('%Y%m')
     base = f"{prefix}-{date_str}-"
     last = model_class.objects.filter(**{f"{field_name}__icontains": base}).order_by(field_name).last()
     if last:
@@ -54,6 +56,21 @@ def generate_number(prefix, model_class, field_name):
     else:
         new_no = 1
     return f"{base}{new_no:04d}"
+
+
+def _as_date(value):
+    # รับได้ทั้ง date/datetime/สตริง 'YYYY-MM-DD'
+    if isinstance(value, str):
+        return datetime.date.fromisoformat(value[:10])
+    return value
+
+
+def number_month(number):
+    # 'SO-202609-0123' -> '202609' (รูปแบบอื่น -> None)
+    parts = (number or '').split('-')
+    if len(parts) == 3 and len(parts[1]) == 6 and parts[1].isdigit():
+        return parts[1]
+    return None
 
 # 1. กลุ่มสินค้า
 class ProductCategory(models.Model):
@@ -992,7 +1009,20 @@ class SalesOrder(models.Model):
         self.save(update_fields=['status'])
 
     def save(self, *args, **kwargs):
-        if not self.so_number: self.so_number = generate_number('SO', SalesOrder, 'so_number')
+        # เลขที่ SO ใช้เดือนตาม "วันเปิดใบ" — แก้วันเปิดใบข้ามเดือน -> ออกเลขใหม่ต่อท้ายลำดับของเดือนนั้น
+        update_fields = kwargs.get('update_fields')
+        if not self.so_number:
+            self.so_number = generate_number('SO', SalesOrder, 'so_number', self.order_date)
+        elif self.pk and self.order_date and (update_fields is None or 'order_date' in update_fields):
+            # เทียบกับวันเปิดใบเดิมใน DB — ออกเลขใหม่เฉพาะตอน "แก้วันที่ข้ามเดือน" จริงๆ
+            # (ใบเก่าที่เลขเดือนไม่ตรงอยู่แล้ว กดบันทึกเฉยๆ เลขไม่เปลี่ยน)
+            old_date = SalesOrder.objects.filter(pk=self.pk).values_list('order_date', flat=True).first()
+            new_month = _as_date(self.order_date).strftime('%Y%m')
+            if (old_date and old_date.strftime('%Y%m') != new_month
+                    and number_month(self.so_number) not in (None, new_month)):
+                self.so_number = generate_number('SO', SalesOrder, 'so_number', self.order_date)
+                if update_fields is not None:
+                    kwargs['update_fields'] = set(update_fields) | {'so_number'}
         # บันทึกวันที่ยกเลิก (สำหรับหน้าประวัติสินค้า)
         if self.status == 'Cancelled':
             if not self.cancelled_at:
@@ -1398,7 +1428,7 @@ def handle_delivery_deletion(sender, instance, **kwargs):
 # 1 รอบส่งของ (SalesOrder + วันที่ส่ง) = ใบเสร็จรับเงิน 1 ใบ สร้าง/อัปเดต/ลบอัตโนมัติ
 # ผ่าน signal ของ SalesDeliveryLog — ผู้ใช้แก้ได้เฉพาะ "หมายเหตุ" กับ "วันครบกำหนด"
 # เลขที่: ใช้ generate_number() ตัวเดียวกับ SO/PO ทุกอย่าง เปลี่ยนแค่ prefix เป็น IV
-# => รูปแบบ IV-YYYYMM-0001
+# => รูปแบบ IV-YYYYMM-0001 โดย YYYYMM = เดือนของวันที่ส่งของ (ไม่ใช่วันที่กดบันทึก)
 class SalesReceipt(models.Model):
     receipt_number = models.CharField(max_length=50, unique=True, editable=False, verbose_name="เลขที่ใบเสร็จ")
     sales_order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='receipts', editable=False, verbose_name="ใบสั่งขายอ้างอิง")
@@ -1426,7 +1456,7 @@ class SalesReceipt(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.receipt_number:
-            self.receipt_number = generate_number('IV', SalesReceipt, 'receipt_number')
+            self.receipt_number = generate_number('IV', SalesReceipt, 'receipt_number', self.shipped_date)
         super().save(*args, **kwargs)
 
 
