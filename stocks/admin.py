@@ -6625,13 +6625,72 @@ class ManualBankTransactionForm(forms.ModelForm):
         return cleaned
 
 
+class BankTxnPeriodFilter(admin.SimpleListFilter):
+    """รายการเดินบัญชี: ค่าเริ่มต้นแสดงถึงวันนี้ — รายการลงวันที่ล่วงหน้า (เช่น ส่วนที่เหลือแฟคตอริ่ง) ซ่อนไว้จนถึงวัน"""
+    title = "ช่วงรายการ"
+    parameter_name = 'period'
+
+    def lookups(self, request, model_admin):
+        return [('future', 'เฉพาะรายการล่วงหน้า'), ('all', 'ทั้งหมด (รวมล่วงหน้า)')]
+
+    def choices(self, changelist):
+        yield {'selected': self.value() is None, 'display': 'ถึงวันนี้',
+               'query_string': changelist.get_query_string(remove=[self.parameter_name])}
+        for lookup, title in self.lookup_choices:
+            yield {'selected': self.value() == lookup, 'display': title,
+                   'query_string': changelist.get_query_string({self.parameter_name: lookup})}
+
+    def queryset(self, request, queryset):
+        today = timezone.localdate()
+        if self.value() == 'future':
+            return queryset.filter(txn_date__gt=today)
+        if self.value() == 'all':
+            return queryset
+        return queryset.filter(txn_date__lte=today)
+
+
+class BankTxnAccountFilter(admin.SimpleListFilter):
+    """รายการเดินบัญชี: ดูทีละสมุดบัญชี (ไม่มี "ทั้งหมด") ค่าเริ่มต้น = บัญชีหลัก — ยอดคงเหลือคิดต่อบัญชี จึงอ่านต่อกันได้"""
+    title = "สมุดบัญชี"
+    parameter_name = 'account'
+
+    def lookups(self, request, model_admin):
+        rows = [(str(a.pk), a.name) for a in BankAccount.objects.order_by('-is_default', '-is_active', 'name')]
+        return rows + [('none', 'ยังไม่ระบุสมุดบัญชี')]
+
+    @staticmethod
+    def selected_value(value):
+        value = value or ''
+        if value == 'none' or value.isdigit():
+            return value
+        return str(default_bank_account_id() or '')
+
+    def _selected(self):
+        return self.selected_value(self.value())
+
+    def choices(self, changelist):
+        selected = self._selected()
+        for lookup, title in self.lookup_choices:
+            yield {'selected': selected == lookup, 'display': title,
+                   'query_string': changelist.get_query_string({self.parameter_name: lookup})}
+
+    def queryset(self, request, queryset):
+        selected = self._selected()
+        if selected == 'none':
+            return queryset.filter(bank_account__isnull=True)
+        if selected.isdigit():
+            return queryset.filter(bank_account_id=int(selected))
+        return queryset
+
+
 @admin.register(BankTransaction)
 class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
     list_display = ('get_date', 'bank_account', 'source_type', 'category', 'get_reference', 'party', 'description',
                     'get_in', 'get_out', 'get_balance')
     list_display_links = ('get_date',)
     list_filter = (
-        'bank_account',
+        BankTxnAccountFilter,
+        BankTxnPeriodFilter,
         ('txn_date', DjangoDateRangeFilter),
         'source_type',
         'category',
@@ -6640,6 +6699,8 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
     search_fields = ('reference', 'party', 'description', 'category__name')
     autocomplete_fields = ['bank_account', 'category']
     list_before_template = 'admin/stocks/banktransaction/summary.html'
+    # ใหม่ -> เก่า ลำดับเดียวกับที่คิดยอดคงเหลือ (วันที่ แล้วเลขแถว) อ่านจากล่างขึ้นบนได้ต่อกันทุกบรรทัด
+    ordering = ('-txn_date', '-id')
     actions = ['assign_bank_account', 'export_to_excel']
     source_fields = ('source_type', 'get_source_link', 'bank_account', 'txn_date', 'amount', 'reference', 'party',
                      'description')
@@ -6735,6 +6796,14 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
                 'money_in': money_in, 'money_out': money_out, 'net': money_in - money_out,
                 'unassigned': BankTransaction.objects.filter(bank_account__isnull=True).count(),
             }
+            # บัญชีแฟคตอริ่ง: แถบค้างรับรายเดือน (ส่วนที่เหลือ + IV ที่ยังไม่ขาย) + DC/Rebate ที่ยังไม่ยืนยัน
+            selected = BankTxnAccountFilter.selected_value(request.GET.get(BankTxnAccountFilter.parameter_name))
+            account = BankAccount.objects.filter(pk=selected).first() if selected.isdigit() else None
+            if account is not None and account.account_type == 'FACTORING':
+                summary = factoring_receivable_summary(account)
+                summary['months'] = [{'label': thai_month_label(m), 'remainder': r, 'unsold': u, 'total': t}
+                                     for m, r, u, t in summary['months']]
+                response.context_data['factoring_receivable'] = summary
         return response
 
     @admin.action(description="🏦 ระบุ/ย้ายสมุดบัญชี")
@@ -6744,7 +6813,8 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
             if form.is_valid():
                 account = form.cleaned_data['bank_account']
                 loan_rows = queryset.filter(Q(loan_drawdown__isnull=False) | Q(loan_installment__isnull=False)
-                                            | Q(factoring_payment__isnull=False) | Q(transfer_peer__isnull=False))
+                                            | Q(factoring_payment__isnull=False) | Q(transfer_peer__isnull=False)
+                                            | Q(source_type='FACTORING'))
                 skipped = loan_rows.count()
                 queryset = queryset.exclude(pk__in=list(loan_rows.values_list('pk', flat=True)))
                 rows = list(queryset)
