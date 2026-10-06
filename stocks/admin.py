@@ -4978,6 +4978,14 @@ class CustomerAdmin(DetailedHistoryMixin, DocumentLockMixin, UnfoldModelAdmin):
         'billing_ranges': "billing_cycle == 'CUSTOM'",
     }
 
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        # แก้เครดิต/วันกำหนดชำระ -> ระบบคำนวณวันครบกำหนดของ IV ที่ยังค้างใหม่ให้ (signal ใน models)
+        n = getattr(obj, '_due_dates_recomputed', 0)
+        if n:
+            self.message_user(request, f"คำนวณวันครบกำหนดใหม่ให้ IV ที่ยังค้าง (ยังไม่ขายแฟคตอริ่ง) {n} ใบ",
+                              messages.INFO)
+
 # --- 3. ส่วนหน้าจัดการสัญญาโดยเฉพาะ (T2. ราคาสัญญา&DC/Rebate) ---
 @admin.register(CustomerProductContract)
 class CustomerProductContractAdmin(DetailedHistoryMixin, DocumentLockMixin, UnfoldModelAdmin):

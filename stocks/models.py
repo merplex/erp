@@ -2000,6 +2000,55 @@ class CustomerProductContract(models.Model):
         verbose_name_plural = "S4. ราคาสัญญา&DC/Rebate"
         unique_together = ('customer', 'barcode')
 
+_DUE_FIELDS = ('payment_term', 'payment_day', 'payment_day_2', 'billing_cycle', 'billing_ranges',
+               'shift_weekend_to_monday')
+
+
+def recompute_customer_due_dates(customer, today=None):
+    """แก้เครดิต/วันกำหนดชำระของลูกค้า -> คำนวณวันครบกำหนดใหม่ให้ IV ที่ยังค้างและยังไม่ขายแฟคตอริ่ง
+    (ใบ IV + วันกำหนดรับเงินของรายการส่งของในใบนั้น) — ใบที่รับเงินครบ/ปิดยอด/ขายแฟคตอริ่งแล้วไม่แตะ
+    คืนจำนวนใบที่แก้"""
+    from django.db.models.functions import TruncDate
+    so_ids = list(SalesOrder.objects.filter(customer=customer, payment_status__in=('Unpaid', 'Partial'))
+                  .values_list('id', flat=True))
+    if not so_ids:
+        return 0
+    states = receipt_payment_states(so_ids, today)
+    fx_rows = SalesPayment.objects.filter(order_id__in=so_ids).exclude(factoring_role='')
+    factored_iv = set(fx_rows.exclude(receipt__isnull=True).values_list('receipt_id', flat=True))
+    factored_so = set(fx_rows.filter(receipt__isnull=True).values_list('order_id', flat=True))
+    changed = 0
+    for r in SalesReceipt.objects.filter(pk__in=list(states)):
+        state, left = states[r.pk][0], states[r.pk][1]
+        if (state in ('PAID', 'SETTLED') or left <= 0 or r.pk in factored_iv
+                or r.sales_order_id in factored_so):
+            continue
+        new_due = customer.compute_payment_due_date(r.shipped_date)
+        if new_due == r.due_date:
+            continue
+        SalesReceipt.objects.filter(pk=r.pk).update(due_date=new_due)
+        (SalesDeliveryLog.objects.filter(sales_order_id=r.sales_order_id, credit_note_item__isnull=True)
+         .annotate(day=TruncDate('shipped_date')).filter(day=r.shipped_date).update(payment_due_date=new_due))
+        changed += 1
+    return changed
+
+
+@receiver(models.signals.pre_save, sender=Customer)
+def _customer_due_fields_before(sender, instance, **kwargs):
+    instance._due_fields_old = (Customer.objects.filter(pk=instance.pk).values(*_DUE_FIELDS).first()
+                                if instance.pk else None)
+
+
+@receiver(post_save, sender=Customer)
+def _customer_due_fields_after(sender, instance, created, **kwargs):
+    old = getattr(instance, '_due_fields_old', None)
+    instance._due_dates_recomputed = 0
+    if created or not old:
+        return
+    if any(old[f] != getattr(instance, f) for f in _DUE_FIELDS):
+        instance._due_dates_recomputed = recompute_customer_due_dates(instance)
+
+
 @receiver(post_save, sender=CustomerProductContract)
 @receiver(post_delete, sender=CustomerProductContract)
 def recalc_product_price_on_contract_change(sender, instance, **kwargs):
