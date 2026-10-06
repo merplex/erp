@@ -1763,7 +1763,8 @@ class PurchaseOrderAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelM
     autocomplete_fields = ['supplier']
     inlines = [PurchaseItemInline, PurchaseReceiptLogInline]
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
-    readonly_fields = ('created_by', 'status')
+    # สถานะการเงินคำนวณจากรายการจ่ายเงิน (A3) เท่านั้น — เลือกเองไม่ได้ (กันสถานะไม่ตรงกับยอดที่จ่ายจริง)
+    readonly_fields = ('created_by', 'status', 'payment_status')
 
     actions = ['mark_as_completed', 'force_mark_as_completed', 'export_to_excel']
 
@@ -5808,6 +5809,8 @@ class InternationalPurchaseTrackingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     
     # ⚠️ สำคัญมาก: ใน models.py ของเปรม Supplier ใช้ชื่อฟิลด์ 'company_name' ไม่ใช่ 'name'
     search_fields = ('po_number', 'supplier__company_name') 
+    # สถานะการเงินคำนวณจากรายการจ่ายเงิน (A3) เท่านั้น — เลือกเองไม่ได้
+    readonly_fields = ('payment_status',)
 
     def get_queryset(self, request):
         # ให้โชว์เฉพาะ Supplier ที่เป็น 'International' เท่านั้น
