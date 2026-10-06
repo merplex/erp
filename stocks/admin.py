@@ -4579,11 +4579,15 @@ class FinanceReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, DocumentLockMixi
 
     def get_queryset(self, request):
         from django.db.models import Sum, F, ExpressionWrapper, DecimalField as DField
+        # รวมยอดด้วย subquery แยกตาราง — Sum ผ่าน join 2 ตาราง (สินค้า x รายการจ่าย) ทำให้ยอดคูณกัน
+        items = (PurchaseItem.objects.filter(purchase_order=OuterRef('pk')).order_by().values('purchase_order')
+                 .annotate(t=Sum(ExpressionWrapper(F('quantity_ordered') * F('unit_price'), output_field=DField())))
+                 .values('t')[:1])
+        paid = (PurchasePaymentLog.objects.filter(purchase_order=OuterRef('pk')).order_by().values('purchase_order')
+                .annotate(t=Sum('amount')).values('t')[:1])
         return super().get_queryset(request).select_related('supplier').annotate(
-            _total_items_price=Sum(
-                ExpressionWrapper(F('items__quantity_ordered') * F('items__unit_price'), output_field=DField())
-            ),
-            _total_paid=Sum('payment_logs__amount'),
+            _total_items_price=Subquery(items, output_field=DField()),
+            _total_paid=Subquery(paid, output_field=DField()),
         )
 
     # --- List Display Functions (หน้ารวม) ---
@@ -4630,11 +4634,16 @@ class IncomeReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, DocumentLockMixin
 
     def get_queryset(self, request):
         from django.db.models import Sum, F, ExpressionWrapper, DecimalField as DField, Q
+        # รวมยอดด้วย subquery แยกตาราง — Sum ผ่าน join 2 ตาราง (สินค้า x รายการรับเงิน) ทำให้ยอดคูณกัน
+        # (เช่น SO ขายแฟคตอริ่งมีรับเงิน 2 แถว -> ยอดสุทธิ 2 เท่า, รับแล้ว x จำนวนรายการสินค้า)
+        items = (SalesItem.objects.filter(sales_order=OuterRef('pk')).order_by().values('sales_order')
+                 .annotate(t=Sum(ExpressionWrapper(F('quantity_ordered') * F('sale_price'), output_field=DField())))
+                 .values('t')[:1])
+        paid = (SalesPayment.objects.filter(order=OuterRef('pk'), amount__gt=0).order_by().values('order')
+                .annotate(t=Sum('amount')).values('t')[:1])
         return super().get_queryset(request).select_related('customer').annotate(
-            _total_items_price=Sum(
-                ExpressionWrapper(F('items__quantity_ordered') * F('items__sale_price'), output_field=DField())
-            ),
-            _total_paid=Sum('payments__amount', filter=Q(payments__amount__gt=0)),
+            _total_items_price=Subquery(items, output_field=DField()),
+            _total_paid=Subquery(paid, output_field=DField()),
             _credited=Coalesce(Subquery(
                 CreditNote.objects.filter(sales_order=OuterRef('pk')).order_by()
                 .values('sales_order').annotate(t=Sum('grand_total')).values('t')[:1]
