@@ -6520,6 +6520,8 @@ class BankAccountAdmin(UnfoldModelAdmin):
     list_filter = ('account_type', 'is_active')
     search_fields = ('name', 'bank_name', 'account_number')
     autocomplete_fields = ['linked_account']
+    # ชื่อบัญชี / บัญชีหลัก ไม่ต้องกดเรียง — บัญชีหลักอยู่บรรทัดแรกเสมอ (ดู get_changelist)
+    sortable_by = ('account_type', 'bank_name', 'account_number', 'get_opening', 'get_balance', 'is_active')
     fieldsets = (
         (None, {'fields': ('name', 'account_type', 'bank_name', 'branch', 'account_number',
                            'opening_balance', 'opening_date', 'is_default', 'is_active', 'notes')}),
@@ -6531,6 +6533,18 @@ class BankAccountAdmin(UnfoldModelAdmin):
 
     class Media:
         js = ('js/bank_account_type.js',)
+
+    def get_changelist(self, request, **kwargs):
+        base = super().get_changelist(request, **kwargs)
+
+        class DefaultFirstChangeList(base):
+            def get_ordering(self, request, queryset):
+                # กดเรียงคอลัมน์ไหน (มาก->น้อย / น้อย->มาก) บัญชีหลักก็อยู่บรรทัดแรก
+                rest = [o for o in super().get_ordering(request, queryset)
+                        if str(o).lstrip('-') != 'is_default']
+                return ['-is_default'] + rest
+
+        return DefaultFirstChangeList
 
     def get_queryset(self, request):
         # ยอดคงเหลือ ณ วันนี้ — รายการวันที่ล่วงหน้ายังไม่นับ (ตรงกับหน้า M2 ที่ซ่อนรายการล่วงหน้า)
