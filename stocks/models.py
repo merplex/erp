@@ -1041,6 +1041,7 @@ class SalesOrder(models.Model):
         choices=[
             ('Unpaid', '🔴 ยังไม่รับเงิน'),
             ('Partial', '🟠 รับเงินบางส่วน'),
+            ('FACTORED', '🔵 ขายแฟคตอริ่งแล้ว'),
             ('Paid', '🟢 รับเงินครบแล้ว'),
             ('SETTLED', '⚪ ปิดยอดกรณีพิเศษ'),
         ],
@@ -1049,16 +1050,25 @@ class SalesOrder(models.Model):
     )
 
     # ✅ แก้ฟังก์ชันคำนวณ
-    def update_payment_status(self):
+    def update_payment_status(self, today=None):
+        # ขายแฟคตอริ่ง: แถวส่วนที่เหลือ (REMAINDER) ที่วันรับเงินยังไม่ถึง = แฟคตอริ่งยังจ่ายไม่ครบ
+        # -> ยอดครบเพราะนับส่วนนั้น = "ขายแฟคตอริ่งแล้ว" ไม่ใช่ "รับเงินครบแล้ว" (ค่าธรรมเนียม/ดอกเบี้ยไม่เกี่ยว)
+        # วันรับเงินมาถึง -> refresh_factored_payment_status() (middleware) เปลี่ยนเป็นรับเงินครบแล้ว
+        today = today or timezone.localdate()
         total_received = self.payments.aggregate(Sum('amount'))['amount__sum'] or Decimal(0)
-        
-        if total_received >= round_money(self.grand_total - self.credited_total):
+        pending = (self.payments.filter(factoring_role='REMAINDER', payment_date__gt=today)
+                   .aggregate(t=Sum('amount'))['t'] or Decimal(0))
+        owed = round_money(self.grand_total - self.credited_total)
+
+        if total_received - pending >= owed:
             self.payment_status = 'Paid'
+        elif pending and total_received >= owed:
+            self.payment_status = 'FACTORED'
         elif total_received > 0:
             self.payment_status = 'Partial'
         else:
             self.payment_status = 'Unpaid'
-            
+
         self.save(update_fields=['payment_status'])
         
     def get_balance_due_display(self):
@@ -1507,6 +1517,7 @@ RECEIPT_PAY_STATES = [
     ('DUE_TODAY', '🟠 ครบกำหนดวันนี้'),
     ('OVERDUE', '🔴 เกินกำหนด'),
     ('PARTIAL', '🟡 รับบางส่วน'),
+    ('FACTORED', '🔵 ขายแฟคตอริ่งแล้ว'),
     ('PAID', '🟢 รับเงินแล้ว'),
     ('SETTLED', '⚪ ปิดยอดกรณีพิเศษ'),
 ]
@@ -1514,8 +1525,9 @@ RECEIPT_PAY_STATES = [
 
 def receipt_payment_states(sales_order_ids, today=None):
     """{receipt_id: (state, ยอดคงค้าง, ยอดของใบ, วันครบกำหนด)} ของใบ IV ที่ไม่ยกเลิกทั้งหมดใน SO ที่ระบุ
-    state: PAID / SETTLED / NOT_DUE / DUE_TODAY / OVERDUE (ยังค้างอยู่ — รับบางส่วน = 0 < ยอดคงค้าง < ยอดของใบ)
-    ใบที่รายการส่งของทุกแถวติ๊ก Paid (is_revenue_confirmed — เช่นรายการเก่าก่อน 26 ก.ค. 2569) = รับเงินแล้ว"""
+    state: PAID / FACTORED / SETTLED / NOT_DUE / DUE_TODAY / OVERDUE (ยังค้างอยู่ — รับบางส่วน = 0 < ยอดคงค้าง < ยอดของใบ)
+    ใบที่รายการส่งของทุกแถวติ๊ก Paid (is_revenue_confirmed — เช่นรายการเก่าก่อน 26 ก.ค. 2569) = รับเงินแล้ว
+    FACTORED = ตัดยอดครบแล้วแต่เป็นใบ (หรือ SO) ที่ขายแฟคตอริ่ง และส่วนที่เหลือยังไม่ถึงวันรับเงิน (ยอดคงค้าง = 0)"""
     from django.db.models.functions import TruncDate
     today = today or timezone.localdate()
     so_ids = set(sales_order_ids)
@@ -1533,6 +1545,11 @@ def receipt_payment_states(sales_order_ids, today=None):
             direct[rid] = (so, total or 0)
         else:
             pool[so] += total or 0
+    # ขายแฟคตอริ่งแล้วแต่ส่วนที่เหลือยังไม่เข้า: ทั้ง SO (แถวไม่ผูกใบ) หรือเฉพาะใบ
+    pending_fx = set(SalesPayment.objects.filter(order_id__in=so_ids, factoring_role='REMAINDER',
+                                                 payment_date__gt=today).values_list('order_id', 'receipt_id'))
+    pending_so = {so for so, rid in pending_fx if rid is None}
+    pending_iv = {rid for so, rid in pending_fx if rid}
     cn_by_receipt = {}
     for so, rid, total in CreditNote.objects.filter(sales_order_id__in=so_ids).values_list(
             'sales_order_id', 'receipt_id', 'grand_total'):
@@ -1570,11 +1587,11 @@ def receipt_payment_states(sales_order_ids, today=None):
         used = min(max(pool[so], Decimal(0)), remaining[rid])
         pool[so] -= used  # ใบที่ติ๊ก Paid ก็ตัดยอดด้วย (A5 ยืนยันรับเงินสร้างรายการรับเงินไว้) — ไม่ให้ล้นไปใบถัดไป
         if batch_flags.get((so, shipped)):
-            result[rid] = ('PAID', Decimal(0), owed, due)
+            result[rid] = ('FACTORED' if (rid in pending_iv or so in pending_so) else 'PAID', Decimal(0), owed, due)
             continue
         left = round_money(remaining[rid] - used)
         if left <= 0:
-            state = 'PAID'
+            state = 'FACTORED' if (rid in pending_iv or so in pending_so) else 'PAID'
         elif not due or due > today:
             state = 'NOT_DUE'
         elif due == today:
@@ -3502,6 +3519,22 @@ def factoring_receivable_summary(account, today=None):
         'total': round_money(sum((r + u for r, u in months.values()), Decimal(0))),
         'dc': round_money(dc), 'rebate': round_money(rebate),
     }
+
+
+_factored_refreshed_on = None
+
+
+def refresh_factored_payment_status(today=None):
+    """SO สถานะ "ขายแฟคตอริ่งแล้ว" ที่ส่วนที่เหลือถึงวันรับเงินแล้ว -> คำนวณใหม่ (= รับเงินครบแล้ว)
+    เรียกจาก middleware (ไม่มี cron) — วันละครั้งต่อ process"""
+    global _factored_refreshed_on
+    today = today or timezone.localdate()
+    if _factored_refreshed_on == today:
+        return
+    pending = SalesPayment.objects.filter(factoring_role='REMAINDER', payment_date__gt=today).values('order_id')
+    for so in SalesOrder.objects.filter(payment_status='FACTORED').exclude(pk__in=pending):
+        so.update_payment_status(today)
+    _factored_refreshed_on = today
 
 
 def _month_of(value):

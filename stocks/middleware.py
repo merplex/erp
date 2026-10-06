@@ -17,4 +17,9 @@ class AdvanceOrderRunnerMiddleware:
                 run_due_loan_installments()  # งวดผ่อนเงินกู้ที่ถึงกำหนด -> รายการเดินบัญชี (M3)
             except Exception:
                 pass
+            try:
+                from .models import refresh_factored_payment_status
+                refresh_factored_payment_status()  # ส่วนที่เหลือแฟคตอริ่งถึงวันรับ -> ขายแฟคตอริ่งแล้ว เป็นรับเงินครบแล้ว
+            except Exception:
+                pass
         return self.get_response(request)

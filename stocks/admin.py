@@ -3170,7 +3170,9 @@ class SalesReceiptAdmin(ColumnTotalsMixin, TaxReportActionsMixin, UnfoldModelAdm
         labels = dict(RECEIPT_PAY_STATES)
         if state in ('PAID', 'SETTLED'):
             return labels[state]
-        days = (due - timezone.localdate()).days if due else None
+        if state == 'FACTORED':
+            return format_html('<b style="color:#2563eb;">{}</b>', labels[state])
+        days =(due - timezone.localdate()).days if due else None
         if state == 'NOT_DUE':
             text = labels[state] + (f" (อีก {days} วัน)" if days is not None else "")
         elif state == 'OVERDUE':
@@ -4381,6 +4383,9 @@ def settle_and_close_orders(modeladmin, request, queryset):
                         obj.refresh_from_db()
                     updated_count += 1
                 
+                if isinstance(obj, SalesOrder):
+                    obj.update_payment_status()  # ขายแฟคตอริ่งที่ส่วนที่เหลือยังไม่เข้า = ขายแฟคตอริ่งแล้ว ไม่ใช่ Paid
+                    continue
                 # บังคับอัปเดตสถานะการเงินเป็น "Paid"
                 if round_money(obj.balance_due) <= 0:
                     obj.payment_status = 'Paid'
@@ -4726,19 +4731,8 @@ class IncomeReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, DocumentLockMixin
         
         # 2. คำนวณสถานะ
         obj = formset.instance
-        # ฝั่งขายใช้ SalesPayment (เปรมต้องเช็ค related_name ใน model นะคะ)
-        # ถ้าไม่มีใช้ salespayment_set
-        paid = sum(p.amount for p in obj.payments.all())
-        total = round_money(obj.grand_total)
-        
-        if paid <= 0:
-            obj.payment_status = 'Unpaid'
-        elif paid < total:
-            obj.payment_status = 'Partial' # จ่ายบางส่วน
-        else:
-            obj.payment_status = 'Paid'
-            
-        obj.save(update_fields=['payment_status'])
+        if obj.payment_status != 'SETTLED':
+            obj.update_payment_status()  # รวมกรณีขายแฟคตอริ่งแล้ว (ส่วนที่เหลือยังไม่เข้า)
 
     def get_total_items_display(self, obj):
         # ใช้ Sum จาก django.db.models (ซึ่งในไฟล์ admin ของเปรมยังไม่ได้ import ไว้ด้านบน)
