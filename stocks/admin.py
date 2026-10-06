@@ -6683,6 +6683,8 @@ class BankTxnPeriodFilter(admin.SimpleListFilter):
 
     def queryset(self, request, queryset):
         today = timezone.localdate()
+        # รายการก่อนวันยอดยกมาของสมุด (เช่น ขายแฟคตอริ่งย้อนหลัง เงินเบิกเข้าก่อนยกยอด) รวมอยู่ในยอดยกมาแล้ว -> ไม่แสดง
+        queryset = queryset.exclude(bank_account__isnull=False, txn_date__lt=F('bank_account__opening_date'))
         if self.value() == 'future':
             return queryset.filter(txn_date__gt=today)
         if self.value() == 'all':
