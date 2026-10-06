@@ -1,0 +1,35 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<div style="padding:20px;max-width:1000px;">
+    <h2>🧾 {{ title }} ({{ rows|length }} รายการ)</h2>
+    <p>ยอด{{ kind }}ก้อนนี้มาจากการกด "ชำระครบ/ปิดยอด" หลายใบพร้อมกัน — ในสมุดบัญชีลงเป็นรายการเดียว</p>
+    <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+        <thead><tr style="border-bottom:2px solid #dee2e6;">
+            <th style="padding:8px;text-align:left;">วันที่</th>
+            <th style="padding:8px;text-align:left;">เอกสาร</th>
+            <th style="padding:8px;text-align:left;">ใบ IV</th>
+            <th style="padding:8px;text-align:left;">บริษัท</th>
+            <th style="padding:8px;text-align:left;">สมุดบัญชี</th>
+            <th style="padding:8px;text-align:right;">จำนวนเงิน</th>
+        </tr></thead>
+        <tbody>
+        {% for r in rows %}
+            <tr style="border-bottom:1px solid #eee;">
+                <td style="padding:8px;">{{ r.date|date:"d/m/Y" }}</td>
+                <td style="padding:8px;"><a href="{{ r.url }}" target="_blank">{{ r.doc|default:"-" }} ↗</a></td>
+                <td style="padding:8px;">{{ r.receipts|default:"-" }}</td>
+                <td style="padding:8px;">{{ r.party }}</td>
+                <td style="padding:8px;">{{ r.account|default:"-" }}</td>
+                <td style="padding:8px;text-align:right;">{{ r.amount|floatformat:"2g" }}</td>
+            </tr>
+        {% empty %}
+            <tr><td colspan="6" style="padding:8px;">ไม่พบรายการ (อาจถูกลบไปแล้ว)</td></tr>
+        {% endfor %}
+        </tbody>
+        <tfoot><tr style="border-top:2px solid #dee2e6;font-weight:bold;">
+            <td colspan="5" style="padding:8px;text-align:right;">รวม</td>
+            <td style="padding:8px;text-align:right;">{{ total|floatformat:"2g" }}</td>
+        </tr></tfoot>
+    </table>
+</div>
+{% endblock %}

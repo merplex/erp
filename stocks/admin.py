@@ -1,3 +1,4 @@
+import uuid
 import json
 import datetime # ✅ เพิ่มตัวนี้
 from django.contrib import admin
@@ -34,7 +35,7 @@ from django.contrib import messages
 from django.contrib.admin.widgets import AdminDateWidget
 from django.contrib.admin import helpers  # <--- helpers ต้องดึงมาจาก admin ครับ
 from django.utils.html import format_html
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ValidationError, PermissionDenied
 from django.forms import TextInput
 from django.db import models # เพิ่มเพื่อรองรับ formfield_overrides
 from django.db import transaction
@@ -4358,19 +4359,24 @@ def settle_and_close_orders(modeladmin, request, queryset):
             pay_date = form.cleaned_data['payment_date']
             bank_account = form.cleaned_data['bank_account']
             updated_count = 0
+            # ชำระหลายใบพร้อมกัน = เงินก้อนเดียว -> สมุดบัญชีลงยอดรวมรายการเดียว (กดยอดเงินใน M2 ดูว่ามาจากใบไหน)
+            objs = list(queryset)
+            due_count = sum(1 for o in objs if round_money(o.balance_due) > 0)
+            batch_ref = uuid.uuid4().hex[:16] if due_count > 1 else ''
             
-            for obj in queryset:
+            for obj in objs:
                 # ปัดเป็น 2 ตำแหน่ง ไม่งั้นเศษ VAT (เช่น 107.0749) ทำให้ยอดที่บันทึกได้ (107.07) ไม่ครบ สถานะค้างที่ Partial
                 balance = round_money(obj.balance_due)
                 # สร้างรายการจ่ายเงิน (ตามยอดที่ค้าง)
                 if balance > 0:
                     if isinstance(obj, PurchaseOrder):
                         PurchasePaymentLog.objects.create(purchase_order=obj, amount=balance, payment_date=pay_date, notes="Auto Settle",
-                                                          bank_account=bank_account, user=request.user)
+                                                          bank_account=bank_account, user=request.user,
+                                                          batch_ref=batch_ref)
                         obj.refresh_from_db()
                     elif isinstance(obj, SalesOrder): # รองรับทั้ง SalesOrder และ IncomeReport
                         SalesPayment.objects.create(order=obj, amount=balance, payment_date=pay_date, remark="Auto Settle",
-                                                bank_account=bank_account)
+                                                bank_account=bank_account, batch_ref=batch_ref)
                         obj.refresh_from_db()
                     updated_count += 1
                 
@@ -4415,30 +4421,45 @@ def settle_and_close_orders(modeladmin, request, queryset):
     }
     return HttpResponse(Template(html_template).render(RequestContext(request, context)))
 
+class PaymentDateRangeFilter(DjangoDateRangeFilter):
+    """A3/A4: ช่วงวันที่จ่าย/รับเงิน (ตารางลูก) — กรองด้วย pk__in ไม่ join ตรง
+    (หน้า A4 รวมยอดรับเงินด้วย annotate อยู่แล้ว join ซ้ำจะทำให้ยอดเบิ้ล)"""
+
+    def queryset(self, request, queryset):
+        if not self.used_parameters:
+            return queryset
+        matched = super().queryset(request, queryset.model._default_manager.all())
+        if matched is None:
+            return None
+        return queryset.filter(pk__in=matched.values('pk'))
+
+
+def payment_account_filter(relation, label):
+    """A3/A4: กรองตามสมุดบัญชีที่จ่าย/รับเงิน (มีรายการจ่าย/รับเข้าบัญชีนั้นอย่างน้อย 1 รายการ)"""
+    class PaymentAccountFilter(admin.SimpleListFilter):
+        title = label
+        parameter_name = 'pay_account'
+
+        def lookups(self, request, model_admin):
+            return [(str(a.pk), f"{a.name} (หลัก)" if a.is_default else a.name)
+                    for a in BankAccount.objects.order_by('-is_default', 'name')]
+
+        def queryset(self, request, queryset):
+            value = self.value() or ''
+            if not value.isdigit():
+                return queryset
+            matched = queryset.model._default_manager.filter(**{f'{relation}__bank_account_id': int(value)})
+            return queryset.filter(pk__in=matched.values('pk'))
+
+    return PaymentAccountFilter
+
+
 @admin.register(FinanceReport)
 class FinanceReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     # หน้ารวม: ดูง่ายๆ ว่าใบไหนค้างจ่าย
     search_fields = ('po_number', 'supplier__company_name')
-    actions = [settle_and_close_orders, settle_purchase_special, 'calculate_finance_totals', 'export_to_excel']
+    actions = [settle_and_close_orders, settle_purchase_special, 'export_to_excel']
 
-    @admin.action(description="📝 สรุปยอดเงินรายจ่ายที่เลือก")
-    def calculate_finance_totals(self, request, queryset):
-        grand_total = 0
-        paid_total = 0
-        total_balance_due = 0 # ✅ ใช้ชื่อให้ตรงกับ Balance Due ในหน้าจอ
-
-        for obj in queryset:
-            grand_total += float(obj.grand_total or 0)
-            paid_total += float(obj.total_paid or 0)
-            total_balance_due += float(obj.balance_due or 0)
-
-        summary_message = (
-            f"📊 สรุปรายจ่าย {queryset.count()} รายการ:  |  "
-            f"💰 ยอดจ่ายสุทธิรวม: {grand_total:,.2f} บาท  |  "
-            f"✅ จ่ายแล้วรวม: {paid_total:,.2f} บาท  |  "
-            f"❗️ ค้างจ่ายรวม (Balance Due): {total_balance_due:,.2f} บาท"
-        )
-        self.message_user(request, summary_message, messages.SUCCESS)
 
     # จัดหน้าตาฟอร์ม
     # ✅ 1. เปลี่ยน list_display ให้โชว์ Payment Status แทน
@@ -4449,6 +4470,8 @@ class FinanceReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, DocumentLockMixi
         ('payment_status', MultipleChoicesDropdownFilter),
         ('supplier', AutocompleteSelectMultipleFilter),
         ('items__product__tags', PurchaseOrderTagsFilter),
+        ('payment_logs__payment_date', PaymentDateRangeFilter),
+        payment_account_filter('payment_logs', "บัญชีที่จ่ายเงิน"),
     )
     list_filter_submit = True
     # ✅ 3. ในหน้า Detail ก็เปลี่ยน fields
@@ -4598,11 +4621,12 @@ class IncomeReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, DocumentLockMixin
         ('status', MultipleChoicesDropdownFilter),
         ('customer', AutocompleteSelectMultipleFilter),
         ('items__product__tags', SalesOrderTagsFilter),
+        ('payments__payment_date', PaymentDateRangeFilter),
+        payment_account_filter('payments', "บัญชีที่รับเงิน"),
     )
     list_filter_submit = True
     search_fields = ('so_number', 'customer__company_name')
-    actions = [settle_and_close_orders, settle_income_special, 'calculate_income_totals', sell_factoring,
-               'export_to_excel']
+    actions = [settle_and_close_orders, settle_income_special, sell_factoring, 'export_to_excel']
 
     def get_queryset(self, request):
         from django.db.models import Sum, F, ExpressionWrapper, DecimalField as DField, Q
@@ -4648,25 +4672,6 @@ class IncomeReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, DocumentLockMixin
         return format_html('<b style="color:{};">{}</b>', color, formatted_balance)
     get_balance_due_display.short_description = "ค้างรับ"
 
-    @admin.action(description="📝 สรุปยอดเงินรายรับที่เลือก")
-    def calculate_income_totals(self, request, queryset):
-        grand_total = 0
-        paid_total = 0
-        total_balance_due = 0 # ✅ เปลี่ยนชื่อจาก balance_total เป็นชื่อนี้ให้อ่านง่าย
-        
-        for obj in queryset:
-            grand_total += float(obj.grand_total or 0)
-            paid_total += float(obj.total_paid or 0)
-            # ✅ เรียกใช้ฟังก์ชันคำนวณที่เปรมมีอยู่แล้วใน Admin
-            total_balance_due += float(self.calculate_balance_due(obj) or 0)
-
-        summary_message = (
-            f"💰 สรุปรายรับ {queryset.count()} รายการ: | "
-            f"ยอดสุทธิ: {grand_total:,.2f} | "
-            f"รับเงินแล้ว: {paid_total:,.2f} | "
-            f"⚠️ ค้างรับ (Balance Due): {total_balance_due:,.2f}" # ✅ ใช้คำให้ตรงกับหน้าจอ
-        )
-        self.message_user(request, summary_message, messages.SUCCESS)
 
     fieldsets = (
         ('📊 สรุปยอดเงิน (Income Summary)', {
@@ -6845,7 +6850,13 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
                                      (RebatePayout, 'rebate_payout_id')):
                     ids = [getattr(t, field) for t in rows if getattr(t, field)]
                     model.objects.filter(pk__in=ids).update(bank_account=account)
+                refs = {t.batch_ref for t in rows if t.batch_ref}
+                if refs:
+                    SalesPayment.objects.filter(batch_ref__in=refs).update(bank_account=account)
+                    PurchasePaymentLog.objects.filter(batch_ref__in=refs).update(bank_account=account)
                 count = queryset.update(bank_account=account)
+                for ref in refs:
+                    rebuild_payment_batch(ref)
                 self.message_user(request, f"ย้าย {count} รายการไปที่ {account} แล้ว", messages.SUCCESS)
                 if skipped:
                     self.message_user(request, f"ข้าม {skipped} รายการเงินกู้/แฟคตอริ่ง (ระบบกำหนดสมุดบัญชีเอง)",
@@ -6891,13 +6902,59 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
     def get_reference(self, obj):
         return self.get_source_link(obj) if obj.source_type != 'MANUAL' else (obj.reference or '-')
 
+    def _batch_link(self, obj, html):
+        # รายการรวม (ชำระหลายใบพร้อมกัน): กดยอดเงิน -> เปิดแท็บใหม่ดูว่ามาจาก SO/PO ไหน
+        if not obj.batch_ref:
+            return html
+        url = (reverse('admin:stocks_banktransaction_batch', args=[obj.batch_ref])
+               + f"?account={obj.bank_account_id or ''}&date={obj.txn_date.isoformat()}")
+        return format_html('<a href="{}" target="_blank" title="ดูรายการในยอดนี้" '
+                           'style="text-decoration:underline dotted;">{}</a>', url, html)
+
     @admin.display(description="เงินเข้า")
     def get_in(self, obj):
-        return _money_html(obj.amount, '#16a34a') if obj.amount > 0 else ''
+        return self._batch_link(obj, _money_html(obj.amount, '#16a34a')) if obj.amount > 0 else ''
 
     @admin.display(description="เงินออก")
     def get_out(self, obj):
-        return _money_html(-obj.amount, '#dc2626') if obj.amount < 0 else ''
+        return self._batch_link(obj, _money_html(-obj.amount, '#dc2626')) if obj.amount < 0 else ''
+
+    def get_urls(self):
+        return [path('batch/<str:ref>/', self.admin_site.admin_view(self.batch_view),
+                     name='stocks_banktransaction_batch')] + super().get_urls()
+
+    def batch_view(self, request, ref):
+        if not self.has_view_or_change_permission(request):
+            raise PermissionDenied
+        # เฉพาะสมุดบัญชี/วันที่ของยอดที่กด (ชุดเดียวกันอาจแยกหลายบัญชี เช่น ลูกค้าตั้งบัญชีรับโอนต่างกัน)
+        cond = {'batch_ref': ref}
+        account = request.GET.get('account', '')
+        if account.isdigit():
+            cond['bank_account_id'] = int(account)
+        try:
+            cond['payment_date'] = datetime.date.fromisoformat(request.GET['date'])
+        except (KeyError, ValueError):
+            pass
+        rows = []
+        for p in SalesPayment.objects.filter(**cond).select_related('order__customer', 'bank_account').order_by('id'):
+            rows.append({'doc': p.order.so_number, 'url': reverse('admin:stocks_incomereport_change', args=[p.order_id]),
+                         'party': p.order.customer.company_name if p.order.customer_id else '',
+                         'receipts': ', '.join(p.order.receipts.filter(is_cancelled=False).order_by('shipped_date')
+                                               .values_list('receipt_number', flat=True)),
+                         'account': p.bank_account, 'date': p.payment_date, 'amount': p.amount})
+        kind = 'รับเงิน'
+        for p in (PurchasePaymentLog.objects.filter(**cond).select_related('purchase_order__supplier', 'bank_account')
+                  .order_by('id')):
+            kind = 'จ่ายเงิน'
+            po = p.purchase_order
+            rows.append({'doc': po.po_number, 'url': reverse('admin:stocks_financereport_change', args=[po.pk]),
+                         'party': po.supplier.company_name if po.supplier_id else '', 'receipts': '',
+                         'account': p.bank_account, 'date': p.payment_date, 'amount': p.amount})
+        return TemplateResponse(request, 'admin/stocks/banktransaction/batch_detail.html', {
+            **self.admin_site.each_context(request),
+            'title': f"รายการใน{kind}ยอดรวม", 'opts': self.model._meta, 'rows': rows, 'kind': kind,
+            'total': sum((r['amount'] for r in rows), Decimal(0)),
+        })
 
     @admin.display(description="คงเหลือ")
     def get_balance(self, obj):

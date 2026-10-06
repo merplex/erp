@@ -898,6 +898,8 @@ class PurchasePaymentLog(models.Model):
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
     bank_account = models.ForeignKey('BankAccount', on_delete=models.PROTECT, null=True, blank=True,
                                      related_name='+', verbose_name="สมุดบัญชี")
+    # ชำระครบหลายใบพร้อมกัน (action A3/A4) = เงินก้อนเดียว — สมุดบัญชีรวมเป็น 1 รายการ (rebuild_payment_batch)
+    batch_ref = models.CharField(max_length=32, blank=True, default='', db_index=True, editable=False)
 
     def __str__(self): return f"{self.amount}"
 
@@ -1084,6 +1086,8 @@ class SalesPayment(models.Model):
     # ยอดที่แถวนี้โอนต่อจากบัญชีแฟคตอริ่งเข้าบัญชีที่ผูก (หลังหักค่าธรรมเนียม/ดอกเบี้ย/DC-Rebate)
     # สมุดบัญชีรวมยอดนี้เป็น 1 รายการโอนต่อบัญชีต่อวัน (rebuild_factoring_transfers) เหมือนสมุดบัญชีจริง
     factoring_net = models.DecimalField(max_digits=18, decimal_places=4, default=0, editable=False)
+    # ชำระครบหลายใบพร้อมกัน (action A3/A4) = เงินก้อนเดียว — สมุดบัญชีรวมเป็น 1 รายการ (rebuild_payment_batch)
+    batch_ref = models.CharField(max_length=32, blank=True, default='', db_index=True, editable=False)
     # รายการหัก DC/Rebate ที่สร้างจาก A5 (1 แถวต่อรายการส่งของ + ประเภท) และรอบเดือนที่เลือกให้หัก
     DEDUCTION_KINDS = [('DC', 'DC'), ('REBATE', 'Rebate')]
     deduction_log = models.ForeignKey('SalesDeliveryLog', on_delete=models.CASCADE, null=True, blank=True,
@@ -2627,6 +2631,8 @@ class BankTransaction(models.Model):
     # โอนระหว่างบัญชี: แถวฝั่งบัญชีปลายทาง (source TRANSFER) ชี้กลับไปแถวที่ผู้ใช้บันทึก — แก้/ลบที่แถวต้นเท่านั้น
     transfer_peer = models.OneToOneField('self', null=True, blank=True, on_delete=models.CASCADE,
                                          related_name='transfer_mirror', editable=False)
+    # รายการรวมของการชำระหลายใบพร้อมกัน (ชุดเดียวกับ SalesPayment/PurchasePaymentLog.batch_ref)
+    batch_ref = models.CharField(max_length=32, blank=True, default='', db_index=True, editable=False)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, editable=False,
                                    verbose_name="ผู้บันทึก")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -2648,7 +2654,7 @@ class BankTransaction(models.Model):
     def is_account_locked(self):
         # สมุดบัญชีของแถวเงินกู้/แฟคตอริ่ง ระบบกำหนดเอง (เงินกู้: หน้า M3, แฟคตอริ่ง: บัญชีที่ผูกใน M1)
         return bool(self.loan_drawdown_id or self.loan_installment_id or self.factoring_payment_id
-                    or self.transfer_peer_id or self.source_type == 'FACTORING')
+                    or self.transfer_peer_id or self.source_type == 'FACTORING' or self.batch_ref)
 
 
 @receiver(post_delete, sender=BankTransaction)
@@ -2676,8 +2682,52 @@ def _payment_default_bank_account(sender, instance, **kwargs):
             instance.bank_account_id = default_bank_account_id()
 
 
+def _is_factoring_account_id(account_id):
+    return bool(account_id) and BankAccount.objects.filter(pk=account_id, account_type='FACTORING').exists()
+
+
+def rebuild_payment_batch(ref):
+    """ชำระครบหลายใบพร้อมกัน (action A3/A4) = เงินก้อนเดียว: 1 รายการต่อ (สมุดบัญชี, วันที่) ของชุด
+    รายการเข้าบัญชีแฟคตอริ่งไม่รวม (สมุดแฟคตอริ่งแสดงราย IV) — กดยอดเงินในหน้า M2 ดูว่ามาจาก SO/PO ไหน"""
+    if not ref:
+        return
+    groups = {}
+    for p in SalesPayment.objects.filter(batch_ref=ref).select_related('order__customer', 'bank_account'):
+        if p.bank_account_id and p.bank_account.account_type == 'FACTORING':
+            continue
+        groups.setdefault((p.bank_account_id, _as_date(p.payment_date), 'SALES_PAYMENT'), []).append(
+            (round_money(p.amount), p.order.so_number or '', p.order.customer.company_name if p.order.customer_id else ''))
+    for p in PurchasePaymentLog.objects.filter(batch_ref=ref).select_related('purchase_order__supplier'):
+        po = p.purchase_order
+        groups.setdefault((p.bank_account_id, _as_date(p.payment_date), 'PURCHASE_PAYMENT'), []).append(
+            (-round_money(p.amount), po.po_number or '', po.supplier.company_name if po.supplier_id else ''))
+    existing = {(t.bank_account_id, t.txn_date, t.source_type): t for t in BankTransaction.objects.filter(batch_ref=ref)}
+    for key, rows in groups.items():
+        account_id, day, kind = key
+        parties = {party for _, _, party in rows}
+        refs = ', '.join(r for _, r, _ in rows if r)
+        fields = {
+            'amount': sum((a for a, _, _ in rows), Decimal(0)),
+            'reference': f"รวม {len(rows)} รายการ",
+            'party': parties.pop() if len(parties) == 1 else f"{len(parties)} ราย",
+            'description': f"{'รับเงินรวม' if kind == 'SALES_PAYMENT' else 'จ่ายเงินรวม'}: {refs}"[:255],
+        }
+        row = existing.pop(key, None)
+        if row is None:
+            BankTransaction.objects.create(bank_account_id=account_id, txn_date=day, source_type=kind,
+                                           batch_ref=ref, **fields)
+        elif any(getattr(row, k) != v for k, v in fields.items()):
+            BankTransaction.objects.filter(pk=row.pk).update(**fields)
+    for row in existing.values():
+        row.delete()
+
+
 @receiver(post_save, sender=SalesPayment)
 def sync_sales_payment_ledger(sender, instance, **kwargs):
+    if instance.batch_ref and not _is_factoring_account_id(instance.bank_account_id):
+        BankTransaction.objects.filter(sales_payment=instance).delete()
+        rebuild_payment_batch(instance.batch_ref)
+        return
     order = instance.order
     remark = instance.remark or ''
     is_deduction = instance.amount < 0 and ('DC' in remark or 'Rebate' in remark)
@@ -2690,10 +2740,16 @@ def sync_sales_payment_ledger(sender, instance, **kwargs):
         'party': order.customer.company_name if order.customer_id else '',
         'description': (remark or 'รับเงินขาย')[:255],
     })
+    if instance.batch_ref:
+        rebuild_payment_batch(instance.batch_ref)  # ย้ายไปบัญชีแฟคตอริ่ง -> ออกจากรายการรวม
 
 
 @receiver(post_save, sender=PurchasePaymentLog)
 def sync_purchase_payment_ledger(sender, instance, **kwargs):
+    if instance.batch_ref:
+        BankTransaction.objects.filter(purchase_payment=instance).delete()
+        rebuild_payment_batch(instance.batch_ref)
+        return
     po = instance.purchase_order
     BankTransaction.objects.update_or_create(purchase_payment=instance, defaults={
         'bank_account_id': instance.bank_account_id,
@@ -2705,6 +2761,14 @@ def sync_purchase_payment_ledger(sender, instance, **kwargs):
         'description': (instance.notes or 'จ่ายเงินซื้อ')[:255],
         'created_by_id': instance.user_id,
     })
+
+
+@receiver(post_delete, sender=SalesPayment)
+@receiver(post_delete, sender=PurchasePaymentLog)
+def _payment_batch_on_delete(sender, instance, **kwargs):
+    # ลบรายการรับ/จ่ายที่อยู่ในชุด -> ยอดรวมในสมุดบัญชีลดตาม (ลบใบสุดท้าย = ลบรายการรวม)
+    if instance.batch_ref:
+        rebuild_payment_batch(instance.batch_ref)
 
 
 @receiver(models.signals.pre_save, sender=RebatePayout)
