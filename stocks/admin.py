@@ -6533,8 +6533,10 @@ class BankAccountAdmin(UnfoldModelAdmin):
         js = ('js/bank_account_type.js',)
 
     def get_queryset(self, request):
+        # ยอดคงเหลือ ณ วันนี้ — รายการวันที่ล่วงหน้ายังไม่นับ (ตรงกับหน้า M2 ที่ซ่อนรายการล่วงหน้า)
         moved = (BankTransaction.objects
-                 .filter(bank_account=OuterRef('pk'), txn_date__gte=OuterRef('opening_date'))
+                 .filter(bank_account=OuterRef('pk'), txn_date__gte=OuterRef('opening_date'),
+                         txn_date__lte=timezone.localdate())
                  .values('bank_account').annotate(s=Sum('amount')).values('s'))
         return super().get_queryset(request).select_related('linked_account').annotate(
             balance=ExpressionWrapper(F('opening_balance') + Coalesce(Subquery(moved, output_field=MONEY),
@@ -6575,7 +6577,7 @@ class BankAccountAdmin(UnfoldModelAdmin):
 
     @admin.display(description="")
     def get_ledger_link(self, obj):
-        url = reverse('admin:stocks_banktransaction_changelist') + f'?bank_account__id__exact={obj.pk}'
+        url = reverse('admin:stocks_banktransaction_changelist') + f'?{BankTxnAccountFilter.parameter_name}={obj.pk}'
         return format_html('<a href="{}">📒 รายการเดินบัญชี</a>', url)
 
 
@@ -6699,8 +6701,8 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
     search_fields = ('reference', 'party', 'description', 'category__name')
     autocomplete_fields = ['bank_account', 'category']
     list_before_template = 'admin/stocks/banktransaction/summary.html'
-    # ใหม่ -> เก่า ลำดับเดียวกับที่คิดยอดคงเหลือ (วันที่ แล้วเลขแถว) อ่านจากล่างขึ้นบนได้ต่อกันทุกบรรทัด
-    ordering = ('-txn_date', '-id')
+    # ใหม่ -> เก่า ลำดับเดียวกับที่คิดยอดคงเหลือ (วันที่ -> เลขอ้างอิง -> เลขแถว) อ่านจากล่างขึ้นบนได้ต่อกันทุกบรรทัด
+    ordering = ('-txn_date', '-reference', '-id')
     actions = ['assign_bank_account', 'export_to_excel']
     source_fields = ('source_type', 'get_source_link', 'bank_account', 'txn_date', 'amount', 'reference', 'party',
                      'description')
@@ -6725,7 +6727,10 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
         prior = (BankTransaction.objects
                  .filter(bank_account=OuterRef('bank_account'),
                          txn_date__gte=OuterRef('bank_account__opening_date'))
-                 .filter(Q(txn_date__lt=OuterRef('txn_date')) | Q(txn_date=OuterRef('txn_date'), id__lte=OuterRef('id')))
+                 # ลำดับเดียวกับหน้า list: วันที่ -> เลขอ้างอิง (เลข IV ในสมุดแฟคตอริ่ง) -> เลขแถว
+                 .filter(Q(txn_date__lt=OuterRef('txn_date'))
+                         | Q(txn_date=OuterRef('txn_date'), reference__lt=OuterRef('reference'))
+                         | Q(txn_date=OuterRef('txn_date'), reference=OuterRef('reference'), id__lte=OuterRef('id')))
                  .values('bank_account').annotate(s=Sum('amount')).values('s'))
         return super().get_queryset(request).select_related(
             'bank_account', 'category', 'sales_payment', 'purchase_payment', 'loan_installment',

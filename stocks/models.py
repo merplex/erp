@@ -2565,7 +2565,9 @@ class BankAccount(models.Model):
 
     @property
     def current_balance(self):
-        moved = self.transactions.filter(txn_date__gte=self.opening_date).aggregate(t=Sum('amount'))['t']
+        # ยอดคงเหลือ ณ วันนี้ — รายการวันที่ล่วงหน้า (เช่น ส่วนที่เหลือแฟคตอริ่ง) ยังไม่นับจนถึงวัน
+        moved = self.transactions.filter(txn_date__gte=self.opening_date,
+                                         txn_date__lte=timezone.localdate()).aggregate(t=Sum('amount'))['t']
         return self.opening_balance + (moved or 0)
 
 
@@ -3134,64 +3136,58 @@ def create_factoring_payments(order, receipt=None, advance_date=None):
     return True, ''
 
 
+def _factoring_ref(p):
+    # อ้างอิงเลข IV (ขายราย IV) — สมุดบัญชีแฟคตอริ่งเรียงรายการตามเลข IV ในวันเดียวกัน
+    return (p.receipt.receipt_number if p.receipt_id else '') or p.order.so_number or ''
+
+
 def _factoring_base(p):
     return {'txn_date': p.payment_date, 'source_type': 'FACTORING', 'factoring_payment': p,
-            'reference': p.order.so_number or '',
+            'reference': _factoring_ref(p),
             'party': p.order.customer.company_name if p.order.customer_id else ''}
 
 
 def _factoring_transfer(fx, p, net, label):
-    # จดยอดโอนไว้ที่แถวรับเงิน — แถวในสมุดสร้างรวมทีเดียวต่อบัญชีต่อวันที่ rebuild_factoring_transfers()
+    # ฝั่งบัญชีแฟคตอริ่ง: แยกราย IV / ฝั่งบัญชีที่ผูก: รวมวันละรายการ (rebuild_factoring_transfers) เหมือนสมุดจริง
+    BankTransaction.objects.create(bank_account=fx, amount=-net, **_factoring_base(p),
+                                   description=f"โอนเข้า {fx.linked_account.name}: {label}"[:255])
     SalesPayment.objects.filter(pk=p.pk).update(factoring_net=net)
 
 
 def rebuild_factoring_transfers():
-    """โอนจากบัญชีแฟคตอริ่งเข้าบัญชีที่ผูก: 1 รายการต่อบัญชีแฟคตอริ่งต่อวัน (ในสมุดบัญชีจริงขึ้นก้อนเดียว ไม่แยกตาม IV)
-    ยอด = ผลรวม factoring_net ของแถวรับเงินในบัญชีแฟคตอริ่งวันนั้น — แถวฝั่งบัญชีที่ผูกชี้กลับด้วย transfer_peer
+    """ฝั่งบัญชีที่ผูก (เช่น SCB): รับโอนจากแฟคตอริ่ง 1 รายการต่อวัน (ในสมุดบัญชีจริงขึ้นก้อนเดียว ไม่แยกตาม IV)
+    ยอด = ผลรวม factoring_net ของแถวรับเงินในบัญชีแฟคตอริ่งที่ผูกบัญชีนี้ วันนั้น
     แก้แถวเดิมเฉพาะวันที่ยอดเปลี่ยน (เลขแถวคงเดิม) วันที่ไม่มียอดแล้วลบทิ้ง"""
-    from django.db.models import Count, Max
+    from django.db.models import Count, Max, Min
     groups = (SalesPayment.objects.exclude(factoring_net=0)
               .filter(bank_account__account_type='FACTORING', bank_account__linked_account__isnull=False)
-              .values('bank_account_id', 'payment_date').order_by()
+              .values('bank_account__linked_account_id', 'payment_date').order_by()
               .annotate(total=Sum('factoring_net'), n=Count('id'),
-                        customers=Count('order__customer', distinct=True), name=Max('order__customer__company_name')))
-    accounts = {a.pk: a for a in BankAccount.objects.filter(account_type='FACTORING').select_related('linked_account')}
+                        customers=Count('order__customer', distinct=True), name=Max('order__customer__company_name'),
+                        fx_first=Min('bank_account__name'), fx_last=Max('bank_account__name')))
+    fx_ids = set(BankAccount.objects.filter(account_type='FACTORING').values_list('id', flat=True))
     existing = {}
     for t in BankTransaction.objects.filter(source_type='FACTORING', factoring_payment__isnull=True,
                                             transfer_peer__isnull=True).order_by('id'):
-        if (t.bank_account_id, t.txn_date) in existing:
-            t.delete()  # กันแถวรวมซ้ำวันเดียวกัน
+        key = (t.bank_account_id, t.txn_date)
+        if t.bank_account_id in fx_ids or key in existing:
+            t.delete()  # แถวรวมฝั่งแฟคตอริ่งแบบเดิม / แถวรวมซ้ำวันเดียวกัน
         else:
-            existing[(t.bank_account_id, t.txn_date)] = t
-    # แถวโอนต้องอยู่ท้ายวันในสมุดแฟคตอริ่ง (หลังรับเงิน/ค่าธรรมเนียม/ดอกเบี้ย) ยอดคงเหลือระหว่างวันจะได้ไม่ติดลบ
-    last_ids = {(r['bank_account_id'], r['txn_date']): r['m'] for r in BankTransaction.objects
-                .filter(bank_account_id__in=list(accounts)).exclude(pk__in=[t.pk for t in existing.values()])
-                .values('bank_account_id', 'txn_date').order_by().annotate(m=Max('id'))}
+            existing[key] = t
     for g in groups:
-        fx = accounts[g['bank_account_id']]
         day = _as_date(g['payment_date'])
         net = round_money(g['total'])
-        label = f"แฟคตอริ่ง {g['n']} รายการ"
-        party = g['name'] if g['customers'] == 1 else ''
-        out_fields = {'amount': -net, 'party': party,
-                      'description': f"โอนเข้า {fx.linked_account.name}: {label}"[:255]}
-        in_fields = {'bank_account': fx.linked_account, 'txn_date': day, 'amount': net, 'party': party,
-                     'source_type': 'FACTORING', 'description': f"รับโอนจากแฟคตอริ่ง {fx.name}: {label}"[:255]}
-        row = existing.pop((fx.pk, day), None)
-        if row is not None and row.pk < (last_ids.get((fx.pk, day)) or 0):
-            row.delete()
-            row = None
+        fx_name = g['fx_first'] if g['fx_first'] == g['fx_last'] else f"{g['fx_first']}, {g['fx_last']}"
+        fields = {'amount': net, 'party': g['name'] if g['customers'] == 1 else '',
+                  'description': f"รับโอนจากแฟคตอริ่ง {fx_name}: แฟคตอริ่ง {g['n']} รายการ"[:255]}
+        row = existing.pop((g['bank_account__linked_account_id'], day), None)
         if row is None:
-            row = BankTransaction.objects.create(bank_account=fx, txn_date=day, source_type='FACTORING', **out_fields)
-        elif any(getattr(row, k) != v for k, v in out_fields.items()):
-            BankTransaction.objects.filter(pk=row.pk).update(**out_fields)
-        mirror = BankTransaction.objects.filter(transfer_peer=row).first()
-        if mirror is None:
-            BankTransaction.objects.create(transfer_peer=row, **in_fields)
-        elif any(getattr(mirror, k) != v for k, v in in_fields.items()):
-            BankTransaction.objects.filter(pk=mirror.pk).update(**in_fields)
+            BankTransaction.objects.create(bank_account_id=g['bank_account__linked_account_id'], txn_date=day,
+                                           source_type='FACTORING', **fields)
+        elif any(getattr(row, k) != v for k, v in fields.items()):
+            BankTransaction.objects.filter(pk=row.pk).update(**fields)
     for row in existing.values():
-        row.delete()  # แถวฝั่งบัญชีที่ผูก CASCADE ตาม transfer_peer
+        row.delete()
 
 
 def _is_factoring(account):
@@ -3213,6 +3209,8 @@ def sync_factoring_advance(order_id):
             'bank_account__linked_account', 'order__customer'):
         if not _is_factoring(p.bank_account):
             continue
+        # เงินเบิกไม่ใช่เงินที่ลูกค้าจ่ายเข้าบัญชีแฟคตอริ่ง — สมุดแฟคตอริ่งมีแค่โอนออก (ติดลบ) จนลูกค้าจ่าย
+        BankTransaction.objects.filter(sales_payment=p).delete()
         fee = Decimal(0)
         if p.factoring_fee_percent:
             remainder = (SalesPayment.objects.filter(order_id=order_id, factoring_role='REMAINDER',
@@ -3283,6 +3281,16 @@ def resync_factoring_month(customer_id, month):
         # เงินเบิกของชุดเดียวกัน (ทั้ง SO หรือใบ IV เดียวกัน)
         advance = SalesPayment.objects.filter(order_id=r.order_id, factoring_role='ADVANCE',
                                               receipt_id=r.receipt_id).first()
+        # วันลูกค้าจ่าย: ลูกค้าโอนเต็มยอด (เบิก + ส่วนที่เหลือ) เข้าบัญชีแฟคตอริ่ง -> สมุดแฟคตอริ่งกลับเป็นบวก
+        ref = _factoring_ref(r)
+        BankTransaction.objects.update_or_create(sales_payment=r, defaults={
+            'bank_account_id': fx.pk, 'source_type': 'SALES_PAYMENT', 'reference': ref,
+            'txn_date': r.factoring_customer_paid_date or _as_date(r.payment_date),
+            'amount': round_money(r.amount + (advance.amount if advance else 0)),
+            'party': r.order.customer.company_name if r.order.customer_id else '',
+            'description': (f"{ref} ลูกค้าชำระเข้าแฟคตอริ่ง (เบิกแล้ว {(advance.amount if advance else 0):,.2f}"
+                            f" + ส่วนที่เหลือ {r.amount:,.2f})")[:255],
+        })
         interest, days = Decimal(0), 0
         if advance and r.factoring_rate and r.factoring_customer_paid_date:
             days = max((r.factoring_customer_paid_date - advance.payment_date).days, 0)
