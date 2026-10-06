@@ -6515,12 +6515,12 @@ def _money_html(value, color=None):
 
 @admin.register(BankAccount)
 class BankAccountAdmin(UnfoldModelAdmin):
-    list_display = ('name', 'account_type', 'bank_name', 'account_number', 'get_opening',
-                    'get_balance', 'get_type_detail', 'is_default', 'is_active', 'get_ledger_link')
+    list_display = ('get_name', 'account_type', 'bank_name', 'account_number', 'get_opening',
+                    'get_balance', 'get_type_detail', 'is_active', 'get_ledger_link')
     list_filter = ('account_type', 'is_active')
     search_fields = ('name', 'bank_name', 'account_number')
     autocomplete_fields = ['linked_account']
-    # ชื่อบัญชี / บัญชีหลัก ไม่ต้องกดเรียง — บัญชีหลักอยู่บรรทัดแรกเสมอ (ดู get_changelist)
+    # ชื่อบัญชีไม่ต้องกดเรียง — บัญชีหลักอยู่บรรทัดแรกเสมอ (ดู get_changelist) และมี "(หลัก)" ต่อท้ายชื่อ
     sortable_by = ('account_type', 'bank_name', 'account_number', 'get_opening', 'get_balance', 'is_active')
     fieldsets = (
         (None, {'fields': ('name', 'account_type', 'bank_name', 'branch', 'account_number',
@@ -6563,6 +6563,10 @@ class BankAccountAdmin(UnfoldModelAdmin):
         if request.path.endswith('/autocomplete/'):
             queryset = queryset.filter(is_active=True)
         return queryset, may_have_duplicates
+
+    @admin.display(description="ชื่อบัญชี")
+    def get_name(self, obj):
+        return f"{obj.name} (หลัก)" if obj.is_default else obj.name
 
     @admin.display(description="ยอดยกมา", ordering='opening_balance')
     def get_opening(self, obj):
