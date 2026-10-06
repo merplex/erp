@@ -5799,7 +5799,7 @@ class ShipmentAccountingAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModel
 class InternationalPurchaseTrackingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     # ✅ ย่อหน้า (Indent) ต้องตรงกันแบบนี้ครับ สีแดงถึงจะหาย
     actions = ['export_to_excel']
-    list_display = ('po_number', 'supplier', 'status', 'payment_status', 'display_tracking_table','arrived_date')
+    list_display = ('po_number', 'supplier', 'status', 'payment_status', 'display_tracking_table')
     list_filter = (
         ('status', MultipleChoicesDropdownFilter),
         ('supplier', AutocompleteSelectMultipleFilter),
@@ -5814,15 +5814,27 @@ class InternationalPurchaseTrackingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
 
     def get_queryset(self, request):
         # ให้โชว์เฉพาะ Supplier ที่เป็น 'International' เท่านั้น
-        return super().get_queryset(request).filter(supplier__type='International')
+        # Timeline Paid / Full Paid: วันที่จ่ายครั้งแรก / ครั้งล่าสุด จากรายการจ่ายเงิน (A3)
+        logs = PurchasePaymentLog.objects.filter(purchase_order=OuterRef('pk')).order_by()
+        return super().get_queryset(request).filter(supplier__type='International').annotate(
+            _first_paid=Subquery(logs.order_by('payment_date', 'id').values('payment_date')[:1]),
+            _last_paid=Subquery(logs.order_by('-payment_date', '-id').values('payment_date')[:1]),
+        )
     
     def display_tracking_table(self, obj):
         from django.utils.safestring import mark_safe
         
         # 🎯 เตรียมข้อมูล Milestone (ชื่อ, วันที่)
+        # Paid = จ่ายครั้งแรก (มัดจำ), Full Paid = จ่ายครบ — ตามสถานะการเงิน/รายการจ่ายเงินใน P2/A3
+        # ใบเก่าที่ยังไม่มีรายการจ่ายเงิน ใช้ "วันที่จ่ายเงิน" ที่กรอกไว้แทน
+        first_paid = getattr(obj, '_first_paid', None)
+        last_paid = getattr(obj, '_last_paid', None)
+        paid = first_paid or (obj.paid_date if obj.payment_status in ('Partial', 'Paid', 'SETTLED') else None)
+        full_paid = (last_paid or obj.paid_date) if obj.payment_status in ('Paid', 'SETTLED') else None
         milestones = [
             ('Ordered', obj.order_date),
-            ('Paid', obj.paid_date), 
+            ('Paid', paid),
+            ('Full Paid', full_paid),
             ('Loaded', obj.loaded_date),
             ('Departed', obj.departed_date),
             ('Arrived', obj.arrived_date),
@@ -5844,8 +5856,11 @@ class InternationalPurchaseTrackingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             else:
                 date_str = "-"
             
-            # เช็กสถานะปัจจุบันเพื่อเน้นสี
-            is_active = (obj.status == name)
+            # เช็กสถานะปัจจุบันเพื่อเน้นสี (สถานะ Paid + จ่ายครบแล้ว -> เน้นช่อง Full Paid)
+            current = obj.status
+            if current == 'Paid' and full_paid:
+                current = 'Full Paid'
+            is_active = (current == name)
             color = "#28a745" if is_active else "#666"
             weight = "bold" if is_active else "normal"
             bg = "#e8f5e9" if is_active else "transparent"
@@ -5883,19 +5898,8 @@ class InternationalPurchaseTrackingAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             obj.save(update_fields=update_fields)
 
     # ✅ 5. Actions: ขยับสถานะ Milestone แบบรวดเร็ว (ครบชุด)
-    actions = ['set_paid', 'set_loaded', 'set_departed', 'set_arrived', 'set_received', 'set_closed', 'export_to_excel']
-
-    @admin.action(description='💰 2. จ่ายเงินแล้ว (Paid)')
-    def set_paid(self, request, queryset):
-        from django.utils import timezone
-        # ใช้ update_fields เพื่อความชัวร์ว่าลงเฉพาะจุด
-        count = 0
-        for obj in queryset:
-            obj.status = 'Paid'
-            obj.paid_date = timezone.now().date()
-            obj.save()
-            count += 1
-        self.message_user(request, f"✅ อัปเดต 'จ่ายเงินแล้ว' {count} รายการ")
+    # จ่ายเงิน (Paid / Full Paid) ไม่มี action แล้ว — ขึ้นตามรายการจ่ายเงินใน A3 (บันทึกจ่ายครั้งแรก -> สถานะ Paid ให้เอง)
+    actions = ['set_loaded', 'set_departed', 'set_arrived', 'set_received', 'set_closed', 'export_to_excel']
 
     @admin.action(description='📦 3. ขึ้นตู้แล้ว (Loaded)')
     def set_loaded(self, request, queryset):

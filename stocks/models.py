@@ -2745,6 +2745,13 @@ def sync_sales_payment_ledger(sender, instance, **kwargs):
 
 
 @receiver(post_save, sender=PurchasePaymentLog)
+def _intl_po_paid_status(sender, instance, **kwargs):
+    # P4 (ต่างประเทศ): บันทึกจ่ายเงินครั้งแรกใน A3 -> สถานะ Tracking ขยับเป็น Paid (แทน action "จ่ายเงินแล้ว" เดิม)
+    PurchaseOrder.objects.filter(pk=instance.purchase_order_id, supplier__type='International',
+                                 status__in=('Pending', 'Confirmed', 'Ordered')).update(status='Paid')
+
+
+@receiver(post_save, sender=PurchasePaymentLog)
 def sync_purchase_payment_ledger(sender, instance, **kwargs):
     if instance.batch_ref:
         BankTransaction.objects.filter(purchase_payment=instance).delete()
