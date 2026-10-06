@@ -6690,6 +6690,14 @@ class BankTxnPeriodFilter(admin.SimpleListFilter):
         return queryset.filter(txn_date__lte=today)
 
 
+def unassigned_txn_q():
+    """รายการที่ยังไม่ระบุสมุดบัญชี — นับเฉพาะที่เกิดตั้งแต่วันยอดยกมา (เร็วสุดของบัญชีที่ใช้งาน)
+    รายการก่อนหน้านั้นรวมอยู่ในยอดยกมาแล้ว ไม่ต้องระบุบัญชี"""
+    start = BankAccount.objects.filter(is_active=True).aggregate(d=models.Min('opening_date'))['d']
+    q = Q(bank_account__isnull=True)
+    return q & Q(txn_date__gte=start) if start else q
+
+
 class BankTxnAccountFilter(admin.SimpleListFilter):
     """รายการเดินบัญชี: ดูทีละสมุดบัญชี (ไม่มี "ทั้งหมด") ค่าเริ่มต้น = บัญชีหลัก — ยอดคงเหลือคิดต่อบัญชี จึงอ่านต่อกันได้"""
     title = "สมุดบัญชี"
@@ -6718,7 +6726,7 @@ class BankTxnAccountFilter(admin.SimpleListFilter):
     def queryset(self, request, queryset):
         selected = self._selected()
         if selected == 'none':
-            return queryset.filter(bank_account__isnull=True)
+            return queryset.filter(unassigned_txn_q())
         if selected.isdigit():
             return queryset.filter(bank_account_id=int(selected))
         return queryset
@@ -6838,7 +6846,7 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
             money_out = -(totals['money_out'] or Decimal(0))
             response.context_data['bank_summary'] = {
                 'money_in': money_in, 'money_out': money_out, 'net': money_in - money_out,
-                'unassigned': BankTransaction.objects.filter(bank_account__isnull=True).count(),
+                'unassigned': BankTransaction.objects.filter(unassigned_txn_q()).count(),
             }
             # บัญชีแฟคตอริ่ง: แถบค้างรับรายเดือน (ส่วนที่เหลือ + IV ที่ยังไม่ขาย) + DC/Rebate ที่ยังไม่ยืนยัน
             selected = BankTxnAccountFilter.selected_value(request.GET.get(BankTxnAccountFilter.parameter_name))
