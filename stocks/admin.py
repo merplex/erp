@@ -6738,7 +6738,7 @@ class BankTxnAccountFilter(admin.SimpleListFilter):
 
 @admin.register(BankTransaction)
 class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
-    list_display = ('get_date', 'bank_account', 'source_type', 'category', 'get_reference', 'party', 'description',
+    list_display = ('get_date', 'bank_account', 'source_type', 'category', 'get_reference', 'party', 'get_description',
                     'get_in', 'get_out', 'get_balance')
     list_display_links = ('get_date',)
     list_filter = (
@@ -6925,6 +6925,12 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
     @admin.display(description="วันที่", ordering='txn_date')
     def get_date(self, obj):
         return obj.txn_date.strftime('%d/%m/%Y')
+
+    @admin.display(description="รายละเอียด", ordering='description')
+    def get_description(self, obj):
+        # แสดงไม่เกิน 3 บรรทัด เกินตัดเป็น ... (เช่น จ่ายเงินรวมหลาย PO) — ดูเต็มในใบ / Export Excel ได้ข้อความเต็ม
+        return format_html('<span style="display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;'
+                           'overflow:hidden;max-width:320px;">{}</span>', obj.description or '')
 
     @admin.display(description="เอกสาร", ordering='reference')
     def get_reference(self, obj):
