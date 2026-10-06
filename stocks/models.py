@@ -3343,10 +3343,51 @@ def resync_factoring_month(customer_id, month):
     if target is not None and deductions.exists():
         ids = list(deductions.exclude(bank_account_id=target).values_list('pk', flat=True))
         SalesPayment.objects.filter(pk__in=ids).update(bank_account_id=target)
-        BankTransaction.objects.filter(sales_payment_id__in=ids).update(bank_account_id=target)
+        if remainders:
+            # สมุดแฟคตอริ่ง: DC/Rebate ไม่แยกต่อรายการส่งของ -> รวมเป็นรายการเดียว (สร้างด้านล่าง)
+            BankTransaction.objects.filter(sales_payment__in=deductions).delete()
+        else:
+            for d in SalesPayment.objects.filter(pk__in=deductions.values('pk')).select_related('order__customer'):
+                sync_sales_payment_ledger(SalesPayment, d)  # กลับบัญชีหลัก -> รายการแยกตามเดิม
 
-    carry = -(SalesPayment.objects.filter(order__customer_id=customer_id, deduct_month=month)
-              .exclude(deduction_kind='').aggregate(t=Sum('amount'))['t'] or 0)
+    dc_total = -(SalesPayment.objects.filter(order__customer_id=customer_id, deduct_month=month, deduction_kind='DC')
+                 .aggregate(t=Sum('amount'))['t'] or 0)
+    rebate_total = -(SalesPayment.objects.filter(order__customer_id=customer_id, deduct_month=month,
+                                                 deduction_kind='REBATE').aggregate(t=Sum('amount'))['t'] or 0)
+    carry = round_money(dc_total + rebate_total)
+
+    # ลดหนี้ที่ออกหลังขายแฟคตอริ่ง: ลูกค้าจ่ายแฟคตอริ่งน้อยลง = ยอดที่ขายไป - ยอดที่ลูกค้าต้องจ่ายตอนนี้
+    cn_total, cn_docs = Decimal(0), []
+    for r in remainders:
+        advance_amt = (SalesPayment.objects.filter(order_id=r.order_id, factoring_role='ADVANCE',
+                                                   receipt_id=r.receipt_id).aggregate(t=Sum('amount'))['t'] or 0)
+        sold = r.amount + advance_amt
+        if r.receipt_id:
+            cns = CreditNote.objects.filter(receipt_id=r.receipt_id)
+            owed = (r.receipt.grand_total or 0) - (cns.aggregate(t=Sum('grand_total'))['t'] or 0)
+        else:
+            cns = CreditNote.objects.filter(sales_order_id=r.order_id)
+            owed = Decimal(str(r.order.grand_total or 0)) - Decimal(str(r.order.credited_total or 0))
+        excess = round_money(sold - owed)
+        if excess > 0 and cns.exists():
+            cn_total += excess
+            cn_docs += list(cns.values_list('cn_number', flat=True))
+    carry += cn_total
+
+    if remainders and (carry > 0):
+        fx0, first = remainders[0].bank_account, remainders[0]
+        pay_day = min(r.factoring_customer_paid_date or _as_date(r.payment_date) for r in remainders)
+        base = {'bank_account': fx0, 'txn_date': pay_day, 'source_type': 'FACTORING', 'factoring_payment': first,
+                'party': first.order.customer.company_name if first.order.customer_id else ''}
+        if dc_total or rebate_total:
+            parts = [f"DC {dc_total:,.2f}" if dc_total else '', f"Rebate {rebate_total:,.2f}" if rebate_total else '']
+            BankTransaction.objects.create(amount=-round_money(dc_total + rebate_total), reference='หัก DC/Rebate',
+                                           description=f"หัก {' + '.join(p for p in parts if p)} "
+                                                       f"(รอบ {month:%m/%Y})"[:255], **base)
+        if cn_total:
+            BankTransaction.objects.create(amount=-cn_total, reference='ลดหนี้',
+                                           description=f"ลดหนี้ {', '.join(cn_docs)}"[:255], **base)
+
     for r in remainders:
         fx = r.bank_account
         # เงินเบิกของชุดเดียวกัน (ทั้ง SO หรือใบ IV เดียวกัน)
@@ -3375,7 +3416,7 @@ def resync_factoring_month(customer_id, month):
         net = available - used
         # carry ที่เหลือหลังแถวสุดท้าย = ยอดติดลบค้างในบัญชีแฟคตอริ่งเอง (ไม่มีรายการโอน)
         if net > 0:
-            label = "ส่วนที่เหลือ" + (f" (หัก DC/Rebate {used:,.2f})" if used else "")
+            label = "ส่วนที่เหลือ" + (f" (หัก DC/Rebate/ลดหนี้ {used:,.2f})" if used else "")
             _factoring_transfer(fx, r, net, label)
     rebuild_factoring_transfers()
 
