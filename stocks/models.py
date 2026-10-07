@@ -3346,11 +3346,16 @@ def next_business_day(today=None):
 
 
 def factoring_preview_amount(order, receipt=None):
-    """ยอดที่จะขายแฟคตอริ่ง (แสดงในหน้ายืนยัน) — ทั้ง SO = ยอดค้างรับ SO / ราย IV = ยอดค้างของใบ"""
+    """ยอดที่จะขายแฟคตอริ่ง — แฟคตอริ่งรับซื้อยอดเต็มของใบเสมอ (ไม่หักใบลดหนี้ — ลูกค้าหักเองตอนโอน
+    แล้วแฟคตอริ่งหักจากส่วนที่เหลือตามเดือนที่เลือกไว้ที่ใบลดหนี้) หักเฉพาะเงินที่รับมาแล้ว
+    ทั้ง SO = ยอดสุทธิ SO - ที่รับแล้ว / ราย IV = ยอดค้างของใบ + ใบลดหนี้ของใบ"""
     if receipt is None:
-        return round_money(order.balance_due)
+        return round_money(order.balance_due + order.credited_total)
     state = receipt_payment_states([order.pk]).get(receipt.pk)
-    return round_money(state[1]) if state and state[0] not in ('PAID', 'SETTLED') else Decimal(0)
+    if not state or state[0] in ('PAID', 'SETTLED'):
+        return Decimal(0)
+    credited = CreditNote.objects.filter(receipt=receipt).aggregate(t=Sum('grand_total'))['t'] or Decimal(0)
+    return round_money(state[1] + credited)
 
 
 def factoring_paid_date(order, receipt=None):
@@ -3395,7 +3400,7 @@ def create_factoring_payments(order, receipt=None, advance_date=None):
     if receipt is None:
         if order.payments.filter(factoring_role__gt='', receipt__isnull=True).exists():
             return False, f"{label}: ขายแฟคตอริ่งไปแล้ว"
-        balance = round_money(order.balance_due)
+        balance = factoring_preview_amount(order)
     else:
         blocker = factoring_blocker(order, receipt)
         if blocker:
@@ -3915,33 +3920,20 @@ def resync_factoring_month(customer_id, month):
 
 def factoring_cn_allocations(customer_id):
     """ใบลดหนี้ของลูกค้าที่แฟคตอริ่งต้องหักคืน {cn_id: ยอด}
-    ต่อชุดที่ขาย (ใบ IV หรือทั้ง SO): ส่วนที่ขายเกินยอดที่ลูกค้าต้องจ่ายตอนนี้ = ยอดที่ขาย - (ยอดใบ - ใบลดหนี้)
-    แบ่งให้ใบลดหนี้จากใบล่าสุดย้อนไป (ใบที่ออกก่อนขาย ยอดขายหักไปแล้ว จึงไม่ได้ส่วนแบ่ง)"""
+    แฟคตอริ่งรับซื้อยอดเต็มของใบเสมอ -> ใบลดหนี้ทุกใบของใบ IV (หรือ SO) ที่ขายแล้ว ไม่ว่าออกก่อนหรือหลังขาย
+    ลูกค้าหักเองตอนโอน แฟคตอริ่งจึงหักเต็มจำนวนจากส่วนที่เหลือ (ไม่เกินยอดที่ขายของชุดนั้น)"""
     result = {}
     sets = (SalesPayment.objects.filter(order__customer_id=customer_id).exclude(factoring_role='')
             .values('order_id', 'receipt_id').order_by().annotate(sold=Sum('amount')))
     for g in sets:
-        if g['receipt_id']:
-            receipt = SalesReceipt.objects.filter(pk=g['receipt_id']).first()
-            if receipt is None:
-                continue
-            cns = CreditNote.objects.filter(receipt_id=receipt.pk)
-            total = receipt.grand_total or 0
-        else:
-            order = SalesOrder.objects.get(pk=g['order_id'])
-            cns = CreditNote.objects.filter(sales_order_id=order.pk)
-            total = Decimal(str(order.grand_total or 0))
-        cns = list(cns.order_by('-doc_date', '-id'))
-        if not cns:
-            continue
-        excess = round_money((g['sold'] or 0) - (total - sum((c.grand_total for c in cns), Decimal(0))))
-        for cn in cns:
-            if excess <= 0:
-                break
-            used = min(excess, cn.grand_total)
+        cns = (CreditNote.objects.filter(receipt_id=g['receipt_id']) if g['receipt_id']
+               else CreditNote.objects.filter(sales_order_id=g['order_id']))
+        left = round_money(g['sold'] or 0)
+        for cn in cns.order_by('doc_date', 'id'):
+            used = min(left, round_money(cn.grand_total))
             if used > 0:
                 result[cn.pk] = result.get(cn.pk, Decimal(0)) + used
-                excess -= used
+                left -= used
     return result
 
 
