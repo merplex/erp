@@ -2004,7 +2004,7 @@ class PurchaseOrderAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelM
 class FactoringDateForm(forms.Form):
     advance_date = forms.DateField(
         label="วันเงินเบิกเข้า", widget=forms.DateInput(attrs=BOX_DATE_ATTRS, format='%Y-%m-%d'),
-        help_text="ค่าเริ่มต้น = พรุ่งนี้ (ตรงเสาร์-อาทิตย์ เลื่อนเป็นวันจันทร์) กดไอคอนปฏิทินเพื่อเลือกวันเอง")
+        help_text="ค่าเริ่มต้น = พรุ่งนี้ (ตรงวันหยุด เสาร์-อาทิตย์/31 ธ.ค./1 ม.ค. เลื่อนเป็นวันทำการถัดไป) กดไอคอนปฏิทินเพื่อเลือกวันเอง")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -2042,6 +2042,20 @@ def factoring_confirm(modeladmin, request, pairs, action_name, selected_ids):
         rows.append({'doc': receipt.receipt_number if receipt else order.so_number, 'customer': order.customer,
                      'account': account, 'amount': amount, 'advance': advance, 'fee': fee, 'interest': interest,
                      'net': advance - fee - interest})
+    # ค่าธรรมเนียมขั้นต่ำต่อลูกหนี้: รวมของลูกค้าเดียวกันไม่ถึงขั้นต่ำ -> เติมส่วนต่างที่ใบสุดท้ายของลูกค้า
+    # (ประมาณการ — ถ้าวันเดียวกันมีใบที่ขายไว้ก่อนแล้ว ระบบคิดรวมทั้ง Batch ตอนบันทึก)
+    last = {}
+    for row in rows:
+        if row['account'] is not None and row['account'].account_type == 'FACTORING' and row['amount'] > 0:
+            last[(row['account'].pk, row['customer'].pk if row['customer'] else 0)] = row
+    for (account_id, customer_id), row in last.items():
+        minimum = row['account'].factoring_fee_minimum or Decimal(0)
+        same = [r for r in rows if r['account'] is not None and r['account'].pk == account_id
+                and (r['customer'].pk if r['customer'] else 0) == customer_id]
+        short = round_money(minimum) - sum((r['fee'] for r in same), Decimal(0))
+        if minimum and short > 0:
+            row['fee'] += short
+            row['net'] -= short
     return TemplateResponse(request, 'admin/stocks/factoring_confirm.html', {
         **modeladmin.admin_site.each_context(request),
         'title': "ขายแฟคตอริ่ง", 'opts': modeladmin.model._meta, 'form': form, 'rows': rows,
@@ -6584,9 +6598,10 @@ class BankAccountAdmin(UnfoldModelAdmin):
         (None, {'fields': ('name', 'account_type', 'bank_name', 'branch', 'account_number',
                            'opening_balance', 'opening_date', 'is_default', 'is_active', 'notes')}),
         ("บัญชีเครดิต", {'fields': ('credit_limit', 'due_day', 'overdue_interest_rate')}),
-        ("บัญชีแฟคตอริ่ง", {'fields': ('linked_account', 'advance_percent', 'factoring_fee_percent',
+        ("บัญชีแฟคตอริ่ง", {'fields': ('linked_account', 'advance_percent',
+                                     ('factoring_fee_percent', 'factoring_fee_minimum'),
                                      'factoring_interest_rate', 'factoring_interest_timing',
-                                     'settle_business_days', 'factoring_doc_form')}),
+                                     'factoring_wht_percent', 'settle_business_days', 'factoring_doc_form')}),
     )
 
     class Media:
@@ -6644,10 +6659,11 @@ class BankAccountAdmin(UnfoldModelAdmin):
                                nxt.strftime('%d/%m/%Y') if nxt else '-',
                                f"{(obj.overdue_interest_rate or Decimal(0)).normalize():f}")
         if obj.account_type == 'FACTORING':
-            return format_html('ผูก {} · เบิก {}% · ค่าธรรมเนียม {}% · ดอก {}%/ปี ({})',
+            return format_html('ผูก {} · เบิก {}% · ค่าธรรมเนียม {}%{} · ดอก {}%/ปี ({})',
                                obj.linked_account.name if obj.linked_account_id else '⚠️ ยังไม่ผูก',
                                f"{(obj.advance_percent or Decimal(0)).normalize():f}",
                                f"{(obj.factoring_fee_percent or Decimal(0)).normalize():f}",
+                               f" (ขั้นต่ำ {obj.factoring_fee_minimum:,.2f}/ลูกหนี้)" if obj.factoring_fee_minimum else '',
                                f"{(obj.factoring_interest_rate or Decimal(0)).normalize():f}",
                                'หักภายหลัง' if obj.factoring_interest_timing == 'LATER' else 'หักทันที')
         return ''
@@ -6667,6 +6683,8 @@ class BankAccountAdmin(UnfoldModelAdmin):
                  name='stocks_bankaccount_factoring_docs'),
             path('<int:object_id>/factoring-docs/<str:day>/', self.admin_site.admin_view(self.factoring_doc_view),
                  name='stocks_bankaccount_factoring_doc'),
+            path('<int:object_id>/factoring-settle/<str:day>/',
+                 self.admin_site.admin_view(self.factoring_settle_view), name='stocks_bankaccount_factoring_settle'),
         ] + super().get_urls()
 
     def _factoring_account(self, request, object_id):
@@ -6682,10 +6700,14 @@ class BankAccountAdmin(UnfoldModelAdmin):
     def factoring_docs_view(self, request, object_id):
         """รายการเอกสารรับซื้อหนี้ของบัญชีแฟคตอริ่ง (1 ฉบับต่อวันเงินเบิกเข้า) เรียงใหม่ -> เก่า"""
         account = self._factoring_account(request, object_id)
-        # เอกสารรับซื้อหนี้ + ใบลดหนี้ที่แฟคตอริ่งหักคืน เรียงตามวันที่ใหม่ -> เก่า
+        # เอกสารรับซื้อหนี้ + ใบแจ้งรายละเอียดการชำระหนี้ เรียงตามวันที่ใหม่ -> เก่า
+        # ใบลดหนี้ที่หักแล้วอยู่ในใบแจ้งการชำระหนี้ — แสดงแยกเฉพาะใบที่เดือนที่เลือกไม่มียอดให้หัก
         entries = [{'kind': 'DOC', **d} for d in factoring_documents(account)]
-        entries += [{'kind': 'CN', **e} for e in factoring_cn_entries(account)]
-        entries.sort(key=lambda e: (e['date'], e['kind'] == 'CN'), reverse=True)
+        entries += [{'kind': 'SETTLE', **factoring_settlement(account, day)}
+                    for day in factoring_settlement_days(account)]
+        entries += [{'kind': 'CN', **e} for e in factoring_cn_entries(account) if not e['deducted']]
+        order = {'SETTLE': 0, 'DOC': 1, 'CN': 2}
+        entries.sort(key=lambda e: (e['date'], -order[e['kind']]), reverse=True)
         for e in entries:
             if e['kind'] == 'CN':
                 e['month_label'] = thai_month_label(e['month'])
@@ -6694,6 +6716,26 @@ class BankAccountAdmin(UnfoldModelAdmin):
             'title': f"รายการเอกสาร {account.name}",
         })
 
+    def factoring_settle_view(self, request, object_id, day):
+        """ใบแจ้งรายละเอียดการชำระหนี้: ส่วนที่เหลือที่แฟคตอริ่งโอนให้วันนี้ (ลูกค้าจ่ายเข้าแฟคตอริ่งแล้ว)"""
+        from django.http import Http404
+        account = self._factoring_account(request, object_id)
+        try:
+            day = datetime.date.fromisoformat(day)
+        except ValueError:
+            raise Http404("วันที่ไม่ถูกต้อง")
+        doc = factoring_settlement(account, day)
+        if doc is None:
+            raise Http404("ไม่มีเอกสารวันนี้")
+        from django.conf import settings
+        form = (account.factoring_doc_form or 'AIRA').lower()
+        return TemplateResponse(
+            request, [f'admin/factoring_settle_{form}.html', 'admin/factoring_settle_aira.html'], {
+                'account': account, 'linked': account.linked_account, 'doc': doc,
+                'company_name': settings.COMPANY_NAME, 'company_address': settings.COMPANY_ADDRESS,
+                'title': f"ใบแจ้งรายละเอียดการชำระหนี้ {account.name} {day:%d/%m/%Y}",
+            })
+
     def factoring_doc_view(self, request, object_id, day):
         from django.http import Http404
         account = self._factoring_account(request, object_id)
@@ -6701,6 +6743,20 @@ class BankAccountAdmin(UnfoldModelAdmin):
             day = datetime.date.fromisoformat(day)
         except ValueError:
             raise Http404("วันที่ไม่ถูกต้อง")
+        if request.method == 'POST' and self.has_change_permission(request):
+            # กรอกภาษีหัก ณ ที่จ่ายตามเอกสารจริง (ว่าง = คำนวณจาก % ของบัญชี) -> ยอดรับโอนเข้าบัญชีที่ผูกคำนวณใหม่
+            text = (request.POST.get('wht_amount') or '').replace(',', '').strip()
+            try:
+                value = Decimal(text) if text else None
+                if value is not None and (value < 0 or not value.is_finite() or value >= Decimal('1e14')):
+                    raise ValueError
+            except (ValueError, ArithmeticError):
+                self.message_user(request, "ภาษีหัก ณ ที่จ่าย: กรอกตัวเลข 0 ขึ้นไป", messages.ERROR)
+            else:
+                FactoringDocAdjustment.objects.update_or_create(bank_account=account, doc_date=day,
+                                                                defaults={'wht_amount': value})
+                rebuild_factoring_transfers()
+            return HttpResponseRedirect(request.path)
         doc = factoring_document(account, day)
         if doc is None:
             raise Http404("ไม่มีเอกสารวันนี้")
@@ -6710,6 +6766,7 @@ class BankAccountAdmin(UnfoldModelAdmin):
         form = (account.factoring_doc_form or 'AIRA').lower()
         return TemplateResponse(request, [f'admin/factoring_doc_{form}.html', 'admin/factoring_doc_aira.html'], {
             'account': account, 'linked': account.linked_account, 'doc': doc,
+            'can_edit': self.has_change_permission(request), 'messages': messages.get_messages(request),
             'amount_words': thai_baht_text(doc['net']), 'company_name': settings.COMPANY_NAME,
             'company_address': settings.COMPANY_ADDRESS,
             'title': f"เอกสารรับซื้อหนี้ {account.name} {day:%d/%m/%Y}",
@@ -7015,6 +7072,10 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
         elif obj.factoring_charge and SalesPayment.objects.filter(
                 bank_account_id=obj.bank_account_id, factoring_role='ADVANCE', payment_date=obj.txn_date).exists():
             url = reverse('admin:stocks_bankaccount_factoring_doc',
+                          args=[obj.bank_account_id, obj.txn_date.isoformat()])
+        elif obj.factoring_charge and SalesPayment.objects.filter(
+                bank_account_id=obj.bank_account_id, factoring_role='REMAINDER', payment_date=obj.txn_date).exists():
+            url = reverse('admin:stocks_bankaccount_factoring_settle',
                           args=[obj.bank_account_id, obj.txn_date.isoformat()])
         else:
             return '-'

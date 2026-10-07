@@ -36,10 +36,14 @@
     table.debts td { padding: 3px 6px; font-size: 12.5px; vertical-align: top; }
     table.debts td.num { text-align: right; white-space: nowrap; }
     table.debts tr.total td { font-weight: bold; padding-bottom: 12px; }
+    .wht-form { max-width: 800px; margin: 0 auto 12px auto; background: #eef6ff; border: 1px solid #bcd7f5; border-radius: 6px; padding: 10px 14px; font-size: 13px; }
+    .wht-form input { padding: 6px 8px; border: 1px solid #aaa; border-radius: 4px; width: 140px; text-align: right; }
+    .wht-form button { background: #2563eb; color: #fff; border: none; border-radius: 4px; padding: 7px 14px; cursor: pointer; }
+    .msg-error { color: #b91c1c; font-weight: bold; }
     .note { margin-top: 16px; color: #92400e; background: #fef3c7; padding: 8px 12px; border-radius: 4px; font-size: 12.5px; }
     @media print {
         body { background: #fff; padding: 0; }
-        .toolbar { display: none; }
+        .toolbar, .wht-form { display: none; }
         .page { box-shadow: none; max-width: none; padding: 0; }
         .note { display: none; }
     }
@@ -50,6 +54,15 @@
     <a href="{% url 'admin:stocks_bankaccount_factoring_docs' account.pk %}">‹ รายการเอกสาร</a>
     <button onclick="window.print()">🖨️ พิมพ์ / บันทึกเป็น PDF</button>
 </div>
+{% if can_edit %}
+<form method="post" class="wht-form">{% csrf_token %}
+    {% for m in messages %}<div class="msg-error">{{ m }}</div>{% endfor %}
+    ภาษีหัก ณ ที่จ่าย (แฟคตอริ่งบวกคืน):
+    <input type="text" name="wht_amount" inputmode="decimal" value="{% if doc.wht_manual %}{{ doc.wht|floatformat:"2" }}{% endif %}" placeholder="{{ doc.wht|floatformat:"2g" }}">
+    <button type="submit">บันทึก</button>
+    <span style="color:#555;">{% if doc.wht_manual %}กรอกเอง (ลบให้ว่างแล้วบันทึก = กลับไปคำนวณจาก %){% else %}ตอนนี้คำนวณจาก {{ account.factoring_wht_percent|floatformat:"-4" }}% ของ (ค่าโอนสิทธิ + ค่าธรรมเนียม) — กรอกยอดตามเอกสารจริงได้{% endif %}</span>
+</form>
+{% endif %}
 <div class="page">
     <div class="title-row">
         <h1>DETAILS OF DEBTS PURCHASED</h1>
@@ -84,7 +97,7 @@
         <tr><td></td><td>ตัดซื้อคืน</td><td class="amt"></td></tr>
         <tr><td></td><td>หนี้ที่คงค้าง , อื่นๆ</td><td class="amt"></td></tr>
         <tr><td class="k">บวก</td><td>คืนค่าโอนสิทธิ, คืนจากการรับชำระ, คืนผลต่างการชำระ และอื่นๆ</td><td class="amt"></td></tr>
-        <tr><td></td><td>ภาษีหัก ณ ที่จ่าย</td><td class="amt"></td></tr>
+        <tr><td></td><td>ภาษีหัก ณ ที่จ่าย</td><td class="amt">{% if doc.wht %}{{ doc.wht|floatformat:"2g" }}{% endif %}</td></tr>
         <tr><td></td><td>Rebate</td><td class="amt"></td></tr>
         <tr class="total"><td colspan="2" class="words">ตัวอักษร **{{ amount_words }}**</td>
             <td class="amt">{{ doc.net|floatformat:"2g" }}</td></tr>

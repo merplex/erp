@@ -27,7 +27,7 @@
 <body>
 <div class="wrap">
     <h1>📄 รายการเอกสาร — {{ account.name }}</h1>
-    <div class="sub">เอกสารรับซื้อหนี้ 1 ฉบับต่อวันที่แฟคตอริ่งจ่ายเงินเบิก + ใบลดหนี้ที่แฟคตอริ่งหักคืน (เรียงใหม่ → เก่า) · กดที่แถวเพื่อเปิดเอกสาร</div>
+    <div class="sub">เอกสารรับซื้อหนี้ (วันที่แฟคตอริ่งจ่ายเงินเบิก) + ใบแจ้งรายละเอียดการชำระหนี้ (วันที่แฟคตอริ่งโอนส่วนที่เหลือ) (เรียงใหม่ → เก่า) · กดที่แถวเพื่อเปิดเอกสาร</div>
     <table>
         <thead><tr>
             <th>วันที่</th>
@@ -56,6 +56,20 @@
                 <td class="num">-</td>
                 <td class="num neg"><b>-{{ d.amount|floatformat:"2g" }}</b></td>
                 <td><a class="open" href="{{ cn_url }}">เปิด ›</a></td>
+            </tr>
+            {% elif d.kind == 'SETTLE' %}
+            {% url 'admin:stocks_bankaccount_factoring_settle' account.pk d.date|date:"Y-m-d" as settle_url %}
+            <tr class="doc-row" onclick="window.location='{{ settle_url }}'">
+                <td style="white-space:nowrap;">{{ d.date|date:"d/m/Y" }}{% if d.date > today %} <span class="future">ล่วงหน้า</span>{% endif %}</td>
+                <td>ใบแจ้งรายละเอียดการชำระหนี้{% if d.total.deducted %}<br><span class="customers">ลูกค้าหัก DC/Rebate/ลดหนี้ {{ d.total.deducted|floatformat:"2g" }}</span>{% endif %}</td>
+                <td class="customers">{{ d.customers|join:", " }}</td>
+                <td class="num">{{ d.count }}</td>
+                <td class="num">{{ d.total.full|floatformat:"2g" }}</td>
+                <td class="num" title="ยอดเบิกที่แฟคตอริ่งตัดคืน">{{ d.total.advance|floatformat:"2g" }}</td>
+                <td class="num">{% if d.total.refund %}<span style="color:#16a34a;">+{{ d.total.refund|floatformat:"2g" }}</span>{% endif %}{% if d.total.extra %} <span class="neg">-{{ d.total.extra|floatformat:"2g" }}</span>{% endif %}{% if not d.total.refund and not d.total.extra %}-{% endif %}</td>
+                <td class="num">-</td>
+                <td class="num"><b>{{ d.total.reserve|floatformat:"2g" }}</b></td>
+                <td><a class="open" href="{{ settle_url }}">เปิด ›</a></td>
             </tr>
             {% else %}
             {% url 'admin:stocks_bankaccount_factoring_doc' account.pk d.date|date:"Y-m-d" as doc_url %}

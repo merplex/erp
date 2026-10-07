@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+{# ฟอร์มของไอร่า แฟคตอริ่ง (ใบแจ้งรายละเอียดการชำระหนี้) — แฟคตอริ่งเจ้าอื่นสร้างไฟล์ factoring_settle_<ฟอร์ม>.html แยก #}
+<style>
+    @page { size: A4 landscape; margin: 8mm 10mm; }
+    * { box-sizing: border-box; }
+    body { font-family: "Sarabun", "Tahoma", sans-serif; color: #222; margin: 0; padding: 24px; background: #f2f2f2; font-size: 12px; }
+    .toolbar { max-width: 1120px; margin: 0 auto 12px auto; display: flex; justify-content: space-between; align-items: center; }
+    .toolbar a { color: #2563eb; text-decoration: none; font-weight: bold; }
+    .toolbar button { background: #17a2b8; color: #fff; border: none; border-radius: 4px; padding: 10px 24px; font-size: 15px; font-weight: bold; cursor: pointer; }
+    .page { max-width: 1120px; margin: 0 auto; background: #fff; box-shadow: 0 0 8px rgba(0,0,0,0.15); padding: 24px 28px; overflow-x: auto; }
+    .head { display: flex; justify-content: space-between; gap: 24px; line-height: 1.6; margin-bottom: 10px; }
+    .head .issuer { flex: 1.2; font-size: 11.5px; }
+    .head .issuer b { font-size: 14px; }
+    .head .to { flex: 1; font-size: 11.5px; }
+    .head .doc { flex: 0.8; font-size: 12px; }
+    .head .doc b { font-size: 13px; }
+    table { width: 100%; border-collapse: collapse; }
+    table.debts th { border-top: 1px dotted #555; border-bottom: 1px dotted #555; padding: 4px 5px; font-size: 11.5px; text-align: center; }
+    table.debts td { padding: 3px 5px; font-size: 11.5px; vertical-align: top; }
+    td.num { text-align: right; white-space: nowrap; }
+    td.c { text-align: center; white-space: nowrap; }
+    tr.sub td { border-top: 1px dotted #555; font-weight: bold; }
+    tr.grand td { border-top: 1px dotted #555; border-bottom: 1px dotted #555; font-weight: bold; }
+    .transfer { padding: 4px 5px 6px 5px; }
+    .deduct { color: #92400e; font-size: 11px; }
+    h3 { margin: 18px 0 4px 0; font-size: 13px; }
+    table.reserve th { border-top: 1px dotted #555; border-bottom: 1px dotted #555; padding: 4px 5px; font-size: 11.5px; text-align: right; }
+    table.reserve th:first-child { text-align: left; }
+    table.reserve td { padding: 4px 5px; font-size: 12px; }
+    table.reserve tr.grand td { font-weight: bold; }
+    .note { margin-top: 14px; color: #555; font-size: 11px; }
+    @media print {
+        body { background: #fff; padding: 0; }
+        .toolbar { display: none; }
+        .page { box-shadow: none; max-width: none; padding: 0; }
+    }
+</style>
+</head>
+<body>
+<div class="toolbar">
+    <a href="{% url 'admin:stocks_bankaccount_factoring_docs' account.pk %}">‹ รายการเอกสาร</a>
+    <button onclick="window.print()">🖨️ พิมพ์ / บันทึกเป็น PDF</button>
+</div>
+<div class="page">
+    <div class="head">
+        <div class="issuer">
+            <b>บริษัท ไอร่า แฟคตอริ่ง จำกัด (มหาชน)</b><br>
+            188 อาคารสปริง ทาวเวอร์ ชั้น 12A ยูนิตที่ 6-10 ถนนพญาไท แขวงทุ่งพญาไท<br>
+            เขตราชเทวี กรุงเทพมหานคร 10400 โทรศัพท์(02) 657-6222 โทรสาร (02) 657-6244<br>
+            ทะเบียนการค้าเลขที่ 0107547000141
+        </div>
+        <div class="to">
+            เรียน {{ company_name }}<br>
+            {{ company_address|linebreaksbr }}
+        </div>
+        <div class="doc">
+            <b>ใบแจ้งรายละเอียดการชำระหนี้</b><br>
+            Date : {{ doc.date|date:"d/m/Y" }}
+        </div>
+    </div>
+
+    <table class="debts">
+        <thead><tr>
+            <th style="text-align:left;">เลขที่เอกสาร</th>
+            <th style="text-align:left;">ลูกหนี้</th>
+            <th>จำนวนเงิน<br>ตามเอกสาร</th>
+            <th>ยอดหนี้<br>ตามบัญชี</th>
+            <th>การตัดชำระ<br>ตามมูลค่าเอกสาร</th>
+            <th>วันชำระ</th>
+            <th>วันครบ<br>กำหนด</th>
+            <th>วัน</th>
+            <th>ค่าโอนสิทธิ<br>เก็บเพิ่ม</th>
+            <th>เบี้ยปรับ</th>
+            <th>ค่าโอนสิทธิส่งคืน</th>
+        </tr></thead>
+        <tbody>
+        {% for b in doc.batches %}
+            <tr><td></td><td colspan="10" class="transfer">เงินโอน {{ b.transfer|floatformat:"2g" }} บาท ({{ b.customer.company_name|default:"-" }})</td></tr>
+            {% for r in b.rows %}
+            <tr>
+                <td>{{ r.ref }}</td>
+                <td>{{ b.customer.company_name|default:"-" }}</td>
+                <td class="num">{{ r.full|floatformat:"2g" }}</td>
+                <td class="num">{{ r.advance|floatformat:"2g" }}</td>
+                <td class="num">{{ r.advance|floatformat:"2g" }}</td>
+                <td class="c">{{ r.paid_date|date:"d/m/Y" }}</td>
+                <td class="c">{{ r.due_date|date:"d/m/Y" }}</td>
+                <td class="c">{{ r.days }}</td>
+                <td class="num">{{ r.extra|floatformat:"2g" }}</td>
+                <td class="num">0.00</td>
+                <td class="num">{{ r.refund|floatformat:"2g" }}</td>
+            </tr>
+            {% endfor %}
+            {% if b.deductions %}
+            <tr><td></td><td colspan="10" class="deduct">
+                ลูกค้าหักจากยอดชำระ {{ b.deducted|floatformat:"2g" }} :
+                {% for d in b.deductions %}{{ d.description }}{% if not forloop.last %} · {% endif %}{% endfor %}
+            </td></tr>
+            {% endif %}
+            <tr class="sub">
+                <td></td>
+                <td>รวม {{ b.customer.company_name|default:"-" }}</td>
+                <td class="num">{{ b.full|floatformat:"2g" }}</td>
+                <td class="num">{{ b.advance|floatformat:"2g" }}</td>
+                <td class="num">{{ b.advance|floatformat:"2g" }}</td>
+                <td colspan="3"></td>
+                <td class="num">{{ b.extra|floatformat:"2g" }}</td>
+                <td class="num">0.00</td>
+                <td class="num">{{ b.refund|floatformat:"2g" }}</td>
+            </tr>
+        {% endfor %}
+            <tr class="grand">
+                <td></td>
+                <td style="text-align:right;">รวมทั้งหมด</td>
+                <td class="num">{{ doc.total.full|floatformat:"2g" }}</td>
+                <td class="num">{{ doc.total.advance|floatformat:"2g" }}</td>
+                <td class="num">{{ doc.total.advance|floatformat:"2g" }}</td>
+                <td colspan="3"></td>
+                <td class="num">{{ doc.total.extra|floatformat:"2g" }}</td>
+                <td class="num">0.00</td>
+                <td class="num">{{ doc.total.refund|floatformat:"2g" }}</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3>Reserve Payment</h3>
+    <table class="reserve">
+        <thead><tr>
+            <th>ลูกหนี้</th>
+            <th>Paid Amount (1)</th>
+            <th>Purchase Amount (2)</th>
+            <th>Rebate (3)</th>
+            <th>Fine (4)</th>
+            <th>Penalty (5)</th>
+            <th>Other Invoice (6)</th>
+            <th>Other (7)</th>
+            <th>Reserve Amount<br>(8)=(1)-(2)+(3)-(4)-(5)+(6)+(7)</th>
+        </tr></thead>
+        <tbody>
+        {% for b in doc.batches %}
+            <tr>
+                <td>{{ b.customer.company_name|default:"-" }}</td>
+                <td class="num">{{ b.paid|floatformat:"2g" }}</td>
+                <td class="num">{{ b.advance|floatformat:"2g" }}</td>
+                <td class="num">{{ b.refund|floatformat:"2g" }}</td>
+                <td class="num">{{ b.extra|floatformat:"2g" }}</td>
+                <td class="num">0.00</td>
+                <td class="num">{{ b.other|floatformat:"2g" }}</td>
+                <td class="num">0.00</td>
+                <td class="num">{{ b.reserve|floatformat:"2g" }}</td>
+            </tr>
+        {% endfor %}
+            <tr class="grand">
+                <td style="text-align:right;">รวม</td>
+                <td class="num">{{ doc.total.paid|floatformat:"2g" }}</td>
+                <td class="num">{{ doc.total.advance|floatformat:"2g" }}</td>
+                <td class="num">{{ doc.total.refund|floatformat:"2g" }}</td>
+                <td class="num">{{ doc.total.extra|floatformat:"2g" }}</td>
+                <td class="num">0.00</td>
+                <td class="num">{{ doc.total.other|floatformat:"2g" }}</td>
+                <td class="num">0.00</td>
+                <td class="num">{{ doc.total.reserve|floatformat:"2g" }}</td>
+            </tr>
+        </tbody>
+    </table>
+    <div class="note">Paid Amount (1) = ยอดตามเอกสาร − ยอดที่ลูกค้าหัก (DC/Rebate/ลดหนี้) · Other Invoice (6) = เงินที่ลูกค้าโอนเข้าแฟคตอริ่งสำหรับใบที่ไม่ได้ขาย · ยอดในระบบเป็นยอดคำนวณ เทียบกับเอกสารจริงของแฟคตอริ่ง</div>
+</div>
+</body>
+</html>
