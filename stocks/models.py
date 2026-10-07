@@ -803,6 +803,8 @@ class PurchaseOrder(models.Model):
         self.save(update_fields=['status', 'received_date'])
 
     def update_payment_status(self):
+        if self.payment_status == 'SETTLED':  # ปิดยอดกรณีพิเศษ = ตัดจบเอง ไม่คำนวณทับ
+            return
         paid = self.total_paid_amount
         total = round_money(self.grand_total)
         if total > 0:
@@ -2834,6 +2836,17 @@ def sync_purchase_payment_ledger(sender, instance, **kwargs):
         'description': (instance.notes or 'จ่ายเงินซื้อ')[:255],
         'created_by_id': instance.user_id,
     })
+
+
+@receiver(post_save, sender=PurchasePaymentLog)
+@receiver(post_delete, sender=PurchasePaymentLog)
+@receiver(post_save, sender=PurchaseItem)
+@receiver(post_delete, sender=PurchaseItem)
+def _refresh_po_payment_status(sender, instance, **kwargs):
+    # สถานะการเงิน PO คำนวณจากรายการจ่ายเงินเทียบยอดสุทธิเสมอ ไม่ว่าเพิ่ม/แก้/ลบจากหน้าไหน (ลบ PO ทั้งใบ -> ไม่มีใบให้อัปเดต)
+    po = PurchaseOrder.objects.filter(pk=instance.purchase_order_id).first()
+    if po is not None:
+        po.update_payment_status()
 
 
 @receiver(post_delete, sender=SalesPayment)
