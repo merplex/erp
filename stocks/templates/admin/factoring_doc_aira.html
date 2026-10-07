@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+{# ฟอร์มของไอร่า แฟคตอริ่ง (DETAILS OF DEBTS PURCHASED) — แฟคตอริ่งเจ้าอื่นสร้างไฟล์ factoring_doc_<ฟอร์ม>.html แยก #}
+<style>
+    @page { size: A4; margin: 10mm 12mm; }
+    * { box-sizing: border-box; }
+    body { font-family: "Sarabun", "Tahoma", sans-serif; color: #222; margin: 0; padding: 24px; background: #f2f2f2; font-size: 13px; }
+    .toolbar { max-width: 800px; margin: 0 auto 12px auto; display: flex; justify-content: space-between; align-items: center; }
+    .toolbar a { color: #2563eb; text-decoration: none; font-weight: bold; }
+    .toolbar button { background: #17a2b8; color: #fff; border: none; border-radius: 4px; padding: 10px 24px; font-size: 15px; font-weight: bold; cursor: pointer; }
+    .page { max-width: 800px; margin: 0 auto; background: #fff; box-shadow: 0 0 8px rgba(0,0,0,0.15); padding: 28px 32px; }
+    .title-row { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 3px solid #222; padding-bottom: 6px; }
+    .title-row h1 { margin: 0; font-family: "Times New Roman", serif; font-size: 22px; letter-spacing: .3px; }
+    .title-row table td { padding: 0 0 0 16px; font-size: 13px; }
+    .title-row table td.lbl { font-weight: bold; text-align: right; }
+    .head { display: flex; justify-content: space-between; gap: 24px; margin: 18px 0; line-height: 1.6; }
+    .head .issuer { flex: 1.3; }
+    .head .issuer .th { font-weight: bold; font-size: 15px; }
+    .head .issuer .en { font-weight: bold; font-family: "Times New Roman", serif; font-size: 14px; }
+    .head .to { flex: 1; }
+    .head .to b { display: block; }
+    .summary { width: 100%; border-collapse: collapse; border: 1px solid #999; margin-bottom: 18px; }
+    .summary td { padding: 3px 10px; vertical-align: top; }
+    .summary td.amt { border-left: 1px solid #999; text-align: right; width: 34%; font-size: 14px; }
+    .summary td.k { width: 60px; }
+    .summary tr.total td { border-top: 1px solid #999; padding: 8px 10px; font-weight: bold; }
+    .summary tr.total td.amt { font-size: 16px; }
+    .summary .words { text-align: center; }
+    .xfer-head { display: flex; justify-content: space-between; font-weight: bold; border-bottom: 1px solid #222; padding-bottom: 2px; margin-top: 8px; }
+    .xfer { display: flex; justify-content: space-between; padding: 4px 0 10px 0; }
+    table.debts { width: 100%; border-collapse: collapse; }
+    table.debts th { border-top: 1px solid #222; border-bottom: 1px solid #222; padding: 4px 6px; font-size: 12.5px; text-align: center; }
+    table.debts td { padding: 3px 6px; font-size: 12.5px; vertical-align: top; }
+    table.debts td.num { text-align: right; white-space: nowrap; }
+    table.debts tr.total td { font-weight: bold; padding-bottom: 12px; }
+    .note { margin-top: 16px; color: #92400e; background: #fef3c7; padding: 8px 12px; border-radius: 4px; font-size: 12.5px; }
+    @media print {
+        body { background: #fff; padding: 0; }
+        .toolbar { display: none; }
+        .page { box-shadow: none; max-width: none; padding: 0; }
+        .note { display: none; }
+    }
+</style>
+</head>
+<body>
+<div class="toolbar">
+    <a href="{% url 'admin:stocks_bankaccount_factoring_docs' account.pk %}">‹ รายการเอกสาร</a>
+    <button onclick="window.print()">🖨️ พิมพ์ / บันทึกเป็น PDF</button>
+</div>
+<div class="page">
+    <div class="title-row">
+        <h1>DETAILS OF DEBTS PURCHASED</h1>
+        <table><tr><td class="lbl">DATE</td><td>{{ doc.date|date:"d/m/Y" }}</td></tr></table>
+    </div>
+
+    <div class="head">
+        <div class="issuer">
+            <div class="th">บริษัท ไอร่า แฟคตอริ่ง จำกัด (มหาชน)</div>
+            <div class="en">AIRA FACTORING PUBLIC COMPANY LIMITED</div>
+            <div>188 อาคารสปริง ทาวเวอร์ ชั้น 12A ยูนิตที่ 6-10 ถนนพญาไท แขวงทุ่งพญาไท
+                เขตราชเทวี กรุงเทพมหานคร 10400 โทรศัพท์ 0 2657 6222 โทรสาร 0 2657 6244</div>
+            <div>เลขประจำตัวผู้เสียภาษีอากร 0107547000141</div>
+        </div>
+        <div class="to">
+            <b>เรียน</b>
+            {{ company_name }}<br>
+            {{ company_address|linebreaksbr }}
+        </div>
+    </div>
+
+    <table class="summary">
+        <tr><td colspan="2">จำนวนเงินรวมที่รับโอนสิทธิเรียกร้อง จากมูลค่าตามเอกสาร</td>
+            <td class="amt">{{ doc.advance|floatformat:"2g" }}</td></tr>
+        <tr><td class="k">(หัก)</td><td>ค่าโอนสิทธิเรียกร้อง</td>
+            <td class="amt">{% if doc.interest %}( {{ doc.interest|floatformat:"2g" }} ){% endif %}</td></tr>
+        <tr><td></td><td>ค่าธรรมเนียม</td>
+            <td class="amt">{% if doc.fee %}( {{ doc.fee|floatformat:"2g" }} ){% endif %}</td></tr>
+        <tr><td></td><td>หลักประกัน</td><td class="amt"></td></tr>
+        <tr><td></td><td>เรียกเก็บเพิ่ม</td><td class="amt"></td></tr>
+        <tr><td></td><td>ค่าเบี้ยปรับ</td><td class="amt"></td></tr>
+        <tr><td></td><td>ตัดซื้อคืน</td><td class="amt"></td></tr>
+        <tr><td></td><td>หนี้ที่คงค้าง , อื่นๆ</td><td class="amt"></td></tr>
+        <tr><td class="k">บวก</td><td>คืนค่าโอนสิทธิ, คืนจากการรับชำระ, คืนผลต่างการชำระ และอื่นๆ</td><td class="amt"></td></tr>
+        <tr><td></td><td>ภาษีหัก ณ ที่จ่าย</td><td class="amt"></td></tr>
+        <tr><td></td><td>Rebate</td><td class="amt"></td></tr>
+        <tr class="total"><td colspan="2" class="words">ตัวอักษร **{{ amount_words }}**</td>
+            <td class="amt">{{ doc.net|floatformat:"2g" }}</td></tr>
+    </table>
+
+    <div class="xfer-head"><span>โอนเงินเข้าบัญชี</span><span>ยอดโอน</span></div>
+    <div class="xfer">
+        <span>{% if linked %}Account No :{{ linked.account_number|default:"-" }} Bank :{{ linked.bank_name|default:linked.name }}{% if linked.branch %} Branch :{{ linked.branch }}{% endif %}{% else %}-{% endif %}</span>
+        <span>{{ doc.net|floatformat:"2g" }}</span>
+    </div>
+
+    <table class="debts">
+        <thead><tr>
+            <th style="text-align:left;">ลูกหนี้</th>
+            <th>วันครบ<br>กำหนด</th>
+            <th>เลขอ้างอิง</th>
+            <th style="text-align:right;">ยอด 100 %</th>
+            <th style="text-align:right;">ยอดรับซื้อ</th>
+            <th>ระยะเวลา<br>(วัน)</th>
+            <th style="text-align:right;">ค่าโอนสิทธิ<br>เรียกร้อง</th>
+        </tr></thead>
+        <tbody>
+        {% for b in doc.batches %}
+            <tr>
+                <td style="width:24%;">{{ b.customer.company_name|default:"-" }}</td>
+                <td style="text-align:center;white-space:nowrap;">{{ b.paid_date|date:"d/m/Y"|default:"-" }}</td>
+                <td colspan="5"></td>
+            </tr>
+            {% for r in b.rows %}
+            <tr>
+                <td colspan="2"></td>
+                <td>{{ r.ref }}</td>
+                <td class="num">{{ r.full|floatformat:"2g" }}</td>
+                <td class="num">{{ r.advance|floatformat:"2g" }}</td>
+                <td style="text-align:center;">{{ r.days }}</td>
+                <td class="num">{{ r.interest|floatformat:"2g" }}</td>
+            </tr>
+            {% endfor %}
+            <tr class="total">
+                <td colspan="2"></td>
+                <td>TOTAL</td>
+                <td class="num">{{ b.full|floatformat:"2g" }}</td>
+                <td class="num">{{ b.advance|floatformat:"2g" }}</td>
+                <td></td>
+                <td class="num">{{ b.interest|floatformat:"2g" }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+
+    {% if doc.interest_later %}
+    <div class="note">บางรายการตั้ง "หักดอกเบี้ยภายหลัง" — ค่าโอนสิทธิเรียกร้องของรายการนั้นเป็นยอดประมาณการ หักตอนลูกค้าจ่าย ไม่ได้หักในยอดโอนฉบับนี้</div>
+    {% endif %}
+</div>
+</body>
+</html>

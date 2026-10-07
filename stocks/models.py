@@ -1100,6 +1100,12 @@ class SalesPayment(models.Model):
     # ยอดที่แถวนี้โอนต่อจากบัญชีแฟคตอริ่งเข้าบัญชีที่ผูก (หลังหักค่าธรรมเนียม/ดอกเบี้ย/DC-Rebate)
     # สมุดบัญชีรวมยอดนี้เป็น 1 รายการโอนต่อบัญชีต่อวัน (rebuild_factoring_transfers) เหมือนสมุดบัญชีจริง
     factoring_net = models.DecimalField(max_digits=18, decimal_places=4, default=0, editable=False)
+    # เก็บไว้ที่แถว ADVANCE: หักดอกเบี้ยทันทีวันเงินเบิกเข้า (True) หรือหักตอนลูกค้าจ่าย (False) ณ วันที่ทำรายการ
+    factoring_interest_upfront = models.BooleanField(default=False, editable=False)
+    # ยอดค่าธรรมเนียม (แถว ADVANCE) / ดอกเบี้ย (แถว ADVANCE ถ้าหักทันที, แถว REMAINDER ถ้าหักภายหลัง) ที่คำนวณแล้ว
+    # สมุดบัญชีแฟคตอริ่งรวมเป็นก้อนเดียวต่อวัน (rebuild_factoring_charges) เหมือนเอกสารของแฟคตอริ่ง
+    factoring_fee = models.DecimalField(max_digits=18, decimal_places=4, default=0, editable=False)
+    factoring_interest = models.DecimalField(max_digits=18, decimal_places=4, default=0, editable=False)
     # ชำระครบหลายใบพร้อมกัน (action A3/A4) = เงินก้อนเดียว — สมุดบัญชีรวมเป็น 1 รายการ (rebuild_payment_batch)
     batch_ref = models.CharField(max_length=32, blank=True, default='', db_index=True, editable=False)
     # รายการหัก DC/Rebate ที่สร้างจาก A5 (1 แถวต่อรายการส่งของ + ประเภท) และรอบเดือนที่เลือกให้หัก
@@ -1619,6 +1625,8 @@ class CreditNote(models.Model):
                                     editable=False, verbose_name="ใบสั่งขาย")
     doc_date = models.DateField(default=datetime.date.today, db_index=True, verbose_name="วันที่")
     reason = models.CharField(max_length=255, blank=True, verbose_name="สาเหตุการลดหนี้")
+    # วันที่ 1 ของเดือนที่ให้หักจากยอดชำระของลูกค้า — ใบที่ขายแฟคตอริ่ง: แฟคตอริ่งหักจากส่วนที่เหลือของลูกค้าเดือนนี้
+    deduct_month = models.DateField(null=True, blank=True, verbose_name="หักจากยอดชำระเดือน")
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     subtotal = models.DecimalField(max_digits=14, decimal_places=2, default=0, editable=False, verbose_name="มูลค่า")
     vat_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0, editable=False, verbose_name="ภาษีมูลค่าเพิ่ม")
@@ -1639,6 +1647,10 @@ class CreditNote(models.Model):
             self.cn_number = generate_number('CN', CreditNote, 'cn_number')
         if self.receipt_id:
             self.sales_order_id = self.receipt.sales_order_id
+        if self.deduct_month:
+            self.deduct_month = self.deduct_month.replace(day=1)
+        elif self.doc_date:
+            self.deduct_month = _as_date(self.doc_date).replace(day=1)
         super().save(*args, **kwargs)
 
     def recalc_totals(self):
@@ -1690,6 +1702,26 @@ def _refresh_payment_status_on_cn_delete(sender, instance, **kwargs):
         instance.sales_order.update_payment_status()
     except SalesOrder.DoesNotExist:
         pass
+
+
+@receiver(models.signals.pre_save, sender=CreditNote)
+def _cn_old_deduct_month(sender, instance, **kwargs):
+    instance._old_deduct_month = (CreditNote.objects.filter(pk=instance.pk).values_list('deduct_month', flat=True)
+                                  .first() if instance.pk else None)
+
+
+@receiver(post_save, sender=CreditNote)
+@receiver(post_delete, sender=CreditNote)
+def _cn_factoring_resync(sender, instance, **kwargs):
+    # ใบลดหนี้ของใบที่ขายแฟคตอริ่ง: แฟคตอริ่งหักจากส่วนที่เหลือของลูกค้าในเดือนที่เลือก -> คำนวณเดือนเก่า/ใหม่ใหม่
+    try:
+        customer_id = instance.sales_order.customer_id
+    except SalesOrder.DoesNotExist:
+        return
+    if not SalesPayment.objects.filter(order_id=instance.sales_order_id).exclude(factoring_role='').exists():
+        return
+    for month in {instance.deduct_month, getattr(instance, '_old_deduct_month', None)} - {None}:
+        resync_factoring_month(customer_id, month)
 
 
 def _delivery_local_date(dt_value):
@@ -2593,6 +2625,18 @@ class BankAccount(models.Model):
     settle_business_days = models.PositiveSmallIntegerField(
         default=2, verbose_name="รับส่วนที่เหลือหลังลูกค้าจ่าย (วันทำการ)",
         help_text="นับข้ามเสาร์-อาทิตย์ เช่น 2: ลูกค้าจ่ายวันศุกร์ -> ได้รับวันอังคาร")
+    INTEREST_TIMINGS = [
+        ('UPFRONT', 'หักดอกเบี้ยทันที (วันที่จ่ายเงินเบิก)'),
+        ('LATER', 'หักดอกเบี้ยภายหลัง (วันที่ลูกค้าจ่าย)'),
+    ]
+    factoring_interest_timing = models.CharField(
+        max_length=10, choices=INTEREST_TIMINGS, default='UPFRONT', verbose_name="การหักดอกเบี้ย",
+        help_text="ทันที: หักจากเงินเบิกวันที่แฟคตอริ่งจ่ายเงินให้เรา (คิดล่วงหน้าถึงวันที่ลูกค้าจ่าย) เช่น ไอร่า / "
+                  "ภายหลัง: หักจากส่วนที่เหลือตอนลูกค้าจ่าย")
+    FACTORING_DOC_FORMS = [('AIRA', 'ไอร่า (DETAILS OF DEBTS PURCHASED)')]
+    factoring_doc_form = models.CharField(
+        max_length=20, choices=FACTORING_DOC_FORMS, default='AIRA', verbose_name="แบบฟอร์มเอกสาร",
+        help_text="รูปแบบเอกสารรายการรับซื้อหนี้ในหน้า \"รายการเอกสาร\" (แต่ละแฟคตอริ่งมีฟอร์มของตัวเองได้)")
 
     class Meta:
         verbose_name = "สมุดบัญชี"
@@ -2701,6 +2745,10 @@ class BankTransaction(models.Model):
     # โอนระหว่างบัญชี: แถวฝั่งบัญชีปลายทาง (source TRANSFER) ชี้กลับไปแถวที่ผู้ใช้บันทึก — แก้/ลบที่แถวต้นเท่านั้น
     transfer_peer = models.OneToOneField('self', null=True, blank=True, on_delete=models.CASCADE,
                                          related_name='transfer_mirror', editable=False)
+    # แถวรวมค่าธรรมเนียม/ดอกเบี้ยแฟคตอริ่งต่อบัญชีต่อวัน (rebuild_factoring_charges) — ไม่ผูกแถวรับเงินใดแถวหนึ่ง
+    FACTORING_CHARGES = [('FEE', 'ค่าธรรมเนียมแฟคตอริ่ง'), ('INTEREST', 'ดอกเบี้ยแฟคตอริ่ง')]
+    factoring_charge = models.CharField(max_length=10, choices=FACTORING_CHARGES, blank=True, default='',
+                                        editable=False)
     # รายการรวมของการชำระหลายใบพร้อมกัน (ชุดเดียวกับ SalesPayment/PurchasePaymentLog.batch_ref)
     batch_ref = models.CharField(max_length=32, blank=True, default='', db_index=True, editable=False)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, editable=False,
@@ -3200,8 +3248,8 @@ def run_due_loan_installments():
 #   ADVANCE   = ยอดค้างรับ × % เบิกล่วงหน้า   วันที่ = วันเงินเบิกเข้าที่เลือกตอนกด action (ค่าเริ่มต้น = วันทำการถัดไป)
 #   REMAINDER = ส่วนที่เหลือ                  วันที่ = วันที่ลูกค้าจ่ายตามปกติ (วันกำหนดรับเงิน) + settle_business_days วันทำการ
 # แล้ว sync_factoring_settlement() สร้างแถวในสมุด (source FACTORING) ให้เงินวิ่งต่อไปบัญชีที่ผูก:
-#   ADVANCE:   แฟคตอริ่ง -A  /  บัญชีที่ผูก +A
-#   REMAINDER: ลูกค้าโอน 100% เข้าแฟคตอริ่ง -> แฟคตอริ่งหักยอดเบิก, ดอกเบี้ย (A × % × วัน ÷ 365)
+#   ADVANCE:   แฟคตอริ่ง -A  /  บัญชีที่ผูก +A (หักค่าธรรมเนียม และดอกเบี้ยถ้าบัญชีตั้ง "หักดอกเบี้ยทันที")
+#   REMAINDER: ลูกค้าโอน 100% เข้าแฟคตอริ่ง -> แฟคตอริ่งหักยอดเบิก, ดอกเบี้ยถ้า "หักภายหลัง" (A × % × วัน ÷ 365)
 #              และ DC/Rebate เต็มจำนวนที่ผู้ใช้เลือก "หักรอบเดือน" เดียวกับเดือนที่ลูกค้าจ่าย (A5, ไม่ผูกกับ SO)
 #              เหลือเท่าไรโอนเข้าบัญชีที่ผูก ถ้าไม่เหลือ/ติดลบ: ไม่สร้างรายการโอน ยอดติดลบค้างในบัญชีแฟคตอริ่ง
 #              ให้ผู้ใช้โอนชดเชยเองจากหน้า M2 — ทั้งหมดคำนวณใหม่ต่อ "ลูกค้า + เดือน" ที่ resync_factoring_month()
@@ -3261,6 +3309,21 @@ def factoring_preview_amount(order, receipt=None):
     return round_money(state[1]) if state and state[0] not in ('PAID', 'SETTLED') else Decimal(0)
 
 
+def factoring_paid_date(order, receipt=None):
+    """วันที่ลูกค้าจ่าย (จบการคิดดอกเบี้ย) — ราย IV = วันครบกำหนดของใบ / ทั้ง SO = วันกำหนดรับเงินล่าสุด"""
+    if receipt is not None and receipt.due_date:
+        return receipt.due_date
+    return factoring_customer_paid_date(order)
+
+
+def factoring_interest_amount(advance, rate, advance_date, paid_date):
+    """ดอกเบี้ยแฟคตอริ่ง (ค่าโอนสิทธิเรียกร้อง) = ยอดเบิก × %/ปี × วัน(วันเงินเบิกเข้า -> วันลูกค้าจ่าย) ÷ 365"""
+    if not advance or not rate or not advance_date or not paid_date:
+        return Decimal(0), 0
+    days = max((_as_date(paid_date) - _as_date(advance_date)).days, 0)
+    return round_money(Decimal(advance) * rate / 100 * days / 365), days
+
+
 def create_factoring_payments(order, receipt=None, advance_date=None):
     """ขายแฟคตอริ่งทั้ง SO (receipt=None: S2/A4) หรือเฉพาะใบ IV ที่เลือก (A1/A2) — คืน (สร้างแล้วหรือไม่, ข้อความ)
     ราย IV: ยอด = ยอดค้างของใบนั้น, วันลูกค้าจ่าย = วันครบกำหนดของใบ, แถวรับเงินผูกใบ + เลข IV ในหมายเหตุ"""
@@ -3273,7 +3336,6 @@ def create_factoring_payments(order, receipt=None, advance_date=None):
         if order.payments.filter(factoring_role__gt='', receipt__isnull=True).exists():
             return False, f"{label}: ขายแฟคตอริ่งไปแล้ว"
         balance = round_money(order.balance_due)
-        paid_date = factoring_customer_paid_date(order)
     else:
         blocker = factoring_blocker(order, receipt)
         if blocker:
@@ -3281,20 +3343,20 @@ def create_factoring_payments(order, receipt=None, advance_date=None):
         if receipt.is_cancelled:
             return False, f"{label}: ใบถูกยกเลิก"
         balance = factoring_preview_amount(order, receipt)
-        paid_date = receipt.due_date or factoring_customer_paid_date(order)
     if balance <= 0:
         return False, f"{label}: ไม่มียอดค้างรับ"
     pct = account.advance_percent or Decimal(0)
     advance = round_money(balance * pct / 100)
     # วันเงินเบิกเข้า = ที่ผู้ใช้เลือกในหน้ายืนยันของ action (ไม่ระบุ = วันทำการถัดไป)
     advance_date = advance_date or next_business_day()
-    paid_date = max(paid_date, advance_date)
+    paid_date = max(factoring_paid_date(order, receipt), advance_date)
     prefix = f"{receipt.receipt_number} " if receipt is not None else ""
     fee_pct = account.factoring_fee_percent or Decimal(0)
     fee_note = f" หักค่าธรรมเนียม {fee_pct.normalize():f}%" if fee_pct else ""
     SalesPayment.objects.create(
         order=order, receipt=receipt, amount=advance, payment_date=advance_date, bank_account=account,
         factoring_role='ADVANCE', factoring_fee_percent=fee_pct,
+        factoring_interest_upfront=account.factoring_interest_timing != 'LATER',
         remark=f"{prefix}แฟคตอริ่ง เบิกล่วงหน้า {pct.normalize():f}%{fee_note}")
     SalesPayment.objects.create(
         order=order, receipt=receipt, amount=balance - advance, bank_account=account, factoring_role='REMAINDER',
@@ -3336,7 +3398,7 @@ def rebuild_factoring_transfers():
     fx_ids = set(BankAccount.objects.filter(account_type='FACTORING').values_list('id', flat=True))
     existing = {}
     for t in BankTransaction.objects.filter(source_type='FACTORING', factoring_payment__isnull=True,
-                                            transfer_peer__isnull=True).order_by('id'):
+                                            transfer_peer__isnull=True, factoring_charge='').order_by('id'):
         key = (t.bank_account_id, t.txn_date)
         if t.bank_account_id in fx_ids or key in existing:
             t.delete()  # แถวรวมฝั่งแฟคตอริ่งแบบเดิม / แถวรวมซ้ำวันเดียวกัน
@@ -3356,6 +3418,104 @@ def rebuild_factoring_transfers():
             BankTransaction.objects.filter(pk=row.pk).update(**fields)
     for row in existing.values():
         row.delete()
+    rebuild_factoring_charges()
+
+
+def rebuild_factoring_charges():
+    """สมุดบัญชีแฟคตอริ่ง: ค่าธรรมเนียม / ดอกเบี้ย รวมเป็นก้อนเดียวต่อบัญชีต่อวัน (เหมือนเอกสารของแฟคตอริ่ง)
+    ยอดมาจาก SalesPayment.factoring_fee / factoring_interest — แก้แถวเดิมเฉพาะที่ยอดเปลี่ยน วันที่ไม่มียอดแล้วลบทิ้ง"""
+    from django.db.models import Count, Max
+    existing = {}
+    for t in BankTransaction.objects.filter(source_type='FACTORING').exclude(factoring_charge='').order_by('id'):
+        key = (t.factoring_charge, t.bank_account_id, t.txn_date)
+        if key in existing:
+            t.delete()
+        else:
+            existing[key] = t
+    labels = {'FEE': ("ค่าธรรมเนียม", "ค่าธรรมเนียมแฟคตอริ่ง"),
+              'INTEREST': ("ดอกเบี้ย", "ดอกเบี้ยแฟคตอริ่ง (ค่าโอนสิทธิเรียกร้อง)")}
+    for kind, field in (('FEE', 'factoring_fee'), ('INTEREST', 'factoring_interest')):
+        groups = (SalesPayment.objects.exclude(**{field: 0}).filter(bank_account__account_type='FACTORING')
+                  .values('bank_account_id', 'payment_date').order_by()
+                  .annotate(total=Sum(field), n=Count('id'), customers=Count('order__customer', distinct=True),
+                            name=Max('order__customer__company_name')))
+        for g in groups:
+            total = round_money(g['total'])
+            if not total:
+                continue
+            day = _as_date(g['payment_date'])
+            reference, label = labels[kind]
+            fields = {'amount': -total, 'party': g['name'] if g['customers'] == 1 else '', 'reference': reference,
+                      'description': f"{label} {g['n']} รายการ"[:255]}
+            row = existing.pop((kind, g['bank_account_id'], day), None)
+            if row is None:
+                BankTransaction.objects.create(bank_account_id=g['bank_account_id'], txn_date=day,
+                                               source_type='FACTORING', factoring_charge=kind, **fields)
+            elif any(getattr(row, k) != v for k, v in fields.items()):
+                BankTransaction.objects.filter(pk=row.pk).update(**fields)
+    for row in existing.values():
+        row.delete()
+
+
+def factoring_document_rows(account, day=None):
+    """เอกสารรับซื้อหนี้ (หน้า "รายการเอกสาร" ของ M1): 1 บรรทัดต่อแถวเบิกล่วงหน้า (ใบ IV หรือ SO)"""
+    qs = SalesPayment.objects.filter(bank_account=account, factoring_role='ADVANCE')
+    if day is not None:
+        qs = qs.filter(payment_date=day)
+    advances = list(qs.select_related('order__customer', 'receipt').order_by('payment_date', 'id'))
+    remainders = {}
+    for r in SalesPayment.objects.filter(order_id__in={a.order_id for a in advances}, factoring_role='REMAINDER'):
+        remainders.setdefault((r.order_id, r.receipt_id), r)
+    rows = []
+    for a in advances:
+        r = remainders.get((a.order_id, a.receipt_id))
+        paid = r.factoring_customer_paid_date if r else None
+        interest, days = factoring_interest_amount(a.amount, r.factoring_rate if r else 0, a.payment_date, paid)
+        rows.append({
+            'date': _as_date(a.payment_date), 'customer': a.order.customer, 'paid_date': paid,
+            'ref': _factoring_ref(a), 'full': round_money(a.amount + (r.amount if r else 0)),
+            'advance': round_money(a.amount), 'days': days,
+            # หักภายหลัง: เอกสารวันเบิกยังไม่หักดอกเบี้ย (ยอดในคอลัมน์ = ประมาณการ)
+            'interest': round_money(a.factoring_interest) if a.factoring_interest_upfront else interest,
+            'interest_upfront': a.factoring_interest_upfront, 'fee': round_money(a.factoring_fee),
+        })
+    return rows
+
+
+def _factoring_doc_totals(day, rows):
+    # จัดกลุ่มตามลูกหนี้ + วันครบกำหนด (เหมือน Batch ในเอกสารไอร่า)
+    groups = {}
+    for row in rows:
+        key = (row['customer'].pk if row['customer'] else 0, row['paid_date'])
+        groups.setdefault(key, {'customer': row['customer'], 'paid_date': row['paid_date'], 'rows': []})
+        groups[key]['rows'].append(row)
+    batches = sorted(groups.values(), key=lambda g: (g['paid_date'] or day,
+                                                    g['customer'].company_name if g['customer'] else ''))
+    for g in batches:
+        g['rows'].sort(key=lambda r: r['ref'])
+        for key in ('full', 'advance', 'interest'):
+            g[key] = sum((r[key] for r in g['rows']), Decimal(0))
+    advance = sum((r['advance'] for r in rows), Decimal(0))
+    interest = sum((r['interest'] for r in rows if r['interest_upfront']), Decimal(0))
+    fee = sum((r['fee'] for r in rows), Decimal(0))
+    return {'date': day, 'batches': batches, 'count': len(rows), 'advance': advance,
+            'full': sum((r['full'] for r in rows), Decimal(0)), 'interest': interest, 'fee': fee,
+            'interest_later': any(not r['interest_upfront'] for r in rows),
+            'customers': sorted({g['customer'].company_name for g in batches if g['customer']}),
+            'net': advance - interest - fee}
+
+
+def factoring_documents(account):
+    """รายการเอกสารรับซื้อหนี้ของบัญชีแฟคตอริ่ง: 1 ฉบับต่อวันเงินเบิกเข้า เรียงใหม่ -> เก่า"""
+    by_day = {}
+    for row in factoring_document_rows(account):
+        by_day.setdefault(row['date'], []).append(row)
+    return [_factoring_doc_totals(day, rows) for day, rows in sorted(by_day.items(), reverse=True)]
+
+
+def factoring_document(account, day):
+    rows = factoring_document_rows(account, day)
+    return _factoring_doc_totals(day, rows) if rows else None
 
 
 def _is_factoring(account):
@@ -3368,32 +3528,39 @@ def factoring_fee_amount(sale_amount, fee_percent):
 
 
 def sync_factoring_advance(order_id):
-    """เงินเบิกล่วงหน้าของ SO: แฟคตอริ่ง -ค่าธรรมเนียม -(A - ค่าธรรมเนียม) / บัญชีที่ผูก +(A - ค่าธรรมเนียม)
-    ค่าธรรมเนียม = (เบิก + ส่วนที่เหลือ ของชุดเดียวกัน = ยอดที่ขาย) × % ค่าธรรมเนียมที่เก็บไว้ในแถวเบิก"""
+    """เงินเบิกล่วงหน้าของ SO: แฟคตอริ่ง -(A - ค่าธรรมเนียม - ดอกเบี้ย) / บัญชีที่ผูก +(A - ค่าธรรมเนียม - ดอกเบี้ย)
+    ค่าธรรมเนียม = (เบิก + ส่วนที่เหลือ ของชุดเดียวกัน = ยอดที่ขาย) × % ค่าธรรมเนียมที่เก็บไว้ในแถวเบิก
+    ดอกเบี้ย (เฉพาะ "หักทันที") = เบิก × % ของแถวส่วนที่เหลือ × วัน(วันเงินเบิกเข้า -> วันลูกค้าจ่าย) ÷ 365
+    ค่าธรรมเนียม/ดอกเบี้ยลงสมุดเป็นก้อนรวมต่อวัน (rebuild_factoring_charges)"""
     BankTransaction.objects.filter(factoring_payment__order_id=order_id,
                                    factoring_payment__factoring_role='ADVANCE').delete()
-    SalesPayment.objects.filter(order_id=order_id, factoring_role='ADVANCE').update(factoring_net=0)
+    SalesPayment.objects.filter(order_id=order_id, factoring_role='ADVANCE').update(
+        factoring_net=0, factoring_fee=0, factoring_interest=0)
     for p in SalesPayment.objects.filter(order_id=order_id, factoring_role='ADVANCE').select_related(
             'bank_account__linked_account', 'order__customer'):
         if not _is_factoring(p.bank_account):
             continue
         # เงินเบิกไม่ใช่เงินที่ลูกค้าจ่ายเข้าบัญชีแฟคตอริ่ง — สมุดแฟคตอริ่งมีแค่โอนออก (ติดลบ) จนลูกค้าจ่าย
         BankTransaction.objects.filter(sales_payment=p).delete()
+        remainders = SalesPayment.objects.filter(order_id=order_id, factoring_role='REMAINDER',
+                                                 receipt_id=p.receipt_id)
         fee = Decimal(0)
         if p.factoring_fee_percent:
-            remainder = (SalesPayment.objects.filter(order_id=order_id, factoring_role='REMAINDER',
-                                                     receipt_id=p.receipt_id)
-                         .aggregate(t=Sum('amount'))['t'] or 0)
+            remainder = remainders.aggregate(t=Sum('amount'))['t'] or 0
             fee = factoring_fee_amount(p.amount + remainder, p.factoring_fee_percent)
-        if fee:
-            BankTransaction.objects.create(
-                bank_account=p.bank_account, amount=-fee, **_factoring_base(p),
-                description=f"ค่าธรรมเนียมแฟคตอริ่ง {p.factoring_fee_percent.normalize():f}%")
-        net = p.amount - fee
-        # ค่าธรรมเนียมมากกว่าเงินเบิก -> ส่วนเกินติดลบค้างในบัญชีแฟคตอริ่ง (เหมือนกรณี DC/Rebate)
+        interest = Decimal(0)
+        r = remainders.order_by('id').first()
+        if p.factoring_interest_upfront and r is not None:
+            interest, _days = factoring_interest_amount(p.amount, r.factoring_rate, p.payment_date,
+                                                        r.factoring_customer_paid_date)
+        SalesPayment.objects.filter(pk=p.pk).update(factoring_fee=fee, factoring_interest=interest)
+        net = p.amount - fee - interest
+        # ค่าธรรมเนียม+ดอกเบี้ยมากกว่าเงินเบิก -> ส่วนเกินติดลบค้างในบัญชีแฟคตอริ่ง (เหมือนกรณี DC/Rebate)
         if net > 0:
+            parts = [f"ค่าธรรมเนียม {fee:,.2f}" if fee else '', f"ดอกเบี้ย {interest:,.2f}" if interest else '']
+            parts = [x for x in parts if x]
             _factoring_transfer(p.bank_account, p, net,
-                                "เบิกล่วงหน้า" + (f" (หักค่าธรรมเนียม {fee:,.2f})" if fee else ""))
+                                "เบิกล่วงหน้า" + (f" (หัก{' + '.join(parts)})" if parts else ""))
     rebuild_factoring_transfers()
 
 
@@ -3420,7 +3587,7 @@ def resync_factoring_month(customer_id, month):
     remainder_qs = SalesPayment.objects.filter(
         order__customer_id=customer_id, factoring_role='REMAINDER',
         factoring_customer_paid_date__gte=month, factoring_customer_paid_date__lt=next_month)
-    remainder_qs.update(factoring_net=0)
+    remainder_qs.update(factoring_net=0, factoring_interest=0)
     remainders = list(remainder_qs.select_related('bank_account__linked_account', 'order__customer')
                       .order_by('factoring_customer_paid_date', 'id'))
     remainders = [r for r in remainders if _is_factoring(r.bank_account)]
@@ -3453,22 +3620,12 @@ def resync_factoring_month(customer_id, month):
                                                  deduction_kind='REBATE').aggregate(t=Sum('amount'))['t'] or 0)
     carry = round_money(dc_total + rebate_total)
 
-    # ลดหนี้ที่ออกหลังขายแฟคตอริ่ง: ลูกค้าจ่ายแฟคตอริ่งน้อยลง = ยอดที่ขายไป - ยอดที่ลูกค้าต้องจ่ายตอนนี้
-    cn_total, cn_docs = Decimal(0), []
-    for r in remainders:
-        advance_amt = (SalesPayment.objects.filter(order_id=r.order_id, factoring_role='ADVANCE',
-                                                   receipt_id=r.receipt_id).aggregate(t=Sum('amount'))['t'] or 0)
-        sold = r.amount + advance_amt
-        if r.receipt_id:
-            cns = CreditNote.objects.filter(receipt_id=r.receipt_id)
-            owed = (r.receipt.grand_total or 0) - (cns.aggregate(t=Sum('grand_total'))['t'] or 0)
-        else:
-            cns = CreditNote.objects.filter(sales_order_id=r.order_id)
-            owed = Decimal(str(r.order.grand_total or 0)) - Decimal(str(r.order.credited_total or 0))
-        excess = round_money(sold - owed)
-        if excess > 0 and cns.exists():
-            cn_total += excess
-            cn_docs += list(cns.values_list('cn_number', flat=True))
+    # ใบลดหนี้ที่ออกหลังขายแฟคตอริ่ง: หักจากส่วนที่เหลือของลูกค้าในเดือนที่เลือกไว้ที่ใบลดหนี้ (deduct_month)
+    allocations = factoring_cn_allocations(customer_id)
+    cn_rows = [(cn, allocations[cn.pk]) for cn in CreditNote.objects.filter(pk__in=list(allocations),
+                                                                          deduct_month=month).order_by('cn_number')]
+    cn_total = sum((amount for _cn, amount in cn_rows), Decimal(0))
+    cn_docs = [cn.cn_number for cn, _amount in cn_rows]
     carry += cn_total
 
     if remainders and (carry > 0):
@@ -3476,14 +3633,13 @@ def resync_factoring_month(customer_id, month):
         pay_day = min(r.factoring_customer_paid_date or _as_date(r.payment_date) for r in remainders)
         base = {'bank_account': fx0, 'txn_date': pay_day, 'source_type': 'FACTORING', 'factoring_payment': first,
                 'party': first.order.customer.company_name if first.order.customer_id else ''}
-        if dc_total or rebate_total:
-            parts = [f"DC {dc_total:,.2f}" if dc_total else '', f"Rebate {rebate_total:,.2f}" if rebate_total else '']
-            BankTransaction.objects.create(amount=-round_money(dc_total + rebate_total), reference='หัก DC/Rebate',
-                                           description=f"หัก {' + '.join(p for p in parts if p)} "
-                                                       f"(รอบ {month:%m/%Y})"[:255], **base)
-        if cn_total:
-            BankTransaction.objects.create(amount=-cn_total, reference='ลดหนี้',
-                                           description=f"ลดหนี้ {', '.join(cn_docs)}"[:255], **base)
+        # DC/Rebate + ใบลดหนี้ ของรอบเดือนนี้รวมเป็นก้อนเดียว (ไม่รก) — รายละเอียดอยู่ในคำอธิบาย
+        parts = [f"DC {dc_total:,.2f}" if dc_total else '', f"Rebate {rebate_total:,.2f}" if rebate_total else '',
+                 f"ลดหนี้ {cn_total:,.2f} ({', '.join(cn_docs)})" if cn_total else '']
+        BankTransaction.objects.create(amount=-round_money(dc_total + rebate_total + cn_total),
+                                       reference='หัก DC/Rebate/ลดหนี้',
+                                       description=f"หัก {' + '.join(p for p in parts if p)} "
+                                                   f"(รอบ {month:%m/%Y})"[:255], **base)
 
     for r in remainders:
         fx = r.bank_account
@@ -3500,13 +3656,12 @@ def resync_factoring_month(customer_id, month):
             'description': (f"{ref} ลูกค้าชำระเข้าแฟคตอริ่ง (เบิกแล้ว {(advance.amount if advance else 0):,.2f}"
                             f" + ส่วนที่เหลือ {r.amount:,.2f})")[:255],
         })
-        interest, days = Decimal(0), 0
-        if advance and r.factoring_rate and r.factoring_customer_paid_date:
-            days = max((r.factoring_customer_paid_date - advance.payment_date).days, 0)
-            interest = round_money(advance.amount * r.factoring_rate / 100 * days / 365)
-        if interest:
-            BankTransaction.objects.create(bank_account=fx, amount=-interest, **_factoring_base(r),
-                                           description=f"ดอกเบี้ยแฟคตอริ่ง {r.factoring_rate.normalize():f}% ({days} วัน)")
+        # หักดอกเบี้ยภายหลัง -> หักจากส่วนที่เหลือ (หักทันทีหักไปแล้วจากเงินเบิก) ลงสมุดเป็นก้อนรวมต่อวัน
+        interest = Decimal(0)
+        if advance and not advance.factoring_interest_upfront:
+            interest, _days = factoring_interest_amount(advance.amount, r.factoring_rate, advance.payment_date,
+                                                        r.factoring_customer_paid_date)
+            SalesPayment.objects.filter(pk=r.pk).update(factoring_interest=interest)
         available = r.amount - interest
         used = min(carry, max(available, 0)) if carry > 0 else Decimal(0)
         carry -= used
@@ -3516,6 +3671,57 @@ def resync_factoring_month(customer_id, month):
             label = "ส่วนที่เหลือ" + (f" (หัก DC/Rebate/ลดหนี้ {used:,.2f})" if used else "")
             _factoring_transfer(fx, r, net, label)
     rebuild_factoring_transfers()
+
+
+def factoring_cn_allocations(customer_id):
+    """ใบลดหนี้ของลูกค้าที่แฟคตอริ่งต้องหักคืน {cn_id: ยอด}
+    ต่อชุดที่ขาย (ใบ IV หรือทั้ง SO): ส่วนที่ขายเกินยอดที่ลูกค้าต้องจ่ายตอนนี้ = ยอดที่ขาย - (ยอดใบ - ใบลดหนี้)
+    แบ่งให้ใบลดหนี้จากใบล่าสุดย้อนไป (ใบที่ออกก่อนขาย ยอดขายหักไปแล้ว จึงไม่ได้ส่วนแบ่ง)"""
+    result = {}
+    sets = (SalesPayment.objects.filter(order__customer_id=customer_id).exclude(factoring_role='')
+            .values('order_id', 'receipt_id').order_by().annotate(sold=Sum('amount')))
+    for g in sets:
+        if g['receipt_id']:
+            receipt = SalesReceipt.objects.filter(pk=g['receipt_id']).first()
+            if receipt is None:
+                continue
+            cns = CreditNote.objects.filter(receipt_id=receipt.pk)
+            total = receipt.grand_total or 0
+        else:
+            order = SalesOrder.objects.get(pk=g['order_id'])
+            cns = CreditNote.objects.filter(sales_order_id=order.pk)
+            total = Decimal(str(order.grand_total or 0))
+        cns = list(cns.order_by('-doc_date', '-id'))
+        if not cns:
+            continue
+        excess = round_money((g['sold'] or 0) - (total - sum((c.grand_total for c in cns), Decimal(0))))
+        for cn in cns:
+            if excess <= 0:
+                break
+            used = min(excess, cn.grand_total)
+            if used > 0:
+                result[cn.pk] = result.get(cn.pk, Decimal(0)) + used
+                excess -= used
+    return result
+
+
+def factoring_cn_entries(account):
+    """ใบลดหนี้ที่แฟคตอริ่งหักคืน (แสดงในรายการเอกสารของบัญชีแฟคตอริ่ง) — วันที่ = วันลูกค้าจ่ายแรกในเดือนที่เลือก
+    ถ้าเดือนนั้นลูกค้าไม่มีส่วนที่เหลือให้หัก ใช้ "วันกำหนดชำระเงิน" ของลูกค้า และแจ้งว่ายังไม่ได้หัก"""
+    entries = []
+    customers = (SalesPayment.objects.filter(bank_account=account).exclude(factoring_role='')
+                 .values_list('order__customer_id', flat=True).distinct())
+    for customer in Customer.objects.filter(pk__in=set(customers)):
+        allocations = factoring_cn_allocations(customer.pk)
+        for cn in CreditNote.objects.filter(pk__in=list(allocations)).select_related('receipt', 'sales_order'):
+            month = cn.deduct_month or _as_date(cn.doc_date).replace(day=1)
+            paid = (SalesPayment.objects.filter(
+                bank_account=account, order__customer=customer, factoring_role='REMAINDER',
+                factoring_customer_paid_date__gte=month, factoring_customer_paid_date__lt=add_months(month, 1, 1))
+                .order_by('factoring_customer_paid_date').values_list('factoring_customer_paid_date', flat=True).first())
+            entries.append({'cn': cn, 'customer': customer, 'amount': allocations[cn.pk], 'month': month,
+                            'date': paid or deduction_date_in_month(customer, month), 'deducted': paid is not None})
+    return entries
 
 
 def factoring_receivable_summary(account, today=None):

@@ -2033,14 +2033,22 @@ def factoring_confirm(modeladmin, request, pairs, action_name, selected_ids):
         is_fx = account is not None and account.account_type == 'FACTORING'
         advance = round_money(amount * (account.advance_percent or 0) / 100) if is_fx else Decimal(0)
         fee = factoring_fee_amount(amount, account.factoring_fee_percent) if is_fx else Decimal(0)
+        # หักดอกเบี้ยทันที: ประมาณจากวันเงินเบิกเข้าเริ่มต้น (วันที่เลือกจริงอาจต่างไป) ถึงวันลูกค้าจ่าย
+        interest = Decimal(0)
+        if is_fx and account.factoring_interest_timing != 'LATER':
+            start = next_business_day()
+            paid = max(factoring_paid_date(order, receipt), start)
+            interest, _days = factoring_interest_amount(advance, account.factoring_interest_rate, start, paid)
         rows.append({'doc': receipt.receipt_number if receipt else order.so_number, 'customer': order.customer,
-                     'account': account, 'amount': amount, 'advance': advance, 'fee': fee, 'net': advance - fee})
+                     'account': account, 'amount': amount, 'advance': advance, 'fee': fee, 'interest': interest,
+                     'net': advance - fee - interest})
     return TemplateResponse(request, 'admin/stocks/factoring_confirm.html', {
         **modeladmin.admin_site.each_context(request),
         'title': "ขายแฟคตอริ่ง", 'opts': modeladmin.model._meta, 'form': form, 'rows': rows,
         'total': sum((r['amount'] for r in rows), Decimal(0)), 'selected_ids': selected_ids,
         'total_advance': sum((r['advance'] for r in rows), Decimal(0)),
         'total_fee': sum((r['fee'] for r in rows), Decimal(0)),
+        'total_interest': sum((r['interest'] for r in rows), Decimal(0)),
         'total_net': sum((r['net'] for r in rows), Decimal(0)),
         'action_name': action_name, 'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
     })
@@ -6418,10 +6426,33 @@ def _cn_receipt_payload(receipt):
     }
 
 
+class CreditNoteForm(forms.ModelForm):
+    """ใบลดหนี้: เลือกเดือนที่ให้หักจากยอดชำระของลูกค้า (12 เดือน: ย้อนหลัง 6 ถึงล่วงหน้า 5 จากเดือนปัจจุบัน)"""
+    deduct_month = forms.TypedChoiceField(
+        label="หักจากยอดชำระเดือน", coerce=datetime.date.fromisoformat, widget=box_select(200),
+        help_text="ใบที่ขายแฟคตอริ่ง: แฟคตอริ่งหักยอดใบลดหนี้จากส่วนที่เหลือที่ลูกค้าจ่ายในเดือนนี้ "
+                  "(แสดงใน \"รายการเอกสาร\" ของบัญชีแฟคตอริ่ง)")
+
+    class Meta:
+        model = CreditNote
+        fields = ('receipt', 'doc_date', 'deduct_month', 'reason', 'notes')
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        this_month = timezone.localdate().replace(day=1)
+        months = [add_months(this_month, k, 1) for k in range(-6, 6)]
+        current = self.instance.deduct_month if self.instance.pk else None
+        if current and current not in months:
+            months = sorted(months + [current])  # ใบเก่าที่เลือกเดือนนอกช่วงไว้ — ยังเห็นค่าเดิม
+        self.fields['deduct_month'].choices = [(m.isoformat(), thai_month_label(m)) for m in months]
+        self.initial['deduct_month'] = (current or this_month).isoformat()
+
+
 @admin.register(CreditNote)
 class CreditNoteAdmin(UnfoldModelAdmin):
+    form = CreditNoteForm
     list_display = ('cn_number', 'get_doc_date', 'get_receipt_number', 'get_customer', 'reason',
-                    'get_subtotal', 'get_vat', 'get_total')
+                    'get_deduct_month', 'get_subtotal', 'get_vat', 'get_total')
     list_filter = (
         ('doc_date', DjangoDateRangeFilter),
         ('sales_order__customer', AutocompleteSelectMultipleFilter),
@@ -6456,8 +6487,8 @@ class CreditNoteAdmin(UnfoldModelAdmin):
 
     def get_fields(self, request, obj=None):
         if obj is None:
-            return ('receipt', 'doc_date', 'reason', 'notes')
-        return ('cn_number', 'get_receipt_link', 'doc_date', 'reason', 'notes',
+            return ('receipt', 'doc_date', 'deduct_month', 'reason', 'notes')
+        return ('cn_number', 'get_receipt_link', 'doc_date', 'deduct_month', 'reason', 'notes',
                 'subtotal', 'vat_amount', 'grand_total', 'created_by')
 
     def get_readonly_fields(self, request, obj=None):
@@ -6502,6 +6533,10 @@ class CreditNoteAdmin(UnfoldModelAdmin):
     @admin.display(description="วันที่", ordering='doc_date')
     def get_doc_date(self, obj):
         return obj.doc_date.strftime('%d/%m/%Y')
+
+    @admin.display(description="หักเดือน", ordering='deduct_month')
+    def get_deduct_month(self, obj):
+        return thai_month_label(obj.deduct_month) if obj.deduct_month else '-'
 
     @admin.display(description="ใบกำกับ", ordering='receipt__receipt_number')
     def get_receipt_number(self, obj):
@@ -6550,8 +6585,8 @@ class BankAccountAdmin(UnfoldModelAdmin):
                            'opening_balance', 'opening_date', 'is_default', 'is_active', 'notes')}),
         ("บัญชีเครดิต", {'fields': ('credit_limit', 'due_day', 'overdue_interest_rate')}),
         ("บัญชีแฟคตอริ่ง", {'fields': ('linked_account', 'advance_percent', 'factoring_fee_percent',
-                                     'factoring_interest_rate',
-                                     'settle_business_days')}),
+                                     'factoring_interest_rate', 'factoring_interest_timing',
+                                     'settle_business_days', 'factoring_doc_form')}),
     )
 
     class Media:
@@ -6609,17 +6644,76 @@ class BankAccountAdmin(UnfoldModelAdmin):
                                nxt.strftime('%d/%m/%Y') if nxt else '-',
                                f"{(obj.overdue_interest_rate or Decimal(0)).normalize():f}")
         if obj.account_type == 'FACTORING':
-            return format_html('ผูก {} · เบิก {}% · ค่าธรรมเนียม {}% · ดอก {}%/ปี',
+            return format_html('ผูก {} · เบิก {}% · ค่าธรรมเนียม {}% · ดอก {}%/ปี ({})',
                                obj.linked_account.name if obj.linked_account_id else '⚠️ ยังไม่ผูก',
                                f"{(obj.advance_percent or Decimal(0)).normalize():f}",
                                f"{(obj.factoring_fee_percent or Decimal(0)).normalize():f}",
-                               f"{(obj.factoring_interest_rate or Decimal(0)).normalize():f}")
+                               f"{(obj.factoring_interest_rate or Decimal(0)).normalize():f}",
+                               'หักภายหลัง' if obj.factoring_interest_timing == 'LATER' else 'หักทันที')
         return ''
 
     @admin.display(description="")
     def get_ledger_link(self, obj):
+        # บัญชีแฟคตอริ่ง: รายการเดินบัญชีกรองเองในหน้า M2 ได้ -> ช่องนี้เป็นเอกสารรับซื้อหนี้แทน (เปิดหน้าต่างใหม่)
+        if obj.account_type == 'FACTORING':
+            url = reverse('admin:stocks_bankaccount_factoring_docs', args=[obj.pk])
+            return format_html('<a href="{}" target="_blank">📄 รายการเอกสาร</a>', url)
         url = reverse('admin:stocks_banktransaction_changelist') + f'?{BankTxnAccountFilter.parameter_name}={obj.pk}'
         return format_html('<a href="{}">📒 รายการเดินบัญชี</a>', url)
+
+    def get_urls(self):
+        return [
+            path('<int:object_id>/factoring-docs/', self.admin_site.admin_view(self.factoring_docs_view),
+                 name='stocks_bankaccount_factoring_docs'),
+            path('<int:object_id>/factoring-docs/<str:day>/', self.admin_site.admin_view(self.factoring_doc_view),
+                 name='stocks_bankaccount_factoring_doc'),
+        ] + super().get_urls()
+
+    def _factoring_account(self, request, object_id):
+        from django.http import Http404
+        if not self.has_view_permission(request):
+            raise PermissionDenied
+        account = BankAccount.objects.select_related('linked_account').filter(
+            pk=object_id, account_type='FACTORING').first()
+        if account is None:
+            raise Http404("ไม่พบบัญชีแฟคตอริ่ง")
+        return account
+
+    def factoring_docs_view(self, request, object_id):
+        """รายการเอกสารรับซื้อหนี้ของบัญชีแฟคตอริ่ง (1 ฉบับต่อวันเงินเบิกเข้า) เรียงใหม่ -> เก่า"""
+        account = self._factoring_account(request, object_id)
+        # เอกสารรับซื้อหนี้ + ใบลดหนี้ที่แฟคตอริ่งหักคืน เรียงตามวันที่ใหม่ -> เก่า
+        entries = [{'kind': 'DOC', **d} for d in factoring_documents(account)]
+        entries += [{'kind': 'CN', **e} for e in factoring_cn_entries(account)]
+        entries.sort(key=lambda e: (e['date'], e['kind'] == 'CN'), reverse=True)
+        for e in entries:
+            if e['kind'] == 'CN':
+                e['month_label'] = thai_month_label(e['month'])
+        return TemplateResponse(request, 'admin/factoring_doc_list.html', {
+            'account': account, 'docs': entries, 'today': timezone.localdate(),
+            'title': f"รายการเอกสาร {account.name}",
+        })
+
+    def factoring_doc_view(self, request, object_id, day):
+        from django.http import Http404
+        account = self._factoring_account(request, object_id)
+        try:
+            day = datetime.date.fromisoformat(day)
+        except ValueError:
+            raise Http404("วันที่ไม่ถูกต้อง")
+        doc = factoring_document(account, day)
+        if doc is None:
+            raise Http404("ไม่มีเอกสารวันนี้")
+        from django.conf import settings
+        from .utils import thai_baht_text
+        # แต่ละแฟคตอริ่งมีฟอร์มของตัวเอง: templates/admin/factoring_doc_<ฟอร์ม>.html (ตอนนี้มีแบบไอร่า)
+        form = (account.factoring_doc_form or 'AIRA').lower()
+        return TemplateResponse(request, [f'admin/factoring_doc_{form}.html', 'admin/factoring_doc_aira.html'], {
+            'account': account, 'linked': account.linked_account, 'doc': doc,
+            'amount_words': thai_baht_text(doc['net']), 'company_name': settings.COMPANY_NAME,
+            'company_address': settings.COMPANY_ADDRESS,
+            'title': f"เอกสารรับซื้อหนี้ {account.name} {day:%d/%m/%Y}",
+        })
 
 
 class AssignBankAccountForm(forms.Form):
@@ -6918,6 +7012,10 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
         elif obj.transfer_peer_id:
             url = reverse('admin:stocks_banktransaction_change', args=[obj.transfer_peer_id])
             return format_html('<a href="{}">รายการต้นทาง ↗</a>', url)
+        elif obj.factoring_charge and SalesPayment.objects.filter(
+                bank_account_id=obj.bank_account_id, factoring_role='ADVANCE', payment_date=obj.txn_date).exists():
+            url = reverse('admin:stocks_bankaccount_factoring_doc',
+                          args=[obj.bank_account_id, obj.txn_date.isoformat()])
         else:
             return '-'
         return format_html('<a href="{}" target="_blank">{} ↗</a>', url, obj.reference or 'เปิดเอกสาร')

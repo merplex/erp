@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<style>
+    * { box-sizing: border-box; }
+    body { font-family: "Sarabun", "Tahoma", sans-serif; color: #222; margin: 0; padding: 24px; background: #f2f2f2; font-size: 14px; }
+    .wrap { max-width: 1100px; margin: 0 auto; background: #fff; box-shadow: 0 0 8px rgba(0,0,0,0.15); padding: 24px 28px; }
+    h1 { margin: 0 0 4px 0; font-size: 20px; }
+    .sub { color: #666; margin-bottom: 16px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 8px 10px; border-bottom: 1px solid #eee; vertical-align: top; }
+    th { background: #f5f5f5; text-align: left; border-bottom: 2px solid #dee2e6; white-space: nowrap; }
+    td.num, th.num { text-align: right; white-space: nowrap; }
+    td.neg { color: #dc2626; }
+    tr.doc-row { cursor: pointer; }
+    tr.doc-row:hover td { background: #f0f7ff; }
+    a.open { color: #2563eb; font-weight: bold; text-decoration: none; white-space: nowrap; }
+    .future { display: inline-block; padding: 1px 8px; border-radius: 10px; background: #fef3c7; color: #92400e; font-size: 12px; }
+    .empty { padding: 24px; text-align: center; color: #888; }
+    .customers { color: #555; font-size: 13px; }
+    @media (max-width: 700px) { body { padding: 8px; } .wrap { padding: 16px; overflow-x: auto; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+    <h1>📄 รายการเอกสาร — {{ account.name }}</h1>
+    <div class="sub">เอกสารรับซื้อหนี้ 1 ฉบับต่อวันที่แฟคตอริ่งจ่ายเงินเบิก + ใบลดหนี้ที่แฟคตอริ่งหักคืน (เรียงใหม่ → เก่า) · กดที่แถวเพื่อเปิดเอกสาร</div>
+    <table>
+        <thead><tr>
+            <th>วันที่</th>
+            <th>เอกสาร</th>
+            <th>ลูกหนี้</th>
+            <th class="num">จำนวนใบ</th>
+            <th class="num">ยอด 100%</th>
+            <th class="num">ยอดรับซื้อ</th>
+            <th class="num">ค่าโอนสิทธิเรียกร้อง</th>
+            <th class="num">ค่าธรรมเนียม</th>
+            <th class="num">ยอดโอน</th>
+            <th></th>
+        </tr></thead>
+        <tbody>
+        {% for d in docs %}
+            {% if d.kind == 'CN' %}
+            {% url 'admin:stocks_creditnote_change' d.cn.pk as cn_url %}
+            <tr class="doc-row" onclick="window.location='{{ cn_url }}'">
+                <td style="white-space:nowrap;">{{ d.date|date:"d/m/Y" }}{% if d.date > today %} <span class="future">ล่วงหน้า</span>{% endif %}</td>
+                <td><b>ใบลดหนี้ {{ d.cn.cn_number }}</b><br><span class="customers">อ้างอิง {% if d.cn.receipt %}{{ d.cn.receipt.receipt_number }}{% else %}{{ d.cn.sales_order.so_number }}{% endif %} · หักเดือน {{ d.month_label }}{% if not d.deducted %} <span class="future">เดือนนี้ไม่มียอดให้หัก</span>{% endif %}</span></td>
+                <td class="customers">{{ d.customer.company_name }}</td>
+                <td class="num">-</td>
+                <td class="num" title="ยอดใบลดหนี้">{{ d.cn.grand_total|floatformat:"2g" }}</td>
+                <td class="num">-</td>
+                <td class="num">-</td>
+                <td class="num">-</td>
+                <td class="num neg"><b>-{{ d.amount|floatformat:"2g" }}</b></td>
+                <td><a class="open" href="{{ cn_url }}">เปิด ›</a></td>
+            </tr>
+            {% else %}
+            {% url 'admin:stocks_bankaccount_factoring_doc' account.pk d.date|date:"Y-m-d" as doc_url %}
+            <tr class="doc-row" onclick="window.location='{{ doc_url }}'">
+                <td style="white-space:nowrap;">{{ d.date|date:"d/m/Y" }}{% if d.date > today %} <span class="future">ล่วงหน้า</span>{% endif %}</td>
+                <td>รายการรับซื้อหนี้</td>
+                <td class="customers">{{ d.customers|join:", " }}</td>
+                <td class="num">{{ d.count }}</td>
+                <td class="num">{{ d.full|floatformat:"2g" }}</td>
+                <td class="num">{{ d.advance|floatformat:"2g" }}</td>
+                <td class="num neg">{% if d.interest %}-{{ d.interest|floatformat:"2g" }}{% elif d.interest_later %}หักภายหลัง{% else %}-{% endif %}</td>
+                <td class="num neg">{% if d.fee %}-{{ d.fee|floatformat:"2g" }}{% else %}-{% endif %}</td>
+                <td class="num"><b>{{ d.net|floatformat:"2g" }}</b></td>
+                <td><a class="open" href="{{ doc_url }}">เปิด ›</a></td>
+            </tr>
+            {% endif %}
+        {% empty %}
+            <tr><td colspan="10" class="empty">ยังไม่มีเอกสาร (ยังไม่เคยขายแฟคตอริ่งเข้าบัญชีนี้)</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+</body>
+</html>

@@ -12,6 +12,7 @@
             <th style="padding:8px;text-align:right;">ยอดที่จะขาย</th>
             <th style="padding:8px;text-align:right;">เบิกล่วงหน้า</th>
             <th style="padding:8px;text-align:right;">ค่าธรรมเนียม</th>
+            <th style="padding:8px;text-align:right;" title="หักดอกเบี้ยทันที: ประมาณจากวันเงินเบิกเข้าเริ่มต้นถึงวันลูกค้าจ่าย">ดอกเบี้ย (หักทันที)</th>
             <th style="padding:8px;text-align:right;">ได้รับวันเงินเบิกเข้า</th>
         </tr></thead>
         <tbody>
@@ -23,6 +24,7 @@
                 <td style="padding:8px;text-align:right;">{{ r.amount|floatformat:"2g" }}</td>
                 <td style="padding:8px;text-align:right;">{{ r.advance|floatformat:"2g" }}</td>
                 <td style="padding:8px;text-align:right;color:#dc2626;">{% if r.fee %}-{{ r.fee|floatformat:"2g" }}{% else %}-{% endif %}</td>
+                <td style="padding:8px;text-align:right;color:#dc2626;">{% if r.interest %}-{{ r.interest|floatformat:"2g" }}{% else %}-{% endif %}</td>
                 <td style="padding:8px;text-align:right;font-weight:bold;">{{ r.net|floatformat:"2g" }}</td>
             </tr>
         {% endfor %}
@@ -31,6 +33,7 @@
             <td style="padding:8px;text-align:right;">{{ total|floatformat:"2g" }}</td>
             <td style="padding:8px;text-align:right;">{{ total_advance|floatformat:"2g" }}</td>
             <td style="padding:8px;text-align:right;color:#dc2626;">{% if total_fee %}-{{ total_fee|floatformat:"2g" }}{% else %}-{% endif %}</td>
+            <td style="padding:8px;text-align:right;color:#dc2626;">{% if total_interest %}-{{ total_interest|floatformat:"2g" }}{% else %}-{% endif %}</td>
             <td style="padding:8px;text-align:right;">{{ total_net|floatformat:"2g" }}</td>
         </tr>
         </tbody>
