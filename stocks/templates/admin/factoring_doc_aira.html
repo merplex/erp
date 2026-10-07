@@ -58,9 +58,9 @@
 <form method="post" class="wht-form">{% csrf_token %}
     {% for m in messages %}<div class="msg-error">{{ m }}</div>{% endfor %}
     ภาษีหัก ณ ที่จ่าย (แฟคตอริ่งบวกคืน):
-    <input type="text" name="wht_amount" inputmode="decimal" value="{% if doc.wht_manual %}{{ doc.wht|floatformat:"2" }}{% endif %}" placeholder="{{ doc.wht|floatformat:"2g" }}">
+    <input type="text" name="wht_amount" inputmode="decimal" value="{% if doc.wht_manual %}{{ doc.wht|floatformat:"2" }}{% endif %}" placeholder="0.00">
     <button type="submit">บันทึก</button>
-    <span style="color:#555;">{% if doc.wht_manual %}กรอกเอง (ลบให้ว่างแล้วบันทึก = กลับไปคำนวณจาก %){% else %}ตอนนี้คำนวณจาก {{ account.factoring_wht_percent|floatformat:"-4" }}% ของ (ค่าโอนสิทธิ + ค่าธรรมเนียม) — กรอกยอดตามเอกสารจริงได้{% endif %}</span>
+    <span style="color:#555;">{% if doc.wht_manual %}แก้ยอดได้ (ลบให้ว่างแล้วบันทึก = ยกเลิก ภาษีของเอกสารที่เคลียร์ด้วยฉบับนี้กลับเป็นค้าง){% else %}ใส่ภาษีค้างจาก action "คำนวณภาษีหัก ณ ที่จ่าย" ในหน้า M1 หรือกรอกยอดตามเอกสารจริง{% endif %}</span>
 </form>
 {% endif %}
 <div class="page">

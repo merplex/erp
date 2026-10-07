@@ -1,0 +1,48 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<div style="padding:20px;max-width:1000px;">
+    <h2>{{ title }}</h2>
+    <p>ภาษีค้างคืน = (ค่าโอนสิทธิเรียกร้อง + ค่าธรรมเนียม) ของเอกสารรับซื้อหนี้ที่ยังไม่ได้เคลียร์ × % ภาษีหัก ณ ที่จ่ายของบัญชี
+       — เลือกเอกสารที่แฟคตอริ่งคืนภาษีให้ ระบบจะบวกยอดเข้าเอกสารนั้น (ยอดรับโอนเข้าบัญชีที่ผูกเปลี่ยนตาม) แล้วเคลียร์ภาษีค้างเป็น 0</p>
+    <form method="post">{% csrf_token %}
+    {% for row in rows %}
+        <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;margin:14px 0;">
+            <h3 style="margin:0 0 6px 0;">{{ row.account.name }}
+                <span style="font-weight:normal;color:#666;font-size:14px;">(% ภาษี {{ row.account.factoring_wht_percent|floatformat:"-4" }}%)</span></h3>
+            {% if row.total %}
+                <div style="font-size:16px;margin-bottom:8px;">ภาษีค้างคืน <b>{{ row.total|floatformat:"2g" }}</b> บาท จาก {{ row.pending|length }} เอกสาร</div>
+                <table style="width:100%;max-width:600px;border-collapse:collapse;margin-bottom:10px;">
+                    <thead><tr style="border-bottom:2px solid #dee2e6;">
+                        <th style="padding:6px;text-align:left;">เอกสารรับซื้อหนี้</th>
+                        <th style="padding:6px;text-align:right;">ค่าโอนสิทธิ + ค่าธรรมเนียม</th>
+                        <th style="padding:6px;text-align:right;">ภาษีค้าง</th>
+                    </tr></thead>
+                    <tbody>
+                    {% for p in row.pending %}
+                        <tr style="border-bottom:1px solid #eee;">
+                            <td style="padding:6px;">{{ p.date|date:"d/m/Y" }}</td>
+                            <td style="padding:6px;text-align:right;">{{ p.charges|floatformat:"2g" }}</td>
+                            <td style="padding:6px;text-align:right;">{{ p.wht|floatformat:"2g" }}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                <div>{{ row.field.label }}<br>{{ row.field }}</div>
+                {% for e in row.field.errors %}<div style="color:#dc2626;">{{ e }}</div>{% endfor %}
+            {% elif row.account.factoring_wht_percent %}
+                <div style="color:#16a34a;">ไม่มีภาษีค้างคืน (เคลียร์ครบแล้ว)</div>
+            {% else %}
+                <div style="color:#92400e;">ยังไม่ได้ตั้ง "% ภาษีหัก ณ ที่จ่าย" ของบัญชีนี้ (M1 → แก้ไขบัญชี) จึงคำนวณภาษีค้างไม่ได้</div>
+            {% endif %}
+        </div>
+    {% endfor %}
+        {% for pk in selected_ids %}<input type="hidden" name="{{ action_checkbox_name }}" value="{{ pk }}">{% endfor %}
+        <input type="hidden" name="action" value="{{ action_name }}">
+        <input type="hidden" name="apply" value="1">
+        {% if can_apply %}
+        <button type="submit" style="background:#2563eb;color:#fff;border:none;padding:10px 20px;border-radius:4px;cursor:pointer;">✅ ใส่ภาษีเข้าเอกสารที่เลือก และเคลียร์ภาษีค้าง</button>
+        {% endif %}
+        <a href="#" onclick="window.history.back();" style="margin-left:10px;color:#666;">กลับ</a>
+    </form>
+</div>
+{% endblock %}

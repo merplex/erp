@@ -6585,8 +6585,53 @@ def _money_html(value, color=None):
     return format_html('<span style="color:{}">{}</span>', color, text) if color else text
 
 
+class FactoringWhtForm(forms.Form):
+    """เลือกเอกสารรับซื้อหนี้ที่แฟคตอริ่งคืนภาษีหัก ณ ที่จ่าย (ต่อบัญชีแฟคตอริ่ง 1 ช่อง)"""
+
+    def __init__(self, *args, accounts=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        for account in accounts:
+            docs = factoring_documents(account)
+            self.fields[f'target_{account.pk}'] = forms.TypedChoiceField(
+                label=f"ใส่เข้าเอกสาร ({account.name})", coerce=datetime.date.fromisoformat, widget=box_select(360),
+                choices=[(d['date'].isoformat(),
+                          f"รับซื้อหนี้ {d['date']:%d/%m/%Y} — ยอดโอน {d['net']:,.2f}"
+                          + (f" (มีภาษีคืนแล้ว {d['wht']:,.2f})" if d['wht'] else '')) for d in docs])
+
+
+@admin.action(description="🧾 คำนวณภาษีหัก ณ ที่จ่าย (แฟคตอริ่ง)")
+def factoring_wht_action(modeladmin, request, queryset):
+    """ภาษีหัก ณ ที่จ่ายที่ยังค้างคืนของบัญชีแฟคตอริ่งที่เลือก -> เลือกเอกสารที่แฟคตอริ่งคืนให้ แล้วใส่ยอด + เคลียร์ค้าง"""
+    accounts = list(queryset.filter(account_type='FACTORING').order_by('name'))
+    if not accounts:
+        modeladmin.message_user(request, "เลือกบัญชีแฟคตอริ่งอย่างน้อย 1 บัญชี", messages.WARNING)
+        return None
+    pending = {a.pk: factoring_wht_pending(a) for a in accounts}
+    totals = {a.pk: sum((r['wht'] for r in pending[a.pk]), Decimal(0)) for a in accounts}
+    with_tax = [a for a in accounts if totals[a.pk] > 0]
+    form = FactoringWhtForm(request.POST if 'apply' in request.POST else None, accounts=with_tax)
+    if 'apply' in request.POST and form.is_valid():
+        for a in with_tax:
+            day = form.cleaned_data[f'target_{a.pk}']
+            amount, count = apply_factoring_wht(a, day)
+            if amount:
+                modeladmin.message_user(
+                    request, f"{a.name}: ใส่ภาษีหัก ณ ที่จ่าย {amount:,.2f} เข้าเอกสาร {day:%d/%m/%Y} "
+                             f"(เคลียร์ {count} เอกสาร ภาษีค้าง = 0)", messages.SUCCESS)
+        return None
+    rows = [{'account': a, 'pending': pending[a.pk], 'total': totals[a.pk],
+             'field': form[f'target_{a.pk}'] if totals[a.pk] > 0 else None} for a in accounts]
+    return TemplateResponse(request, 'admin/stocks/bankaccount/factoring_wht.html', {
+        **modeladmin.admin_site.each_context(request),
+        'title': "คำนวณภาษีหัก ณ ที่จ่าย (แฟคตอริ่ง)", 'opts': modeladmin.model._meta, 'rows': rows,
+        'can_apply': bool(with_tax), 'selected_ids': [a.pk for a in accounts],
+        'action_name': 'factoring_wht_action', 'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
+    })
+
+
 @admin.register(BankAccount)
 class BankAccountAdmin(UnfoldModelAdmin):
+    actions = [factoring_wht_action]
     list_display = ('get_name', 'account_type', 'bank_name', 'account_number', 'get_opening',
                     'get_balance', 'get_type_detail', 'is_active', 'get_ledger_link')
     list_filter = ('account_type', 'is_active')
@@ -6744,7 +6789,8 @@ class BankAccountAdmin(UnfoldModelAdmin):
         except ValueError:
             raise Http404("วันที่ไม่ถูกต้อง")
         if request.method == 'POST' and self.has_change_permission(request):
-            # กรอกภาษีหัก ณ ที่จ่ายตามเอกสารจริง (ว่าง = คำนวณจาก % ของบัญชี) -> ยอดรับโอนเข้าบัญชีที่ผูกคำนวณใหม่
+            # แก้ภาษีหัก ณ ที่จ่ายของเอกสารนี้เอง -> ยอดรับโอนเข้าบัญชีที่ผูกคำนวณใหม่
+            # ว่าง = ยกเลิก: เอกสารที่เคยเคลียร์ด้วยเอกสารนี้กลับเป็นภาษีค้าง
             text = (request.POST.get('wht_amount') or '').replace(',', '').strip()
             try:
                 value = Decimal(text) if text else None
@@ -6753,8 +6799,10 @@ class BankAccountAdmin(UnfoldModelAdmin):
             except (ValueError, ArithmeticError):
                 self.message_user(request, "ภาษีหัก ณ ที่จ่าย: กรอกตัวเลข 0 ขึ้นไป", messages.ERROR)
             else:
-                FactoringDocAdjustment.objects.update_or_create(bank_account=account, doc_date=day,
-                                                                defaults={'wht_amount': value})
+                adj, _ = FactoringDocAdjustment.objects.update_or_create(bank_account=account, doc_date=day,
+                                                                         defaults={'wht_amount': value})
+                if value is None:
+                    adj.wht_cleared_docs.update(wht_cleared_by=None)
                 rebuild_factoring_transfers()
             return HttpResponseRedirect(request.path)
         doc = factoring_document(account, day)

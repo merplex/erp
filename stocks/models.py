@@ -2648,8 +2648,8 @@ class BankAccount(models.Model):
     factoring_wht_percent = models.DecimalField(
         max_digits=7, decimal_places=4, default=0, validators=[MinValueValidator(0), MaxValueValidator(100)],
         verbose_name="% ภาษีหัก ณ ที่จ่าย (แฟคตอริ่งคืน)",
-        help_text="คิดจาก (ค่าโอนสิทธิเรียกร้อง + ค่าธรรมเนียม) ของเอกสารรับซื้อหนี้ แฟคตอริ่งบวกคืนในยอดโอน "
-                  "— กรอกยอดจริงทับรายเอกสารได้ในหน้าเอกสาร")
+        help_text="ภาษีค้างคืน = (ค่าโอนสิทธิเรียกร้อง + ค่าธรรมเนียม) ของเอกสารรับซื้อหนี้ × % นี้ "
+                  "— ใส่เข้าเอกสารที่แฟคตอริ่งคืนด้วย action \"คำนวณภาษีหัก ณ ที่จ่าย\"")
     settle_business_days = models.PositiveSmallIntegerField(
         default=2, verbose_name="รับส่วนที่เหลือหลังลูกค้าจ่าย (วันทำการ)",
         help_text="นับข้ามวันหยุด (เสาร์-อาทิตย์, 31 ธ.ค., 1 ม.ค.) เช่น 2: ลูกค้าจ่ายวันศุกร์ -> ได้รับวันอังคาร")
@@ -2723,6 +2723,9 @@ class FactoringDocAdjustment(models.Model):
     doc_date = models.DateField()
     wht_amount = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True,
                                      validators=[MinValueValidator(0)], verbose_name="ภาษีหัก ณ ที่จ่าย")
+    # ภาษีหัก ณ ที่จ่ายของเอกสารนี้ แฟคตอริ่งคืนแล้วในเอกสารไหน (ว่าง = ยังค้าง) — action "คำนวณภาษีหัก ณ ที่จ่าย" (M1)
+    wht_cleared_by = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True,
+                                       related_name='wht_cleared_docs')
 
     class Meta:
         unique_together = ('bank_account', 'doc_date')
@@ -3492,12 +3495,47 @@ def rebuild_factoring_transfers():
     rebuild_factoring_charges()
 
 
-def factoring_doc_wht(account, day, interest, fee):
-    """ภาษีหัก ณ ที่จ่ายของเอกสารรับซื้อหนี้: ยอดที่กรอกเอง หรือ (ค่าโอนสิทธิ + ค่าธรรมเนียม) × % ของบัญชี"""
+def factoring_doc_wht(account, day):
+    """ภาษีหัก ณ ที่จ่ายที่แฟคตอริ่งบวกคืนในเอกสารรับซื้อหนี้นี้ (ใส่จาก action หรือกรอกเองในหน้าเอกสาร)"""
     adj = FactoringDocAdjustment.objects.filter(bank_account=account, doc_date=day).first()
-    if adj is not None and adj.wht_amount is not None:
-        return round_money(adj.wht_amount)
-    return round_money(((interest or 0) + (fee or 0)) * (account.factoring_wht_percent or 0) / 100)
+    return round_money(adj.wht_amount) if adj is not None and adj.wht_amount is not None else Decimal(0)
+
+
+def factoring_wht_pending(account):
+    """ภาษีหัก ณ ที่จ่ายที่ยังค้างคืน: เอกสารรับซื้อหนี้ที่ยังไม่ถูกเคลียร์ — (ค่าโอนสิทธิ + ค่าธรรมเนียม) × % ของบัญชี
+    คืน [{'date', 'charges', 'wht'}] เก่า -> ใหม่"""
+    cleared = set(FactoringDocAdjustment.objects.filter(bank_account=account, wht_cleared_by__isnull=False)
+                  .values_list('doc_date', flat=True))
+    pct = account.factoring_wht_percent or Decimal(0)
+    rows = []
+    for g in (SalesPayment.objects.filter(bank_account=account, factoring_role='ADVANCE')
+              .values('payment_date').order_by('payment_date')
+              .annotate(fee=Sum('factoring_fee'), interest=Sum('factoring_interest'))):
+        day = _as_date(g['payment_date'])
+        if day in cleared:
+            continue
+        charges = round_money((g['fee'] or 0) + (g['interest'] or 0))
+        rows.append({'date': day, 'charges': charges, 'wht': round_money(charges * pct / 100)})
+    return rows
+
+
+def apply_factoring_wht(account, target_day):
+    """ใส่ภาษีค้างทั้งหมดเข้าเอกสาร target_day (บวกเพิ่มจากที่มี) แล้วเคลียร์เอกสารที่ค้าง -> ยอดรับโอนคำนวณใหม่
+    คืน (ยอดที่ใส่, จำนวนเอกสารที่เคลียร์)"""
+    from django.db import transaction
+    pending = factoring_wht_pending(account)
+    total = sum((r['wht'] for r in pending), Decimal(0))
+    if total <= 0:
+        return Decimal(0), 0
+    with transaction.atomic():
+        target, _ = FactoringDocAdjustment.objects.get_or_create(bank_account=account, doc_date=target_day)
+        target.wht_amount = (target.wht_amount or 0) + total
+        target.save(update_fields=['wht_amount'])
+        for r in pending:
+            adj, _ = FactoringDocAdjustment.objects.get_or_create(bank_account=account, doc_date=r['date'])
+            FactoringDocAdjustment.objects.filter(pk=adj.pk).update(wht_cleared_by=target)
+        rebuild_factoring_transfers()
+    return total, len(pending)
 
 
 def factoring_wht_by_day():
@@ -3508,7 +3546,7 @@ def factoring_wht_by_day():
               .values('bank_account_id', 'payment_date').order_by()
               .annotate(fee=Sum('factoring_fee'), interest=Sum('factoring_interest'))):
         account, day = accounts[g['bank_account_id']], _as_date(g['payment_date'])
-        tax = factoring_doc_wht(account, day, g['interest'], g['fee'])
+        tax = factoring_doc_wht(account, day)
         if tax:
             key = (account.linked_account_id, day)
             result[key] = result.get(key, Decimal(0)) + tax
@@ -3595,7 +3633,7 @@ def _factoring_doc_totals(day, rows, account):
     advance = sum((r['advance'] for r in rows), Decimal(0))
     interest = sum((r['interest'] for r in rows if r['interest_upfront']), Decimal(0))
     fee = sum((r['fee'] for r in rows), Decimal(0))
-    wht = factoring_doc_wht(account, day, interest, fee)
+    wht = factoring_doc_wht(account, day)
     adj = FactoringDocAdjustment.objects.filter(bank_account=account, doc_date=day).first()
     return {'date': day, 'batches': batches, 'count': len(rows), 'advance': advance,
             'full': sum((r['full'] for r in rows), Decimal(0)), 'interest': interest, 'fee': fee, 'wht': wht,
@@ -4055,12 +4093,12 @@ def _factoring_resync(sender, instance, **kwargs):
 @receiver(models.signals.pre_save, sender=BankAccount)
 def _factoring_settings_before(sender, instance, **kwargs):
     instance._fx_old = (BankAccount.objects.filter(pk=instance.pk)
-                        .values('factoring_fee_minimum', 'factoring_wht_percent').first() if instance.pk else None)
+                        .values('factoring_fee_minimum').first() if instance.pk else None)
 
 
 @receiver(post_save, sender=BankAccount)
 def _factoring_settings_after(sender, instance, created, **kwargs):
-    # แก้ค่าธรรมเนียมขั้นต่ำ -> คิดค่าธรรมเนียมทุก Batch ของบัญชีนี้ใหม่ / แก้ % ภาษีหัก ณ ที่จ่าย -> ยอดรับโอนใหม่
+    # แก้ค่าธรรมเนียมขั้นต่ำ -> คิดค่าธรรมเนียมทุก Batch ของบัญชีนี้ใหม่
     old = getattr(instance, '_fx_old', None)
     if created or not old or instance.account_type != 'FACTORING':
         return
@@ -4068,8 +4106,6 @@ def _factoring_settings_after(sender, instance, created, **kwargs):
         for order_id in set(SalesPayment.objects.filter(bank_account=instance, factoring_role='ADVANCE')
                             .values_list('order_id', flat=True)):
             sync_factoring_advance(order_id)
-    elif old['factoring_wht_percent'] != instance.factoring_wht_percent:
-        rebuild_factoring_transfers()
 
 
 def deduction_date_in_month(customer, month):
