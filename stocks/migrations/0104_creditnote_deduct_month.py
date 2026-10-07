@@ -17,6 +17,15 @@ def fill_deduct_month(apps, schema_editor):
         cn.save(update_fields=['deduct_month'])
 
 
+def recompute_factoring(apps, schema_editor):
+    # คำนวณสมุดแฟคตอริ่งใหม่ทั้งหมด: ดอกเบี้ยหักทันทีย้ายไปวันเงินเบิกเข้า, ค่าธรรมเนียม/ดอกเบี้ยรวมก้อนต่อวัน,
+    # DC/Rebate/ลดหนี้รวมแถวเดียว — ใช้โมเดลจริง (ตรรกะอยู่ในฟังก์ชันแฟคตอริ่ง) ต้องอยู่ migration สุดท้ายของชุดนี้
+    from stocks.models import SalesPayment, sync_factoring_settlement, rebuild_factoring_transfers
+    for order_id in set(SalesPayment.objects.exclude(factoring_role='').values_list('order_id', flat=True)):
+        sync_factoring_settlement(order_id)
+    rebuild_factoring_transfers()
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -30,4 +39,5 @@ class Migration(migrations.Migration):
             field=models.DateField(blank=True, null=True, verbose_name='หักจากยอดชำระเดือน'),
         ),
         migrations.RunPython(fill_deduct_month, migrations.RunPython.noop),
+        migrations.RunPython(recompute_factoring, migrations.RunPython.noop),
     ]

@@ -3,15 +3,11 @@
 from django.db import migrations, models
 
 
-def recompute_factoring(apps, schema_editor):
+def mark_upfront(apps, schema_editor):
     # ไอร่าหักดอกเบี้ยทันทีวันจ่ายเงินเบิก -> รายการเดิมทั้งหมดเป็น "หักทันที" (ค่าเริ่มต้นของบัญชี)
-    # แล้วคำนวณสมุดแฟคตอริ่งใหม่: ดอกเบี้ยย้ายไปวันเงินเบิกเข้า, ค่าธรรมเนียม/ดอกเบี้ยรวมเป็นก้อนต่อวัน
-    # ใช้โมเดลจริง (ตรรกะอยู่ในฟังก์ชันแฟคตอริ่ง) เหมือน 0102
-    from stocks.models import SalesPayment, sync_factoring_settlement, rebuild_factoring_transfers
+    # คำนวณสมุดแฟคตอริ่งใหม่ทำท้าย 0104 (โค้ดจริงต้องใช้คอลัมน์ CreditNote.deduct_month ที่ 0104 เพิ่ม)
+    SalesPayment = apps.get_model('stocks', 'SalesPayment')
     SalesPayment.objects.filter(factoring_role='ADVANCE').update(factoring_interest_upfront=True)
-    for order_id in set(SalesPayment.objects.exclude(factoring_role='').values_list('order_id', flat=True)):
-        sync_factoring_settlement(order_id)
-    rebuild_factoring_transfers()
 
 
 class Migration(migrations.Migration):
@@ -51,5 +47,5 @@ class Migration(migrations.Migration):
             name='factoring_interest_upfront',
             field=models.BooleanField(default=False, editable=False),
         ),
-        migrations.RunPython(recompute_factoring, migrations.RunPython.noop),
+        migrations.RunPython(mark_upfront, migrations.RunPython.noop),
     ]
