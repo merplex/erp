@@ -1056,6 +1056,8 @@ class SalesOrder(models.Model):
         # ขายแฟคตอริ่ง: แถวส่วนที่เหลือ (REMAINDER) ที่วันรับเงินยังไม่ถึง = แฟคตอริ่งยังจ่ายไม่ครบ
         # -> ยอดครบเพราะนับส่วนนั้น = "ขายแฟคตอริ่งแล้ว" ไม่ใช่ "รับเงินครบแล้ว" (ค่าธรรมเนียม/ดอกเบี้ยไม่เกี่ยว)
         # วันรับเงินมาถึง -> refresh_factored_payment_status() (middleware) เปลี่ยนเป็นรับเงินครบแล้ว
+        if self.payment_status == 'SETTLED':  # ปิดยอดกรณีพิเศษ = ตัดจบเอง ไม่คำนวณทับ
+            return
         today = today or timezone.localdate()
         total_received = self.payments.aggregate(Sum('amount'))['amount__sum'] or Decimal(0)
         pending = (self.payments.filter(factoring_role='REMAINDER', payment_date__gt=today)
@@ -2842,11 +2844,27 @@ def sync_purchase_payment_ledger(sender, instance, **kwargs):
 @receiver(post_delete, sender=PurchasePaymentLog)
 @receiver(post_save, sender=PurchaseItem)
 @receiver(post_delete, sender=PurchaseItem)
-def _refresh_po_payment_status(sender, instance, **kwargs):
-    # สถานะการเงิน PO คำนวณจากรายการจ่ายเงินเทียบยอดสุทธิเสมอ ไม่ว่าเพิ่ม/แก้/ลบจากหน้าไหน (ลบ PO ทั้งใบ -> ไม่มีใบให้อัปเดต)
-    po = PurchaseOrder.objects.filter(pk=instance.purchase_order_id).first()
-    if po is not None:
-        po.update_payment_status()
+@receiver(post_delete, sender=SalesPayment)
+@receiver(post_save, sender=SalesItem)
+@receiver(post_delete, sender=SalesItem)
+def _refresh_order_payment_status(sender, instance, **kwargs):
+    # สถานะการเงิน PO/SO คำนวณจากรายการจ่าย/รับเงินเทียบยอดสุทธิเสมอ ไม่ว่าเพิ่ม/แก้/ลบจากหน้าไหน
+    # (SalesPayment.save อัปเดตเองอยู่แล้ว / ลบใบทั้งใบ -> ไม่มีใบให้อัปเดต)
+    if sender in (PurchasePaymentLog, PurchaseItem):
+        order = PurchaseOrder.objects.filter(pk=instance.purchase_order_id).first()
+    else:
+        order = SalesOrder.objects.filter(pk=instance.order_id if sender is SalesPayment else instance.sales_order_id).first()
+    if order is not None:
+        order.update_payment_status()
+
+
+@receiver(post_save, sender=PurchaseOrder)
+@receiver(post_save, sender=SalesOrder)
+def _refresh_payment_status_on_vat(sender, instance, created, update_fields=None, **kwargs):
+    # แก้ VAT (%) ที่หัวใบ -> ยอดสุทธิเปลี่ยน (save ที่ระบุ update_fields โดยไม่มี vat_percent ไม่เกี่ยว รวมถึง save สถานะเอง)
+    if created or (update_fields is not None and 'vat_percent' not in update_fields):
+        return
+    instance.update_payment_status()
 
 
 @receiver(post_delete, sender=SalesPayment)
