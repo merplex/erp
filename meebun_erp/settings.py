@@ -262,6 +262,7 @@ UNFOLD = {
                     {"title": "F2. คาดการณ์สต๊อก",           "icon": "insights",       "link": "/admin/stocks/stockforecast/"},
                     {"title": "F3. ใบสั่งผลิต/สั่งซื้อล่วงหน้า", "icon": "schedule",     "link": "/admin/stocks/advanceorderrule/"},
                     {"title": "F4. รายงานยอดขายตามสินค้า",    "icon": "bar_chart",      "link": "/admin/stocks/salesreport/"},
+                    {"title": "F5. รายงานยอดสั่งซื้อตามสินค้า", "icon": "shopping_cart",  "link": "/admin/stocks/purchasereport/"},
                 ],
             },
             {

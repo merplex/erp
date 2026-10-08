@@ -2230,6 +2230,12 @@ class SalesReport(Product): # ใช้ Product เป็นฐาน
         verbose_name = "F4. รายงานยอดขายตามสินค้า"
         verbose_name_plural = "F4. รายงานยอดขายตามสินค้า"
 
+class PurchaseReport(Product): # รายงานยอดสั่งซื้อตามสินค้า (คู่กับ F4 ฝั่งซื้อ)
+    class Meta:
+        proxy = True
+        verbose_name = "F5. รายงานยอดสั่งซื้อตามสินค้า"
+        verbose_name_plural = "F5. รายงานยอดสั่งซื้อตามสินค้า"
+
 # --- 5. Proxy Model สำหรับหน้า C6 (Shipment Accounting) ---
 # --- ในไฟล์ models.py ---
 # --- ในไฟล์ models.py ---

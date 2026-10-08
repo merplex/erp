@@ -15,7 +15,8 @@ from .models import (
     BOM, BOMIngredient, DocumentLock, StockPlanning, 
     StockAdjustment, Customer, CustomerProductContract, FinanceReport, 
     IncomeReport, ShipmentAccounting, InternationalPurchaseTracking,
-    SalesReport  # 👈 เพิ่มตัวที่ทำพังเมื่อกี้เข้าไปแล้วครับ!
+    SalesReport,  # 👈 เพิ่มตัวที่ทำพังเมื่อกี้เข้าไปแล้วครับ!
+    PurchaseReport,
 )
 from .models import DocumentLock, round_money, _delivery_local_date
 # 1. เปลี่ยนชื่อที่ปรากฏบนหัวเอกสาร (Header สีน้ำเงิน)
@@ -5560,6 +5561,382 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
 
     class Media:
         js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
+
+
+@admin.register(PurchaseReport)
+class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
+    """F5 รายงานยอดสั่งซื้อตามสินค้า — รูปแบบเดียวกับ F4 (ฝั่งซื้อ): 1 แถว = 1 สินค้า รวมยอดจากรายการใน PO
+    นับเฉพาะ PO ที่ไม่ใช่ร่าง/ยกเลิก, ช่วงเวลา = วันที่สั่งซื้อของ PO (ไม่กรองวันที่ = ปีนี้)
+    PurchaseItem.quantity_ordered เป็นชิ้น และ unit_price เป็นราคาต่อชิ้นเสมอ -> มูลค่า = จำนวน x ราคา"""
+    list_display = (
+        'get_name_link', 'get_total_qty', 'get_total_received', 'get_total_purchase', 'get_avg_price'
+    )
+    list_filter = (
+        ('purchaseitem__purchase_order__order_date', DjangoDateRangeFilter),
+        ('category', AutocompleteSelectMultipleFilter),
+        ('tags', AutocompleteSelectMultipleFilter),
+        ('purchaseitem__purchase_order__supplier', AutocompleteSelectMultipleFilter),
+    )
+    list_filter_submit = True
+    search_fields = ('name', 'barcodes__code', 'purchaseitem__purchase_order__supplier__company_name')
+    actions = ['calculate_selected_totals']
+
+    EXCLUDED_STATUSES = ('Draft', 'Cancelled')
+    _DATE_PARAM = 'purchaseitem__purchase_order__order_date'
+    _SUPPLIER_PARAM = 'purchaseitem__purchase_order__supplier__id__exact'
+
+    def lookup_allowed(self, lookup, value, request=None):
+        # RangeDateFilter ตั้งชื่อ param แบบ "<field>_from" (ไม่ใช่ lookup ปกติ) — allow ตรงๆ เหมือน F4
+        if lookup.startswith(self._DATE_PARAM):
+            return True
+        return super().lookup_allowed(lookup, value, request)
+
+    def get_urls(self):
+        custom_urls = [
+            path('<int:object_id>/po-detail/', self.admin_site.admin_view(self.po_detail_view), name='stocks_purchasereport_po_detail'),
+            path('export-detailed/', self.admin_site.admin_view(self.export_detailed_excel_view), name='stocks_purchasereport_export_detailed'),
+        ]
+        return custom_urls + super().get_urls()
+
+    def _po_filter_q(self, request, po_path):
+        """เงื่อนไขของ PO (po_path = path ไปหา PurchaseOrder): สถานะ + ช่วงวันที่สั่งซื้อ + ผู้จำหน่ายตามตัวกรองหน้า list
+        ไม่กรองวันที่ = PO ปีนี้ (เหมือนค่าเริ่มต้นของ F4)"""
+        q = ~Q(**{f"{po_path}__status__in": self.EXCLUDED_STATUSES})
+        date_from = request.GET.get(f"{self._DATE_PARAM}_from")
+        date_to = request.GET.get(f"{self._DATE_PARAM}_to")
+        from unfold.utils import parse_date_str  # ตัวเดียวกับที่ตัวกรองวันที่ของ unfold ใช้ อ่านรูปแบบวันที่ตรงกัน
+        parsed = {key: parse_date_str(raw) for key, raw in (('gte', date_from), ('lte', date_to)) if raw}
+        parsed = {key: value for key, value in parsed.items() if value}
+        if parsed:
+            q &= Q(**{f"{po_path}__order_date__{k}": v for k, v in parsed.items()})
+        else:
+            q &= Q(**{f"{po_path}__order_date__year": timezone.localdate().year})
+        suppliers = [v for raw in request.GET.getlist(self._SUPPLIER_PARAM) for v in raw.split(',') if v.strip()]
+        if suppliers:
+            q &= Q(**{f"{po_path}__supplier_id__in": suppliers})
+        return q
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        # ⚠️ เก็บ request ไว้ใช้ใน get_name_link / fast_column_totals (เหมือน F4)
+        self._list_request = request
+
+        # ยอดต่อสินค้าคิดจาก subquery ของ PurchaseItem (ไม่ join จากตัวสินค้า กันยอดเบิ้ลตอนค้นหา/กรอง)
+        items = (PurchaseItem.objects.filter(product=OuterRef('pk'))
+                 .filter(self._po_filter_q(request, 'purchase_order'))
+                 .order_by().values('product'))
+        qty = items.annotate(t=Sum('quantity_ordered')).values('t')[:1]
+        received = items.annotate(t=Sum('quantity_received')).values('t')[:1]
+        value = items.annotate(t=Sum(F('quantity_ordered') * F('unit_price'),
+                                     output_field=DecimalField())).values('t')[:1]
+        return qs.annotate(
+            total_qty=Coalesce(Subquery(qty), Value(0), output_field=DecimalField()),
+            total_received=Coalesce(Subquery(received), Value(0), output_field=DecimalField()),
+            total_purchase_val=Coalesce(Subquery(value), Value(0), output_field=DecimalField()),
+        ).filter(total_qty__gt=0)  # 🎯 โชว์เฉพาะสินค้าที่มียอดสั่งซื้อในช่วงนั้น
+
+    def _totals_queryset(self, request, queryset):
+        """ชุดสินค้าตามตัวกรอง (ไม่ซ้ำ) พร้อมยอดต่อสินค้า — ใช้รวมยอดทั้งหมด (แถว TOTAL / กล่องสรุปยอด)"""
+        return self.get_queryset(request).filter(pk__in=queryset.values('pk'))
+
+    def _aggregate(self, request, queryset):
+        agg = self._totals_queryset(request, queryset).aggregate(
+            qty=Sum('total_qty'), received=Sum('total_received'), val=Sum('total_purchase_val'))
+        return {k: v or Decimal('0') for k, v in agg.items()}
+
+    def fast_column_totals(self, queryset, fields):
+        agg = self._aggregate(self._list_request, queryset)
+        totals = {'get_total_qty': agg['qty'], 'get_total_received': agg['received'],
+                  'get_total_purchase': agg['val']}
+        return {f: v for f, v in totals.items() if f in fields}
+
+    @admin.action(description="📝 สรุปยอดรวมรายการที่เลือก")
+    def calculate_selected_totals(self, request, queryset):
+        agg = self._aggregate(request, queryset)
+        count = queryset.values('pk').distinct().count()
+        self.message_user(
+            request,
+            f"📊 สรุปข้อมูลที่เลือก ({count} รายการ): "
+            f"สั่งซื้อรวม: {agg['qty']:,.0f} ชิ้น | "
+            f"รับแล้ว: {agg['received']:,.0f} ชิ้น | "
+            f"ยอดสั่งซื้อรวม: ฿{agg['val']:,.2f}",
+            messages.INFO
+        )
+
+    @admin.display(description="สินค้า", ordering='name')
+    def get_name_link(self, obj):
+        # ลิงก์ไปหน้ารายละเอียด PO ของสินค้าตัวนี้ พร้อมพ่วงตัวกรองปัจจุบันไปด้วย
+        request = getattr(self, '_list_request', None)
+        url = reverse('admin:stocks_purchasereport_po_detail', args=[obj.pk])
+        qs = request.GET.urlencode() if request else ''
+        if qs:
+            url += f"?{qs}"
+        return format_html('<a href="{}" style="font-weight:600;">{}</a>', url, obj.name)
+
+    @admin.display(description="จำนวนสั่งซื้อ", ordering='total_qty')
+    def get_total_qty(self, obj): return f"{obj.total_qty or 0:,.0f} {obj.unit}"
+
+    @admin.display(description="จำนวนรับแล้ว", ordering='total_received')
+    def get_total_received(self, obj): return f"{obj.total_received or 0:,.0f} {obj.unit}"
+
+    @admin.display(description="ยอดสั่งซื้อรวม", ordering='total_purchase_val')
+    def get_total_purchase(self, obj): return f"{obj.total_purchase_val or 0:,.2f}"
+
+    @admin.display(description="ราคาเฉลี่ย/หน่วย")
+    def get_avg_price(self, obj):
+        qty = obj.total_qty or 0
+        return f"{(obj.total_purchase_val or 0) / qty:,.2f}" if qty else "-"
+
+    def _po_rows_for_product(self, request, product):
+        """ยอดสั่งซื้อของสินค้าตัวนี้ตามตัวกรอง แยกเป็นแถวต่อ PO (ใช้ทั้งหน้ารายละเอียดและ Export Excel)"""
+        items = (
+            PurchaseItem.objects
+            .filter(product=product, quantity_ordered__gt=0)
+            .filter(self._po_filter_q(request, 'purchase_order'))
+            .select_related('purchase_order', 'purchase_order__supplier')
+            .order_by('purchase_order__order_date', 'purchase_order__po_number')
+        )
+        rows_by_po = {}
+        for item in items:
+            po = item.purchase_order
+            row = rows_by_po.setdefault(po.id, {
+                'po_number': po.po_number,
+                'order_date': po.order_date,
+                'status': po.get_status_display(),
+                'supplier_name': po.supplier.company_name if po.supplier_id else '-',
+                'qty': Decimal('0'),
+                'received': Decimal('0'),
+                'value_before_vat': Decimal('0'),
+                'vat_percent': po.vat_percent or Decimal('0'),
+            })
+            row['qty'] += Decimal(item.quantity_ordered)
+            row['received'] += Decimal(item.quantity_received or 0)
+            row['value_before_vat'] += Decimal(item.quantity_ordered) * (item.unit_price or Decimal('0'))
+
+        rows = []
+        for row in rows_by_po.values():
+            vat_amount = row['value_before_vat'] * (Decimal(row['vat_percent']) / Decimal('100'))
+            row['vat_amount'] = vat_amount
+            row['value_after_vat'] = row['value_before_vat'] + vat_amount
+            row['unit_price'] = (row['value_before_vat'] / row['qty']) if row['qty'] else Decimal('0')
+            rows.append(row)
+        return rows
+
+    def po_detail_view(self, request, object_id):
+        from django.core.exceptions import PermissionDenied
+        from django.http import Http404
+        if not self.has_view_or_change_permission(request):
+            raise PermissionDenied
+        obj = self.get_object(request, object_id)
+        if obj is None:
+            raise Http404("ไม่พบสินค้านี้")
+
+        rows = self._po_rows_for_product(request, obj)
+        totals = {k: sum((r[k] for r in rows), Decimal('0'))
+                  for k in ('qty', 'received', 'value_before_vat', 'vat_amount', 'value_after_vat')}
+
+        back_url = reverse('admin:stocks_purchasereport_changelist')
+        back_qs = request.GET.urlencode()
+        if back_qs:
+            back_url += f"?{back_qs}"
+
+        context = {
+            **self.admin_site.each_context(request),
+            'title': f"รายละเอียดยอดสั่งซื้อตาม PO: {obj.name}",
+            'object': obj,
+            'opts': self.model._meta,
+            'rows': rows,
+            'totals': totals,
+            'back_url': back_url,
+        }
+        return TemplateResponse(request, 'admin/purchase_report_po_detail.html', context)
+
+    def _period_label(self, request):
+        date_from = request.GET.get(f"{self._DATE_PARAM}_from")
+        date_to = request.GET.get(f"{self._DATE_PARAM}_to")
+        if date_from or date_to:
+            return f"{date_from or '...'} - {date_to or '...'}"
+        return f"ปีนี้ ({timezone.localdate().year})"
+
+    def export_detailed_excel_view(self, request):
+        from django.core.exceptions import PermissionDenied
+        from django.conf import settings
+        from django.db.models import Prefetch
+        if not self.has_view_or_change_permission(request):
+            raise PermissionDenied
+
+        cl = self.get_changelist_instance(request)
+        qs = self._totals_queryset(request, cl.get_queryset(request)).order_by('name').prefetch_related(
+            Prefetch('barcodes', queryset=ProductBarcode.objects.order_by('id'))
+        )
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'PurchaseByProductReport'[:31]
+        # แถวรายละเอียด (ต่อ PO) พับเก็บไว้เป็นค่าเริ่มต้น สรุปยอดอยู่ใต้กลุ่ม — เหมือน Export ของ F4
+        ws.sheet_properties.outlinePr.summaryBelow = True
+
+        title_font = Font(bold=True, size=14)
+        label_font = Font(bold=True)
+        header_font = Font(bold=True, color='FFFFFF')
+        header_fill = PatternFill(start_color='2563EB', end_color='2563EB', fill_type='solid')
+        group_font = Font(bold=True)
+        subtotal_font = Font(bold=True)
+        subtotal_fill = PatternFill(start_color='F1F5F9', end_color='F1F5F9', fill_type='solid')
+
+        ws.append(['รายงานยอดสั่งซื้อแยกตามสินค้า (แยกตาม PO)'])
+        ws['A1'].font = title_font
+        ws.append(['ชื่อบริษัท', getattr(settings, 'COMPANY_NAME', '')])
+        ws.append(['เลขผู้เสียภาษี :', getattr(settings, 'COMPANY_TAX_ID', '')])
+        ws.append(['ช่วงเวลา :', self._period_label(request)])
+        for r in (2, 3, 4):
+            ws.cell(row=r, column=1).font = label_font
+        ws.append([])
+
+        headers = [
+            'บาร์โค้ดสินค้า', 'ชื่อสินค้า', 'เลขที่ PO', 'วันที่สั่งซื้อ', 'สถานะ PO', 'ผู้จำหน่าย',
+            'จำนวน', 'รับแล้ว', 'หน่วย', 'ราคาต่อหน่วย', 'มูลค่าก่อน VAT', 'VAT (%)', 'มูลค่า VAT', 'ยอดรวมหลัง VAT',
+        ]
+        header_row_idx = ws.max_row + 1
+        ws.append(headers)
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=header_row_idx, column=col_idx)
+            cell.font = header_font
+            cell.fill = header_fill
+
+        for product in qs:
+            rows = self._po_rows_for_product(request, product)
+            if not rows:
+                continue
+
+            primary_barcode = next(iter(product.barcodes.all()), None)
+            barcode_code = primary_barcode.code if primary_barcode else ''
+
+            group_row_idx = ws.max_row + 1
+            ws.append([barcode_code, product.name])
+            ws.cell(row=group_row_idx, column=1).font = group_font
+            ws.cell(row=group_row_idx, column=2).font = group_font
+
+            for row in rows:
+                ws.append([
+                    None,
+                    product.name,
+                    row['po_number'],
+                    row['order_date'],
+                    row['status'],
+                    row['supplier_name'],
+                    float(row['qty']),
+                    float(row['received']),
+                    product.unit,
+                    float(row['unit_price']),
+                    float(row['value_before_vat']),
+                    float(row['vat_percent']),
+                    float(row['vat_amount']),
+                    float(row['value_after_vat']),
+                ])
+                detail_row_idx = ws.max_row
+                ws.cell(row=detail_row_idx, column=4).number_format = 'DD/MM/YYYY'
+                ws.row_dimensions[detail_row_idx].outlineLevel = 1
+                ws.row_dimensions[detail_row_idx].hidden = True
+
+            subtotal_row_idx = ws.max_row + 1
+            ws.append([
+                None, None, None, None, None, 'ยอดรวม',
+                float(sum((r['qty'] for r in rows), Decimal('0'))),
+                float(sum((r['received'] for r in rows), Decimal('0'))),
+                None, None,
+                float(sum((r['value_before_vat'] for r in rows), Decimal('0'))),
+                None,
+                float(sum((r['vat_amount'] for r in rows), Decimal('0'))),
+                float(sum((r['value_after_vat'] for r in rows), Decimal('0'))),
+            ])
+            for col_idx in range(1, len(headers) + 1):
+                cell = ws.cell(row=subtotal_row_idx, column=col_idx)
+                cell.font = subtotal_font
+                cell.fill = subtotal_fill
+
+            ws.append([])
+
+        for col in ws.columns:
+            length = max((len(str(c.value)) for c in col if c.value is not None), default=10)
+            ws.column_dimensions[col[0].column_letter].width = min(max(length + 2, 10), 45)
+
+        response = HttpResponse(
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        filename = f"F5_PurchaseByProduct_{timezone.now().strftime('%Y%m%d')}.xlsx"
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        wb.save(response)
+        return response
+
+    # --- ค้นหาแบบ "หรือ" ด้วยเครื่องหมาย | เหมือน F4 ---
+    def get_search_results(self, request, queryset, search_term):
+        if '|' in search_term:
+            import operator
+            from functools import reduce
+            parts = [p.strip() for p in search_term.split('|') if p.strip()]
+            q_objects = []
+            for part in parts:
+                q_part = Q()
+                for field in self.search_fields:
+                    q_part |= Q(**{f"{field}__icontains": part})
+                q_objects.append(q_part)
+            return queryset.filter(reduce(operator.or_, q_objects)).distinct(), False
+        return super().get_search_results(request, queryset, search_term)
+
+    # 🎯 แถวยอดรวมทั้งหมด (TOTAL) ท้ายตาราง + ปุ่ม Export Excel (แยกตาม PO) เหนือตาราง — เหมือน F4
+    def changelist_view(self, request, extra_context=None):
+        response = super().changelist_view(request, extra_context)
+        try:
+            cl = response.context_data['cl']
+            agg = self._aggregate(request, cl.get_queryset(request))
+            avg = (agg['val'] / agg['qty']) if agg['qty'] else Decimal('0')
+            summary = {
+                "qty": "{:,.0f}".format(agg['qty']),
+                "received": "{:,.0f}".format(agg['received']),
+                "val": "{:,.2f}".format(agg['val']),
+                "avg": "{:,.2f}".format(avg),
+            }
+            export_url = reverse('admin:stocks_purchasereport_export_detailed')
+            request_qs = request.GET.urlencode()
+            if request_qs:
+                export_url += f"?{request_qs}"
+            js_code = """
+                <script>
+                    document.addEventListener('DOMContentLoaded', function() {{
+                        const data = {0};
+                        const table = document.querySelector('#result_list');
+                        if (table) {{
+                            const tfoot = document.createElement('tfoot');
+                            tfoot.innerHTML = `
+                                <tr style="font-weight: bold; background: #f8f9fa; border-top: 2px solid #dee2e6;">
+                                    <td></td>
+                                    <td style="color: #333;">ยอดรวมทั้งหมด (TOTAL)</td>
+                                    <td>${{data.qty}}</td>
+                                    <td>${{data.received}}</td>
+                                    <td>${{data.val}}</td>
+                                    <td>${{data.avg}}</td>
+                                </tr>
+                            `;
+                            table.appendChild(tfoot);
+
+                            const exportBtnWrap = document.createElement('div');
+                            exportBtnWrap.style.margin = '0 0 14px 0';
+                            exportBtnWrap.innerHTML = `<a href="{1}" style="display:inline-block;padding:8px 16px;background:#2563EB;color:#fff;border-radius:6px;text-decoration:none;font-weight:600;">📊 Export Excel (แยกตาม PO)</a>`;
+                            table.parentElement.insertBefore(exportBtnWrap, table);
+                        }}
+                    }});
+                </script>
+            """.format(json.dumps(summary), export_url)
+            extra_context = extra_context or {}
+            extra_context['summary_js'] = mark_safe(js_code)
+            return super().changelist_view(request, extra_context)
+        except Exception as e:
+            print(f"Error in F5 Total: {e}")
+            return response
+
+    class Media:
+        js = ('js/admin_sum_selected.js',)
 
 # 2. ตั้งค่า Admin ตัวเดียวจบ
 # A5: SO มีรับเงินจริงแล้ว (ยอดบวก ไม่นับรายการหัก DC/Rebate)
