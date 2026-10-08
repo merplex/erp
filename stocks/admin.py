@@ -4456,6 +4456,7 @@ def settle_and_close_orders(modeladmin, request, queryset):
     # (สมุดบัญชีลงบาท = ยอดค้างของแต่ละใบ x เรทนี้ รวมเป็นรายการเดียว)
     form_class = PaymentDateForm
     pay_summary = ''
+    rate_warning = ''
     if queryset.model is not None and issubclass(queryset.model, PurchaseOrder):
         pos = list(queryset)
         currencies = sorted({po.currency for po in pos})
@@ -4470,13 +4471,17 @@ def settle_and_close_orders(modeladmin, request, queryset):
         due = sum((max(round_money(po.balance_due), Decimal(0)) for po in pos), Decimal(0))
         pay_summary = f"ยอดค้างจ่ายรวม {due:,.2f} {label}"
         if currency != 'THB':
+            # ต้องกรอกเรทตอนจ่ายเองทุกครั้ง (ไม่เติมเรทของใบให้) — ใบที่เลือกเรทไม่เท่ากันขึ้นเตือนพร้อมเรทของแต่ละใบ
             rates = {po.exchange_rate for po in pos}
+            if len(rates) > 1:
+                rate_warning = "⚠️ ใบที่เลือกมีเรทไม่เท่ากัน: " + ", ".join(
+                    f"{po.po_number} = {po.exchange_rate:,.4f}" for po in sorted(pos, key=lambda o: o.po_number))
 
             class ForeignPaymentForm(PaymentDateForm):
                 exchange_rate = forms.DecimalField(
                     label=f"ExRate ตอนจ่าย (บาทต่อ 1 {label})", max_digits=12, decimal_places=4,
-                    min_value=Decimal('0.0001'), initial=rates.pop() if len(rates) == 1 else None,
-                    help_text="สมุดบัญชีลงเป็นบาท = ยอดที่จ่าย x เรทนี้")
+                    min_value=Decimal('0.0001'),
+                    help_text="กรอกเรทจริงตอนจ่าย — สมุดบัญชีลงเป็นบาท = ยอดที่จ่าย x เรทนี้")
 
                 def clean_exchange_rate(self):
                     rate = self.cleaned_data['exchange_rate']
@@ -4540,6 +4545,7 @@ def settle_and_close_orders(modeladmin, request, queryset):
         <h2 style="color: #007bff;">💰 ยืนยันการชำระเงินและปิดยอด ({{ queryset.count }} รายการ)</h2>
         <p>ระบบจะสร้างรายการชำระเงิน <b>"เต็มจำนวนคงเหลือ"</b> และเปลี่ยนสถานะเป็น <b>Paid</b> ให้อัตโนมัติ</p>
         {% if pay_summary %}<p style="font-size:15px;"><b>{{ pay_summary }}</b></p>{% endif %}
+        {% if rate_warning %}<p style="padding:10px 12px;border:1px solid #f59e0b;background:#fffbeb;color:#92400e;border-radius:6px;">{{ rate_warning }}</p>{% endif %}
         <form method="post">{% csrf_token %}
             {% for obj in queryset %}<input type="hidden" name="{{ action_checkbox_name }}" value="{{ obj.pk }}">{% endfor %}
             <input type="hidden" name="action" value="settle_and_close_orders">
@@ -4553,7 +4559,7 @@ def settle_and_close_orders(modeladmin, request, queryset):
     """
     
     context = {
-        'queryset': queryset, 'form': form, 'media': form.media, 'pay_summary': pay_summary,
+        'queryset': queryset, 'form': form, 'media': form.media, 'pay_summary': pay_summary, 'rate_warning': rate_warning,
         'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME, 'opts': modeladmin.model._meta,
     }
     return HttpResponse(Template(html_template).render(RequestContext(request, context)))
