@@ -1281,17 +1281,30 @@ def build_product_history_rows(product):
         .select_related('purchase_order', 'purchase_order__supplier', 'barcode_obj')
     )
     po_ids = [r.purchase_order_id for r in receipts]
+    # ราคาในใบเป็นสกุลของใบ (ราคาต่อชิ้น)
     po_price_map = {
-        # ราคาในใบเป็นสกุลของใบ -> แปลงเป็นบาทด้วยเรทของใบ (ประวัติสินค้าแสดงมูลค่าเป็นบาท)
-        pi.purchase_order_id: pi.unit_price * (pi.purchase_order.exchange_rate or 1)
-        for pi in PurchaseItem.objects.filter(purchase_order_id__in=po_ids, product=product).select_related('purchase_order')
+        pi.purchase_order_id: pi.unit_price
+        for pi in PurchaseItem.objects.filter(purchase_order_id__in=po_ids, product=product)
     }
     for r in receipts:
-        unit_price = po_price_map.get(r.purchase_order_id) or Decimal('0')
+        po = r.purchase_order
+        foreign_price = po_price_map.get(r.purchase_order_id) or Decimal('0')
+        rate = po.exchange_rate or Decimal('1')
+        # แสดงมูลค่าเป็นบาท (ราคาในใบ x เรทของใบ) — ใบสกุลต่างประเทศมียอดเดิมในวงเล็บต่อท้าย
+        unit_price = foreign_price * rate
         # unit_price เป็นราคาต่อชิ้น (หน่วยหลัก) เสมอ — ต้องแปลง quantity_received เป็นชิ้นก่อนคูณ
         factor = getattr(r.barcode_obj, 'conversion_factor', 1) or 1
         qty_pieces = r.quantity_received * factor
+        foreign_note = {}
+        if po.currency != 'THB':
+            code = CURRENCY_LABELS.get(po.currency, po.currency)
+            rate_txt = f"{rate.normalize():f}"
+            foreign_note = {
+                'unit_price_note': f"({foreign_price:,.2f}{code} ExRate{rate_txt})",
+                'total_value_note': f"({foreign_price * qty_pieces:,.2f}{code} ExRate{rate_txt})",
+            }
         rows.append({
+            **foreign_note,
             'date': r.received_date,
             'type': 'purchase',
             'type_label': '🛒 ซื้อเข้า (รับของ)',

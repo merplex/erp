@@ -16,6 +16,7 @@
     .ph-ref a { color: #2563eb; text-decoration: none; font-weight: 600; }
     .ph-ref a:hover { text-decoration: underline; }
     .ph-num { text-align: right; font-variant-numeric: tabular-nums; }
+    .ph-fx { color: #64748b; font-size: 12px; white-space: nowrap; }
     .ph-qty-pos { color: #16a34a; font-weight: 700; }
     .ph-qty-neg { color: #dc2626; font-weight: 700; }
     .ph-note { white-space: pre-line; color: #64748b; max-width: 320px; }
@@ -60,8 +61,8 @@
                 <td class="ph-num {% if row.quantity is not None %}{% if row.quantity < 0 %}ph-qty-neg{% else %}ph-qty-pos{% endif %}{% endif %}">
                     {% if row.quantity is not None %}{{ row.quantity|floatformat:2 }}{% else %}-{% endif %}
                 </td>
-                <td class="ph-num">{% if row.unit_price is not None %}{{ row.unit_price|floatformat:2 }}{% else %}-{% endif %}</td>
-                <td class="ph-num">{% if row.total_value is not None %}{{ row.total_value|floatformat:2 }}{% else %}-{% endif %}</td>
+                <td class="ph-num">{% if row.unit_price is not None %}{{ row.unit_price|floatformat:2 }}{% if row.unit_price_note %} <span class="ph-fx">{{ row.unit_price_note }}</span>{% endif %}{% else %}-{% endif %}</td>
+                <td class="ph-num">{% if row.total_value is not None %}{{ row.total_value|floatformat:2 }}{% if row.total_value_note %} <span class="ph-fx">{{ row.total_value_note }}</span>{% endif %}{% else %}-{% endif %}</td>
                 <td class="ph-note">{{ row.note|default:"-" }}</td>
             </tr>
             {% empty %}
