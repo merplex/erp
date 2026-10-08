@@ -782,6 +782,13 @@ class ProductBarcodeAdmin(UnfoldModelAdmin):
             material_id = (request.GET.get('material_id') or request.GET.get('product_id') or '').strip()
             if material_id:
                 queryset = queryset.filter(product_id=material_id)
+            # ใบสั่งซื้อ: เหมือนช่องสินค้า — เฉพาะบาร์โค้ดของสินค้าที่ supplier นี้ขาย + รายการที่ไม่ใช่สต็อก
+            # (purchase_order_supplier_filter.js แนบ supplier_id ที่เลือกอยู่ในหน้ามา)
+            supplier_id = request.GET.get('supplier_id', '').strip()
+            if supplier_id.isdigit():
+                from django.db.models import Q
+                queryset = queryset.filter(Q(product__product_suppliers__supplier_id=supplier_id)
+                                           | Q(product__is_product=False)).distinct()
         return queryset, use_distinct
 
 class ProductSupplierForm(forms.ModelForm):
@@ -2144,7 +2151,7 @@ class PurchaseOrderAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelM
         return color_diff(received - ordered)
 
     class Media:
-        js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js', 'js/purchase_order_supplier_filter.js', 'js/purchase_item_price_autofill.js', 'js/product_barcode_sync.js', 'js/currency_rate.js')
+        js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js', 'js/purchase_order_supplier_filter.js', 'js/purchase_item_price_autofill.js', 'js/product_barcode_sync.js', 'js/currency_rate.js', 'js/purchase_item_live_total.js')
         css = {'all': ('css/po_currency_row.css',)}
 
 class FactoringDateForm(forms.Form):
