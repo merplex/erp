@@ -134,3 +134,49 @@ class ConfirmDraftSalesOrderTests(TestCase):
         self.assertEqual(statuses[old_draft.pk], 'Confirmed')
         self.assertEqual(statuses[new_draft.pk], 'Draft')
         self.assertEqual(statuses[cancelled.pk], 'Cancelled')
+
+
+class PurchaseCurrencyTests(TestCase):
+    """ราคา Supplier / ใบสั่งซื้อ / การจ่ายเงิน สกุลต่างประเทศ: ต้นทุนและสมุดบัญชีเป็นบาท = ยอด x เรท"""
+
+    def setUp(self):
+        from decimal import Decimal
+        from .models import Product, ProductSupplier, PurchaseOrder, Supplier
+        self.D = Decimal
+        self.cn = Supplier.objects.create(company_name='CN', contact_person='P', address='A', phone='0',
+                                          type='International')
+        self.th = Supplier.objects.create(company_name='TH', contact_person='P', address='A', phone='0')
+        self.product = Product.objects.create(name='X', sale_price=0)
+        ProductSupplier.objects.create(product=self.product, supplier=self.cn, latest_buy_price=Decimal('10'),
+                                       currency='RMB', exchange_rate=Decimal('5.2'))
+        ProductSupplier.objects.create(product=self.product, supplier=self.th, latest_buy_price=Decimal('50'),
+                                       currency='THB', exchange_rate=Decimal('9'))
+        self.po = PurchaseOrder.objects.create(supplier=self.cn, currency='RMB', exchange_rate=Decimal('5'))
+
+    def test_cost_compares_supplier_prices_in_baht(self):
+        from .models import ProductSupplier
+        self.product.refresh_from_db()
+        self.assertEqual(ProductSupplier.objects.get(supplier=self.th).exchange_rate, 1)  # บาท = เรท 1
+        self.assertEqual(self.product.auto_cost, self.D('59.80'))  # RMB 10 x 5.2 = 52 > 50 -> +15%
+
+    def test_po_item_price_and_payment_ledger_in_baht(self):
+        from .models import BankTransaction, PurchaseItem, PurchasePaymentLog
+        PurchaseItem.objects.create(purchase_order=self.po, product=self.product, quantity_unit=100, unit_price=0)
+        self.assertEqual(self.po.items.get().unit_price, self.D('10.00'))  # ราคา Supplier สกุลเดียวกับใบ
+        pay_default = PurchasePaymentLog.objects.create(purchase_order=self.po, amount=self.D('400'))
+        pay_custom = PurchasePaymentLog.objects.create(purchase_order=self.po, amount=self.D('100'),
+                                                       exchange_rate=self.D('5.3'))
+        self.assertEqual(pay_default.exchange_rate, self.D('5'))  # ค่าเริ่มต้น = เรทของใบ
+        amounts = dict(BankTransaction.objects.filter(purchase_payment__isnull=False)
+                       .values_list('purchase_payment_id', 'amount'))
+        self.assertEqual(amounts[pay_default.pk], self.D('-2000'))
+        self.assertEqual(amounts[pay_custom.pk], self.D('-530'))
+        self.po.refresh_from_db()
+        self.assertEqual(self.po.payment_status, 'Partial')  # เทียบยอดเป็น RMB: จ่าย 500 จาก 1,000
+        self.assertEqual(self.po.balance_due, self.D('500'))
+
+    def test_item_price_converted_when_supplier_price_in_other_currency(self):
+        from .models import PurchaseItem, PurchaseOrder
+        po_usd = PurchaseOrder.objects.create(supplier=self.th, currency='USD', exchange_rate=self.D('35'))
+        PurchaseItem.objects.create(purchase_order=po_usd, product=self.product, quantity_unit=1, unit_price=0)
+        self.assertEqual(po_usd.items.get().unit_price, self.D('1.43'))  # 50 บาท / 35

@@ -315,14 +315,42 @@ def recommended_supplier_api(request):
     supplier = latest_item.purchase_order.supplier if latest_item and latest_item.purchase_order.supplier_id else None
 
     if not supplier:
+        from django.db.models import F, ExpressionWrapper, DecimalField
+        # เทียบราคาเป็นบาท (ราคา x เรท) — ราคา RMB/USD ตัวเลขน้อยกว่าบาทเสมอ เทียบตรงๆ ไม่ได้
         cheapest = ProductSupplier.objects.filter(
             product_id=product_id, latest_buy_price__gt=0
-        ).select_related('supplier').order_by('latest_buy_price').first()
+        ).annotate(_thb=ExpressionWrapper(F('latest_buy_price') * F('exchange_rate'), output_field=DecimalField())
+                   ).select_related('supplier').order_by('_thb').first()
         supplier = cheapest.supplier if cheapest else None
 
     if not supplier:
         return JsonResponse({})
     return JsonResponse({'supplier_id': supplier.pk, 'supplier_name': supplier.company_name})
+
+
+@staff_member_required
+def supplier_currency_rate_api(request):
+    """API: สกุลเงิน/เรทเริ่มต้นของใบสั่งซื้อ supplier นี้ (หน้า PO แก้เองได้)
+    - ระบุ currency: เรทล่าสุดของสกุลนั้น (ราคา Supplier ที่ตั้งไว้ในรายการสินค้า > ใบสั่งซื้อล่าสุด)
+    - ไม่ระบุ currency (เลือก supplier ในใบใหม่): สกุลเงิน+เรทจากใบสั่งซื้อล่าสุดของ supplier นี้
+      ถ้ายังไม่เคยสั่ง ใช้สกุลเงินของราคา Supplier ที่ตั้งไว้ล่าสุด"""
+    from .models import ProductSupplier, PurchaseOrder
+    supplier_id = request.GET.get('supplier_id', '').strip()
+    currency = request.GET.get('currency', '').strip()
+    if not supplier_id.isdigit():
+        return JsonResponse({})
+    pos = PurchaseOrder.objects.filter(supplier_id=supplier_id).exclude(status='Cancelled').order_by('-order_date', '-id')
+    prices = ProductSupplier.objects.filter(supplier_id=supplier_id).order_by('-id')
+    if not currency:
+        latest = pos.values('currency', 'exchange_rate').first() or prices.values('currency', 'exchange_rate').first()
+        if not latest:
+            return JsonResponse({})
+        return JsonResponse({'currency': latest['currency'], 'exchange_rate': str(latest['exchange_rate'])})
+    if currency == 'THB':
+        return JsonResponse({'currency': 'THB', 'exchange_rate': '1'})
+    rate = (prices.filter(currency=currency).values_list('exchange_rate', flat=True).first()
+            or pos.filter(currency=currency).values_list('exchange_rate', flat=True).first())
+    return JsonResponse({'currency': currency, 'exchange_rate': str(rate)} if rate else {'currency': currency})
 
 
 @staff_member_required
@@ -339,12 +367,28 @@ def purchase_quotation_price_api(request):
         return JsonResponse({})
 
     existing_price = Decimal('0')
+    ps = None
     if supplier_id:
         ps = ProductSupplier.objects.filter(product_id=product_id, supplier_id=supplier_id).first()
         if ps and ps.latest_buy_price:
             existing_price = ps.latest_buy_price
 
     suggested_price = existing_price if existing_price else (product.buy_price or 0)
+
+    # หน้าใบสั่งซื้อส่งสกุลเงิน/เรทของใบมาด้วย -> ราคาที่เติมให้ต้องเป็นสกุลของใบ (ตรรกะเดียวกับ PurchaseItem.save)
+    currency = request.GET.get('currency', '').strip()
+    if currency:
+        try:
+            rate = Decimal(request.GET.get('exchange_rate') or '1') or Decimal('1')
+        except Exception:
+            rate = Decimal('1')
+        if currency == 'THB':
+            rate = Decimal('1')
+        if existing_price and ps.currency == currency:
+            suggested_price = existing_price
+        else:
+            price_thb = ps.price_thb if existing_price else (product.buy_price or Decimal('0'))
+            suggested_price = (price_thb / rate).quantize(Decimal('0.01'))
 
     return JsonResponse({
         'existing_price': str(existing_price),

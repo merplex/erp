@@ -47,9 +47,9 @@
 </table>
 
 <div class="info-grid" style="grid-template-columns: 1fr; text-align:right; margin-bottom:24px;">
-    <div><span class="label">ราคารวม (ก่อน VAT):</span> {{ obj.total_items_price|floatformat:2 }} บาท</div>
-    <div><span class="label">VAT ({{ obj.vat_percent }}%):</span> {{ obj.vat_amount|floatformat:2 }} บาท</div>
-    <div><span class="label">ยอดรวมสุทธิ:</span> <strong>{{ obj.grand_total|floatformat:2 }} บาท</strong></div>
+    <div><span class="label">ราคารวม (ก่อน VAT):</span> {{ obj.total_items_price|floatformat:2 }} {{ obj.get_currency_display }}</div>
+    <div><span class="label">VAT ({{ obj.vat_percent }}%):</span> {{ obj.vat_amount|floatformat:2 }} {{ obj.get_currency_display }}</div>
+    <div><span class="label">ยอดรวมสุทธิ:</span> <strong>{{ obj.grand_total|floatformat:2 }} {{ obj.get_currency_display }}</strong></div>
 </div>
 
 <h3>หมายเหตุ</h3>

@@ -21,9 +21,12 @@
             var current = parseFloat($priceInput.val());
             if (current) return; // มีราคาอยู่แล้ว ไม่ทับ
 
+            // ส่งสกุลเงิน/เรทของใบไปด้วย -> ได้ราคาเป็นสกุลของใบ (ราคา Supplier คนละสกุลจะถูกแปลงผ่านบาท)
             $.get('/api/purchase-quotation-price/', {
                 supplier_id: $supplierField.val(),
                 product_id: productId,
+                currency: $('#id_currency').val() || 'THB',
+                exchange_rate: $('#id_exchange_rate').val() || '1',
             }).done(function (data) {
                 if (!data || data.suggested_price === undefined) return;
                 $priceInput.val(data.suggested_price);

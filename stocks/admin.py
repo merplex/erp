@@ -551,15 +551,36 @@ class SalesItemReadOnlyInline(UnfoldTabularInline):
     
     get_total_display.short_description = "ราคารวม"
     
+def _cur(po):
+    """ต่อท้ายยอดเงินของใบสั่งซื้อด้วยสกุลเงิน (บาทไม่ต่อท้าย เหมือนเดิม)"""
+    code = getattr(po, 'currency', 'THB') or 'THB'
+    return '' if code == 'THB' else f" {CURRENCY_LABELS.get(code, code)}"
+
+
 # ✅ 2. Inline การจ่ายเงิน และการรับเงิน (บันทึกยอดได้เรื่อยๆ)
 class PurchasePaymentInline(UnfoldTabularInline):
     model = PurchasePaymentLog
     extra = 1
     verbose_name = "💰 บันทึกการจ่ายเงิน"
     verbose_name_plural = "💰 ประวัติการจ่ายเงิน (Payments)"
-    fields = ('amount', 'bank_account', 'notes', 'payment_date', 'user')
+    # ExRate ต่อจากยอดที่จ่าย: ยอดเป็นสกุลของใบสั่งซื้อ, สมุดบัญชีลงบาท = ยอด x เรท (ค่าเริ่มต้น = เรทของใบ)
+    fields = ('amount', 'exchange_rate', 'bank_account', 'notes', 'payment_date', 'user')
     autocomplete_fields = ['bank_account']
     readonly_fields = ('user',)
+
+    def get_formset(self, request, obj=None, **kwargs):
+        formset = super().get_formset(request, obj, **kwargs)
+        if obj is not None:
+            amount = formset.form.base_fields.get('amount')
+            rate = formset.form.base_fields.get('exchange_rate')
+            if amount is not None:
+                amount.label = f"ยอดที่จ่าย ({CURRENCY_LABELS.get(obj.currency, obj.currency)})"
+            if rate is not None:
+                rate.initial = obj.exchange_rate
+                if obj.currency == 'THB':  # บาท = เรท 1 แก้ไม่ได้
+                    rate.initial = Decimal('1')
+                    rate.widget.attrs.update({'readonly': True, 'style': 'background:#f1f5f9;'})
+        return formset
 
 
 class SalesPaymentInline(UnfoldTabularInline):
@@ -726,12 +747,14 @@ class ProductBarcodeAdmin(UnfoldModelAdmin):
 class ProductSupplierInline(UnfoldTabularInline):
     model = ProductSupplier
     extra = 1
+    # ราคา + สกุลเงิน + ExRate (บาท = ล็อกเรทเป็น 1 — js/currency_rate.js) ต้นทุนเทียบเป็นบาท = ราคา x เรท
+    fields = ('supplier', 'supplier_sku', 'latest_buy_price', 'currency', 'exchange_rate')
 
 class SupplierProductInline(UnfoldTabularInline):
     model = ProductSupplier
     extra = 1
     autocomplete_fields = ['product']
-    fields = ('product', 'supplier_sku', 'latest_buy_price')
+    fields = ('product', 'supplier_sku', 'latest_buy_price', 'currency', 'exchange_rate')
 
 from django import forms # อย่าลืม import forms ไว้ด้านบนนะครับ
 
@@ -1116,6 +1139,9 @@ class SupplierAdmin(DetailedHistoryMixin, DocumentLockMixin, UnfoldModelAdmin):
     search_fields = ('company_name', 'contact_person', 'supplier_code')
     inlines = [SupplierProductInline]
 
+    class Media:
+        js = ('js/currency_rate.js',)
+
 class ProductBarcodeAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     # 🎯 ตัวนี้แหละคือ "หัวใจ" ที่จะแก้ Error E039
     search_fields = ['code', 'product__name','product__tags__name']
@@ -1225,8 +1251,9 @@ def build_product_history_rows(product):
     )
     po_ids = [r.purchase_order_id for r in receipts]
     po_price_map = {
-        pi.purchase_order_id: pi.unit_price
-        for pi in PurchaseItem.objects.filter(purchase_order_id__in=po_ids, product=product)
+        # ราคาในใบเป็นสกุลของใบ -> แปลงเป็นบาทด้วยเรทของใบ (ประวัติสินค้าแสดงมูลค่าเป็นบาท)
+        pi.purchase_order_id: pi.unit_price * (pi.purchase_order.exchange_rate or 1)
+        for pi in PurchaseItem.objects.filter(purchase_order_id__in=po_ids, product=product).select_related('purchase_order')
     }
     for r in receipts:
         unit_price = po_price_map.get(r.purchase_order_id) or Decimal('0')
@@ -1714,7 +1741,7 @@ class ProductAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelMixin, 
         return TemplateResponse(request, 'admin/product_history.html', context)
 
     class Media:
-        js = ('js/admin_sum_selected.js', 'js/product_barcode_primary_unit.js') # เรียกไฟล์ JS มาใช้งาน
+        js = ('js/admin_sum_selected.js', 'js/product_barcode_primary_unit.js', 'js/currency_rate.js') # เรียกไฟล์ JS มาใช้งาน
 
 @admin.register(BOM)
 class BOMAdmin(DocumentLockMixin, UnfoldModelAdmin):
@@ -1768,6 +1795,12 @@ class PurchaseOrderAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelM
     readonly_fields = ('created_by', 'status', 'payment_status')
 
     actions = ['mark_as_completed', 'force_mark_as_completed', 'export_to_excel']
+
+    def get_fields(self, request, obj=None):
+        # สกุลเงิน + ExRate อยู่บรรทัดเดียวกับเลข Invoice ผู้ขาย (ต่อท้าย)
+        fields = [f for f in super().get_fields(request, obj) if f not in ('currency', 'exchange_rate')]
+        return [('invoice_no_supplier', 'currency', 'exchange_rate') if f == 'invoice_no_supplier' else f
+                for f in fields]
 
     def get_urls(self):
         custom_urls = [
@@ -2000,7 +2033,8 @@ class PurchaseOrderAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelM
         return color_diff(received - ordered)
 
     class Media:
-        js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js', 'js/purchase_order_supplier_filter.js', 'js/purchase_item_price_autofill.js', 'js/product_barcode_sync.js')
+        js = ('js/admin_sum_selected.js', 'js/smart_delivery_inline.js', 'js/purchase_order_supplier_filter.js', 'js/purchase_item_price_autofill.js', 'js/product_barcode_sync.js', 'js/currency_rate.js')
+        css = {'all': ('css/po_currency_row.css',)}
 
 class FactoringDateForm(forms.Form):
     advance_date = forms.DateField(
@@ -4514,12 +4548,13 @@ class FinanceReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, DocumentLockMixi
             'classes': ('wide',), 
         }),
         ('📝 ข้อมูลเอกสาร', {
-            'fields': ('po_number', 'invoice_no_supplier', 'supplier', 'order_date', 'status', 'payment_status')
+            'fields': ('po_number', ('invoice_no_supplier', 'currency', 'exchange_rate'), 'supplier', 'order_date',
+                       'status', 'payment_status')
         }),
     )
 
     readonly_fields = (
-        'po_number', 'supplier', 'order_date',
+        'po_number', 'supplier', 'order_date', 'currency', 'exchange_rate',
         'get_total_items_display', 'get_subtotal_display',
         'get_vat_amount_display', 'get_grand_total_display',
         'get_total_paid_display', 'get_balance_due_display',
@@ -4581,28 +4616,28 @@ class FinanceReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, DocumentLockMixi
 
     def get_subtotal_display(self, obj):
         # ✅ แก้ไข: จัดรูปแบบตัวเลขก่อนส่งเข้า HTML
-        return format_html('<span style="font-size:14px;">{}</span>', f"{obj.total_items_price:,.2f}")
+        return format_html('<span style="font-size:14px;">{}</span>', f"{obj.total_items_price:,.2f}{_cur(obj)}")
     get_subtotal_display.short_description = "💵 ราคารวม (ก่อน VAT)"
 
     def get_vat_amount_display(self, obj):
-        return f"{obj.vat_amount:,.2f}"
+        return f"{obj.vat_amount:,.2f}{_cur(obj)}"
     get_vat_amount_display.short_description = "ภาษีมูลค่าเพิ่ม (VAT)"
 
     def get_grand_total_display(self, obj):
         # ✅ แก้ไข: จัดรูปแบบตัวเลขก่อนส่งเข้า HTML
-        return format_html('<b style="color:#007bff;">{}</b>', f"{obj.grand_total:,.2f}")
+        return format_html('<b style="color:#007bff;">{}</b>', f"{obj.grand_total:,.2f}{_cur(obj)}")
     get_grand_total_display.short_description = "💰 ยอดสุทธิ"
 
     def get_total_paid_display(self, obj):
         # ✅ แก้ไข
-        return format_html('<b style="color:#28a745;">{}</b>', f"{obj.total_paid:,.2f}")
+        return format_html('<b style="color:#28a745;">{}</b>', f"{obj.total_paid:,.2f}{_cur(obj)}")
     get_total_paid_display.short_description = "✅ จ่ายแล้ว"
 
     def get_balance_due_display(self, obj):
         # ✅ แก้ไข
         balance = obj.balance_due
         color = "red" if balance > 0 else "green"
-        text = f"{balance:,.2f}"
+        text = f"{balance:,.2f}{_cur(obj)}"
         return format_html('<b style="color:{};">{}</b>', color, text)
     
 
@@ -4624,7 +4659,9 @@ class FinanceReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, DocumentLockMixi
         subtotal = getattr(obj, '_total_items_price', None) or 0
         vat_p = obj.vat_percent or 0
         total = subtotal + (subtotal * vat_p / 100)
-        return f"{total:,.2f}"
+        # data-sum = ยอดเป็นบาท ให้กล่องสรุปยอดรวมรายการที่ติ๊กเป็นบาท (ใบคนละสกุลเงินไม่บวกข้ามสกุล)
+        return format_html('<span data-sum="{}">{}</span>', round_money(total * (obj.exchange_rate or 1)),
+                           f"{total:,.2f}{_cur(obj)}")
     get_grand_total_list.short_description = "💰 ยอดสุทธิ"
 
     def get_balance_due_list(self, obj):
@@ -4634,14 +4671,34 @@ class FinanceReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, DocumentLockMixi
         paid = getattr(obj, '_total_paid', None) or 0
         bal = round_money(grand_total - paid)
         if bal <= 0:
-            return format_html('<span style="color:green; font-weight:bold;">{}</span>', "0.00")
+            return format_html('<span data-sum="0" style="color:green; font-weight:bold;">{}</span>', "0.00")
         # ต่อท้ายด้วย % ที่ยังค้างจ่ายเทียบกับยอดสุทธิ เช่น ค้าง 70,000 จาก 100,000 → -70,000.00(70%)
         pct = f"({bal / grand_total * 100:.0f}%)" if grand_total > 0 else ""
-        return format_html('<span style="color:red; font-weight:bold;">-{}{}</span>', f"{bal:,.2f}", pct)
+        return format_html('<span data-sum="{}" style="color:red; font-weight:bold;">-{}{}{}</span>',
+                           -round_money(bal * (obj.exchange_rate or 1)), f"{bal:,.2f}", _cur(obj), pct)
     get_balance_due_list.short_description = "ค้างจ่าย"
+
+    def fast_column_totals(self, queryset, fields):
+        # กล่องสรุปยอด: ใบคนละสกุลเงิน -> รวมเป็นบาท (ยอดของใบ x เรทของใบ) ไม่บวกข้ามสกุล
+        totals = {'get_grand_total_list': Decimal(0), 'get_balance_due_list': Decimal(0)}
+        rows = self.model.objects.filter(pk__in=queryset.values('pk'))
+        for obj in self.get_queryset(self._totals_request).filter(pk__in=rows.values('pk')):
+            subtotal = obj._total_items_price or 0
+            grand = subtotal + subtotal * (obj.vat_percent or 0) / 100
+            rate = obj.exchange_rate or 1
+            totals['get_grand_total_list'] += grand * rate
+            bal = round_money(grand - (obj._total_paid or 0))
+            if bal > 0:  # ค้างจ่ายแสดงเป็นค่าติดลบ (เหมือนในตาราง)
+                totals['get_balance_due_list'] -= bal * rate
+        return {f: v for f, v in totals.items() if f in fields}
+
+    def get_changelist_instance(self, request):
+        self._totals_request = request
+        return super().get_changelist_instance(request)
 
     class Media:
         js = ('js/admin_sum_selected.js',)
+        css = {'all': ('css/po_currency_row.css',)}
 
 # 2. หน้า Admin ของ Income Report
 @admin.register(IncomeReport)
@@ -5693,7 +5750,8 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
                  .filter(self._po_filter_q(request, 'purchase_order'))
                  .order_by().values('product'))
         qty = items.annotate(t=Sum('quantity_ordered')).values('t')[:1]
-        value = items.annotate(t=Sum(F('quantity_ordered') * F('unit_price'),
+        # ยอดเป็นบาท = จำนวน x ราคา x เรทของใบ (ใบสกุล RMB/USD ไม่บวกปนกับบาท)
+        value = items.annotate(t=Sum(F('quantity_ordered') * F('unit_price') * F('purchase_order__exchange_rate'),
                                      output_field=DecimalField())).values('t')[:1]
         last_6m = (PurchaseItem.objects.filter(product=OuterRef('pk')).filter(self._last_6m_q('purchase_order'))
                    .order_by().values('product').annotate(t=Sum('quantity_ordered')).values('t')[:1])
@@ -5794,7 +5852,9 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
             row = po_row(item.purchase_order)
             row['ordered'] += Decimal(item.quantity_ordered)
             row['received'] += Decimal(item.quantity_received or 0)
-            row['value_before_vat'] += Decimal(item.quantity_ordered) * (item.unit_price or Decimal('0'))
+            # มูลค่าเป็นบาท (ราคาในใบ x เรทของใบ) ให้ตรงกับหน้า list
+            row['value_before_vat'] += (Decimal(item.quantity_ordered) * (item.unit_price or Decimal('0'))
+                                        * (item.purchase_order.exchange_rate or Decimal('1')))
 
         open_items = (PurchaseItem.objects
                       .filter(product=product, purchase_order__status__in=self.PENDING_IN_STATUSES,
@@ -5885,7 +5945,8 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
 
         headers = [
             'บาร์โค้ดสินค้า', 'ชื่อสินค้า', 'เลขที่ PO', 'วันที่สั่งซื้อ', 'สถานะ PO', 'ผู้จำหน่าย',
-            'จำนวนสั่ง', 'รับแล้ว', 'หน่วย', 'ราคาต่อหน่วย', 'มูลค่าก่อน VAT', 'VAT (%)', 'มูลค่า VAT', 'ยอดรวมหลัง VAT',
+            'จำนวนสั่ง', 'รับแล้ว', 'หน่วย', 'ราคาต่อหน่วย (บาท)', 'มูลค่าก่อน VAT (บาท)', 'VAT (%)', 'มูลค่า VAT (บาท)',
+            'ยอดรวมหลัง VAT (บาท)',
             'ค้างรับ',
         ]
         header_row_idx = ws.max_row + 1

@@ -1,0 +1,31 @@
+/* ใบสั่งซื้อ / A3: เลข Invoice ผู้ขาย + สกุลเงิน + ExRate อยู่บรรทัดเดียวกันเสมอ (ทุกขนาดจอ รวมมือถือ) */
+.form-row:has(> .field-invoice_no_supplier) {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: flex-end;
+    gap: 8px;
+}
+.form-row:has(> .field-invoice_no_supplier) > .field-line {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    justify-content: flex-end;
+    min-width: 0;
+    border-bottom: 0;
+}
+/* ป้ายชื่อช่อง: ไม่ล็อกความกว้าง/ความสูงแบบหน้าจอใหญ่ ให้ทุกช่องสูงเท่ากัน (ช่องกรอกตรงกัน) */
+.form-row:has(> .field-invoice_no_supplier) > .field-line > div:first-child {
+    width: auto !important;
+    min-width: 0 !important;
+    height: auto !important;
+    white-space: nowrap;
+}
+.form-row:has(> .field-invoice_no_supplier) label { margin-bottom: 4px; }
+.form-row:has(> .field-invoice_no_supplier) > .field-invoice_no_supplier { flex: 1 1 auto; max-width: 28rem; }
+.form-row:has(> .field-invoice_no_supplier) > .field-currency { flex: 0 0 108px; }
+.form-row:has(> .field-invoice_no_supplier) > .field-exchange_rate { flex: 0 0 116px; }
+/* help text ใต้ ExRate ดันช่องกรอกไม่ให้ตรงกัน -> ซ่อน (ชื่อช่องบอกอยู่แล้ว) */
+.form-row:has(> .field-invoice_no_supplier) [id$="_helptext"],
+.form-row:has(> .field-invoice_no_supplier) .leading-relaxed.mt-2.text-xs { display: none; }
+/* หน้า A3 (ช่องอ่านอย่างเดียว): ค่าไม่ตัดบรรทัด */
+.form-row:has(> .field-invoice_no_supplier) > .field-line > div:last-child { white-space: nowrap; }

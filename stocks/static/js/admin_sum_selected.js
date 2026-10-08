@@ -60,6 +60,9 @@ document.addEventListener('DOMContentLoaded', function() {
     if (activeColumns.length === 0) return;
 
     function cellNumber(cell) {
+        // ค่าที่ระบุไว้ใน data-sum (เช่น ยอดใบสั่งซื้อสกุลต่างประเทศแปลงเป็นบาทแล้ว) มาก่อนตัวเลขที่แสดง
+        const tagged = cell.querySelector('[data-sum]');
+        if (tagged) return parseFloat(tagged.getAttribute('data-sum')) || 0;
         // เอาตัวเลขแรกของเซลล์ (มี ฿ / คอมมา / บรรทัดย่อย เช่น "หัก ต.ค. 2569" ได้)
         const match = (cell.innerText || '').replace(/,/g, '').match(/-?\d+(\.\d+)?/);
         return match ? parseFloat(match[0]) : 0;

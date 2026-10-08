@@ -394,11 +394,15 @@ class Product(models.Model):
         if not self.pk:
             return {}
 
+        # เทียบราคาเป็นบาท (ราคา x เรทของแต่ละ supplier) — ราคา RMB/USD ต้องแปลงก่อนเทียบ
         best_supplier = self.product_suppliers.filter(
             latest_buy_price__gt=0
-        ).order_by('-latest_buy_price').first()
+        ).annotate(
+            _price_thb=models.ExpressionWrapper(models.F('latest_buy_price') * models.F('exchange_rate'),
+                                                output_field=models.DecimalField())
+        ).order_by('-_price_thb').first()
         new_auto_cost = (
-            (best_supplier.latest_buy_price * Decimal('1.15')).quantize(Decimal('0.01'))
+            (best_supplier.price_thb * Decimal('1.15')).quantize(Decimal('0.01'))
             if best_supplier else Decimal('0')
         )
 
@@ -584,12 +588,42 @@ class StockTransfer(models.Model):
     class Meta:
         verbose_name_plural = "W4. โอนย้ายคลังสินค้า (Stock Transfer)"
 
+# --- สกุลเงินฝั่งซื้อ (ราคา Supplier / ใบสั่งซื้อ / การจ่ายเงิน) ---
+# ExRate = บาทต่อ 1 หน่วยเงิน (เช่น RMB 5.2000) — บาท = 1 เสมอ
+# ต้นทุนสินค้า (buy_price/auto_cost), รายงาน และสมุดบัญชี เป็นบาทเสมอ: แปลงด้วย ราคา x เรท
+CURRENCY_CHOICES = [('THB', 'บาท'), ('RMB', 'RMB'), ('USD', 'USD')]
+CURRENCY_LABELS = dict(CURRENCY_CHOICES)
+
+
+def _exchange_rate_field(verbose_name="ExRate"):
+    return models.DecimalField(max_digits=12, decimal_places=4, default=1,
+                               validators=[MinValueValidator(Decimal('0.0001'))],
+                               verbose_name=verbose_name, help_text="บาทต่อ 1 หน่วยเงิน (บาท = 1)")
+
+
+def _normalize_rate(instance):
+    """บาท -> เรท 1 เสมอ / สกุลอื่นต้องมีเรท > 0 (ว่าง = 1)"""
+    if instance.currency == 'THB' or not instance.exchange_rate:
+        instance.exchange_rate = Decimal('1')
+
+
 class ProductSupplier(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='product_suppliers')
     supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE, verbose_name="ผู้จำหน่าย")
     supplier_sku = models.CharField(max_length=100, blank=True, verbose_name="รหัสสินค้าฝั่ง Supplier")
     latest_buy_price = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name="ทุนล่าสุดจากเจ้านี้")
+    currency = models.CharField(max_length=3, choices=CURRENCY_CHOICES, default='THB', verbose_name="สกุลเงิน")
+    exchange_rate = _exchange_rate_field()
     class Meta: unique_together = ('product', 'supplier')
+
+    @property
+    def price_thb(self):
+        """ราคาเป็นบาท (ราคา x เรท) — ใช้เทียบต้นทุนกับ supplier อื่น"""
+        return (self.latest_buy_price or Decimal('0')) * (self.exchange_rate or Decimal('1'))
+
+    def save(self, *args, **kwargs):
+        _normalize_rate(self)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.supplier} - {self.product}"
@@ -744,6 +778,9 @@ class PurchaseOrder(models.Model):
     po_number = models.CharField(max_length=50, unique=True, editable=False)
     supplier = models.ForeignKey('Supplier', on_delete=models.CASCADE)
     invoice_no_supplier = models.CharField(max_length=100, blank=True, verbose_name="เลข Invoice ผู้ขาย")
+    # ใบสั่งซื้อ 1 ใบ = 1 สกุลเงิน + 1 เรท: ราคา/ยอดรวม/ยอดค้างจ่าย/ยอดจ่ายในใบเป็นสกุลนี้ (มูลค่าบาท = x เรท)
+    currency = models.CharField(max_length=3, choices=CURRENCY_CHOICES, default='THB', verbose_name="สกุลเงิน")
+    exchange_rate = _exchange_rate_field()
     order_date = models.DateField(default=datetime.date.today, db_index=True)
     
     # ใช้ max_length=50 เพื่อรองรับทุก key
@@ -860,6 +897,8 @@ class PurchaseOrder(models.Model):
             except:
                 pass 
 
+        _normalize_rate(self)  # บาท = เรท 1
+
         # 2. Logic ต่างประเทศ (VAT 0)
         if self.supplier_id:
             if hasattr(self.supplier, 'type') and self.supplier.type == 'International':
@@ -917,10 +956,15 @@ class PurchaseItem(models.Model):
                     product=self.product
                 ).first()
                 
+                po = self.purchase_order
                 if match and match.latest_buy_price > 0:
-                    self.unit_price = match.latest_buy_price # เจอ! ใช้ราคาจาก Supplier
+                    if match.currency == po.currency:
+                        self.unit_price = match.latest_buy_price # เจอ! ใช้ราคาจาก Supplier (สกุลเดียวกับใบ)
+                    else:  # คนละสกุล -> แปลงเป็นบาทแล้วเป็นสกุลของใบด้วยเรทของใบ
+                        self.unit_price = round_money(match.price_thb / (po.exchange_rate or 1))
                 else:
-                    self.unit_price = self.product.buy_price # ไม่เจอ ใช้ราคากลาง
+                    # ไม่เจอ ใช้ราคากลาง (บาท) แปลงเป็นสกุลของใบ
+                    self.unit_price = round_money((self.product.buy_price or 0) / (po.exchange_rate or 1))
             except:
                 pass
         super().save(*args, **kwargs)
@@ -930,7 +974,12 @@ class PurchaseItem(models.Model):
 
 class PurchasePaymentLog(models.Model):
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='payment_logs')
-    amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="ยอดที่จ่าย")
+    amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="ยอดที่จ่าย",
+                                 help_text="เป็นสกุลเงินของใบสั่งซื้อ")
+    # เรทตอนจ่ายจริง (ค่าเริ่มต้น = เรทของใบสั่งซื้อ) — สมุดบัญชีลงเป็นบาท = ยอดที่จ่าย x เรทนี้
+    exchange_rate = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True,
+                                        validators=[MinValueValidator(Decimal('0.0001'))],
+                                        verbose_name="ExRate", help_text="ว่าง = ใช้เรทของใบสั่งซื้อ (บาท = 1)")
     payment_date = models.DateField(default=datetime.date.today, verbose_name="วันที่จ่าย")
     notes = models.CharField(max_length=200, blank=True, verbose_name="หมายเหตุ/เลขที่สลิป")
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
@@ -940,6 +989,19 @@ class PurchasePaymentLog(models.Model):
     batch_ref = models.CharField(max_length=32, blank=True, default='', db_index=True, editable=False)
 
     def __str__(self): return f"{self.amount}"
+
+    def save(self, *args, **kwargs):
+        po = self.purchase_order
+        if po.currency == 'THB':
+            self.exchange_rate = Decimal('1')
+        elif not self.exchange_rate:
+            self.exchange_rate = po.exchange_rate or Decimal('1')
+        super().save(*args, **kwargs)
+
+    @property
+    def amount_thb(self):
+        """ยอดที่จ่ายเป็นบาท (ลงสมุดบัญชี)"""
+        return round_money((self.amount or 0) * (self.exchange_rate or 1))
 
 class PurchaseReceiptLog(models.Model):
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='receipt_logs')
@@ -2889,7 +2951,7 @@ def rebuild_payment_batch(ref):
     for p in PurchasePaymentLog.objects.filter(batch_ref=ref).select_related('purchase_order__supplier'):
         po = p.purchase_order
         groups.setdefault((p.bank_account_id, _as_date(p.payment_date), 'PURCHASE_PAYMENT'), []).append(
-            (-round_money(p.amount), po.po_number or '', po.supplier.company_name if po.supplier_id else ''))
+            (-p.amount_thb, po.po_number or '', po.supplier.company_name if po.supplier_id else ''))
     existing = {(t.bank_account_id, t.txn_date, t.source_type): t for t in BankTransaction.objects.filter(batch_ref=ref)}
     for key, rows in groups.items():
         account_id, day, kind = key
@@ -2950,7 +3012,7 @@ def sync_purchase_payment_ledger(sender, instance, **kwargs):
     BankTransaction.objects.update_or_create(purchase_payment=instance, defaults={
         'bank_account_id': instance.bank_account_id,
         'txn_date': _as_date(instance.payment_date),
-        'amount': -round_money(instance.amount),
+        'amount': -instance.amount_thb,  # สกุลต่างประเทศ -> บาท ด้วยเรทตอนจ่าย
         'source_type': 'PURCHASE_PAYMENT',
         'reference': po.po_number or '',
         'party': po.supplier.company_name if po.supplier_id else '',
