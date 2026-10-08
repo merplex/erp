@@ -15,6 +15,8 @@
     }
     .sod-table td { padding: 8px 12px; border-bottom: 1px solid #eef2f6; vertical-align: top; }
     .sod-table tr:last-child td { border-bottom: none; }
+    .sod-doc { color: #2563eb; font-weight: 600; text-decoration: none; }
+    .sod-doc:hover { text-decoration: underline; }
     .sod-num { text-align: right; font-variant-numeric: tabular-nums; }
     .sod-total-row td { font-weight: 700; background: #f8fafc; border-top: 2px solid #dee2e6; }
 </style>
@@ -44,7 +46,7 @@
         <tbody>
             {% for row in rows %}
             <tr>
-                <td>{{ row.so_number }}</td>
+                <td><a class="sod-doc" href="{% url 'admin:stocks_salesorder_change' row.so_id %}" target="_blank" title="เปิดใบ SO (แท็บใหม่)">{{ row.so_number }}</a></td>
                 <td>{{ row.order_date|date:"d/m/Y" }}</td>
                 <td>{{ row.status }}</td>
                 <td>{{ row.customer_name }}</td>

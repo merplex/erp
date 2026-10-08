@@ -5137,6 +5137,7 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
             value_before_vat = (item.sale_price * qty) / factor
 
             row = rows_by_so.setdefault(so.id, {
+                'so_id': so.id,
                 'so_number': so.so_number,
                 'order_date': so.order_date,
                 'status': so.get_status_display(),
@@ -5744,6 +5745,7 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
         for item in items:
             po = item.purchase_order
             row = rows_by_po.setdefault(po.id, {
+                'po_id': po.id,
                 'po_number': po.po_number,
                 'order_date': po.order_date,
                 'status': po.get_status_display(),
