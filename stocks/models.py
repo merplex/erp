@@ -1002,10 +1002,10 @@ class PurchasePaymentLog(models.Model):
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='payment_logs')
     amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="ยอดที่จ่าย",
                                  help_text="เป็นสกุลเงินของใบสั่งซื้อ")
-    # เรทตอนจ่ายจริง (ค่าเริ่มต้น = เรทของใบสั่งซื้อ) — สมุดบัญชีลงเป็นบาท = ยอดที่จ่าย x เรทนี้
+    # เรทตอนจ่ายจริง (กรอกเองทุกครั้ง ไม่ดึงจากใบสั่งซื้อ) — สมุดบัญชีลงเป็นบาท = ยอดที่จ่าย x เรทนี้
     exchange_rate = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True,
                                         validators=[MinValueValidator(Decimal('0.0001'))],
-                                        verbose_name="ExRate", help_text="ว่าง = ใช้เรทของใบสั่งซื้อ (บาท = 1)")
+                                        verbose_name="ExRate", help_text="เรทตอนจ่ายจริง บาทต่อ 1 หน่วยเงิน (บาท = 1)")
     payment_date = models.DateField(default=datetime.date.today, verbose_name="วันที่จ่าย")
     notes = models.CharField(max_length=200, blank=True, verbose_name="หมายเหตุ/เลขที่สลิป")
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
@@ -1020,8 +1020,9 @@ class PurchasePaymentLog(models.Model):
         po = self.purchase_order
         if po.currency == 'THB':
             self.exchange_rate = Decimal('1')
-        elif not self.exchange_rate:
-            self.exchange_rate = po.exchange_rate or Decimal('1')
+        elif not self.exchange_rate or self.exchange_rate == 1:
+            # สกุลต่างประเทศต้องระบุเรทตอนจ่ายจริงทุกครั้ง — ไม่เดาจากเรทของใบ/ครั้งก่อน
+            raise ValidationError({'exchange_rate': f"ต้องกรอก ExRate ตอนจ่าย ({po.currency})"})
         super().save(*args, **kwargs)
 
     @property

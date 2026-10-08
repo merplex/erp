@@ -566,8 +566,30 @@ def _cur(po):
 
 
 # ✅ 2. Inline การจ่ายเงิน และการรับเงิน (บันทึกยอดได้เรื่อยๆ)
+class PurchasePaymentInlineForm(forms.ModelForm):
+    """ใบสั่งซื้อสกุลต่างประเทศ: ต้องกรอก ExRate ตอนจ่ายเองทุกครั้ง (ไม่ดึงเรทของใบ/ครั้งก่อน) — บาท = 1"""
+    class Meta:
+        model = PurchasePaymentLog
+        fields = '__all__'
+
+    def clean(self):
+        cleaned = super().clean()
+        po = getattr(self.instance, 'purchase_order', None) if self.instance.purchase_order_id else None
+        po = po or getattr(self, 'parent_po', None)
+        if po is None or not self.has_changed():
+            return cleaned
+        if po.currency == 'THB':
+            cleaned['exchange_rate'] = Decimal('1')
+        else:
+            rate = cleaned.get('exchange_rate')
+            if not rate or rate == 1:
+                self.add_error('exchange_rate', f"กรอก ExRate ตอนจ่าย (บาทต่อ 1 {CURRENCY_LABELS.get(po.currency, po.currency)})")
+        return cleaned
+
+
 class PurchasePaymentInline(UnfoldTabularInline):
     model = PurchasePaymentLog
+    form = PurchasePaymentInlineForm
     extra = 1
     verbose_name = "💰 บันทึกการจ่ายเงิน"
     verbose_name_plural = "💰 ประวัติการจ่ายเงิน (Payments)"
@@ -584,10 +606,11 @@ class PurchasePaymentInline(UnfoldTabularInline):
             if amount is not None:
                 amount.label = f"ยอดที่จ่าย ({CURRENCY_LABELS.get(obj.currency, obj.currency)})"
             if rate is not None:
-                rate.initial = obj.exchange_rate
+                rate.initial = None  # ไม่เติมเรทของใบให้ — ต้องกรอกเรทตอนจ่ายเอง
                 if obj.currency == 'THB':  # บาท = เรท 1 แก้ไม่ได้
                     rate.initial = Decimal('1')
                     rate.widget.attrs.update({'readonly': True, 'style': 'background:#f1f5f9;'})
+            formset.form.parent_po = obj
         return formset
 
 
@@ -4456,7 +4479,6 @@ def settle_and_close_orders(modeladmin, request, queryset):
     # (สมุดบัญชีลงบาท = ยอดค้างของแต่ละใบ x เรทนี้ รวมเป็นรายการเดียว)
     form_class = PaymentDateForm
     pay_summary = ''
-    rate_warning = ''
     if queryset.model is not None and issubclass(queryset.model, PurchaseOrder):
         pos = list(queryset)
         currencies = sorted({po.currency for po in pos})
@@ -4471,11 +4493,7 @@ def settle_and_close_orders(modeladmin, request, queryset):
         due = sum((max(round_money(po.balance_due), Decimal(0)) for po in pos), Decimal(0))
         pay_summary = f"ยอดค้างจ่ายรวม {due:,.2f} {label}"
         if currency != 'THB':
-            # ต้องกรอกเรทตอนจ่ายเองทุกครั้ง (ไม่เติมเรทของใบให้) — ใบที่เลือกเรทไม่เท่ากันขึ้นเตือนพร้อมเรทของแต่ละใบ
-            rates = {po.exchange_rate for po in pos}
-            if len(rates) > 1:
-                rate_warning = "⚠️ ใบที่เลือกมีเรทไม่เท่ากัน: " + ", ".join(
-                    f"{po.po_number} = {po.exchange_rate:,.4f}" for po in sorted(pos, key=lambda o: o.po_number))
+            # ต้องกรอกเรทตอนจ่ายใหม่เองทุกครั้ง — ไม่ดึงเรทจากใบสั่งซื้อ/Supplier/การจ่ายครั้งก่อนเด็ดขาด
 
             class ForeignPaymentForm(PaymentDateForm):
                 exchange_rate = forms.DecimalField(
@@ -4545,7 +4563,6 @@ def settle_and_close_orders(modeladmin, request, queryset):
         <h2 style="color: #007bff;">💰 ยืนยันการชำระเงินและปิดยอด ({{ queryset.count }} รายการ)</h2>
         <p>ระบบจะสร้างรายการชำระเงิน <b>"เต็มจำนวนคงเหลือ"</b> และเปลี่ยนสถานะเป็น <b>Paid</b> ให้อัตโนมัติ</p>
         {% if pay_summary %}<p style="font-size:15px;"><b>{{ pay_summary }}</b></p>{% endif %}
-        {% if rate_warning %}<p style="padding:10px 12px;border:1px solid #f59e0b;background:#fffbeb;color:#92400e;border-radius:6px;">{{ rate_warning }}</p>{% endif %}
         <form method="post">{% csrf_token %}
             {% for obj in queryset %}<input type="hidden" name="{{ action_checkbox_name }}" value="{{ obj.pk }}">{% endfor %}
             <input type="hidden" name="action" value="settle_and_close_orders">
@@ -4559,7 +4576,7 @@ def settle_and_close_orders(modeladmin, request, queryset):
     """
     
     context = {
-        'queryset': queryset, 'form': form, 'media': form.media, 'pay_summary': pay_summary, 'rate_warning': rate_warning,
+        'queryset': queryset, 'form': form, 'media': form.media, 'pay_summary': pay_summary,
         'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME, 'opts': modeladmin.model._meta,
     }
     return HttpResponse(Template(html_template).render(RequestContext(request, context)))

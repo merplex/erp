@@ -163,10 +163,13 @@ class PurchaseCurrencyTests(TestCase):
         from .models import BankTransaction, PurchaseItem, PurchasePaymentLog
         PurchaseItem.objects.create(purchase_order=self.po, product=self.product, quantity_unit=100, unit_price=0)
         self.assertEqual(self.po.items.get().unit_price, self.D('10.00'))  # ราคา Supplier สกุลเดียวกับใบ
-        pay_default = PurchasePaymentLog.objects.create(purchase_order=self.po, amount=self.D('400'))
+        from django.core.exceptions import ValidationError
+        with self.assertRaises(ValidationError):  # สกุลต่างประเทศ ไม่กรอกเรท = บันทึกไม่ได้ (ไม่ใช้เรทของใบแทน)
+            PurchasePaymentLog.objects.create(purchase_order=self.po, amount=self.D('400'))
+        pay_default = PurchasePaymentLog.objects.create(purchase_order=self.po, amount=self.D('400'),
+                                                        exchange_rate=self.D('5'))
         pay_custom = PurchasePaymentLog.objects.create(purchase_order=self.po, amount=self.D('100'),
                                                        exchange_rate=self.D('5.3'))
-        self.assertEqual(pay_default.exchange_rate, self.D('5'))  # ค่าเริ่มต้น = เรทของใบ
         amounts = dict(BankTransaction.objects.filter(purchase_payment__isnull=False)
                        .values_list('purchase_payment_id', 'amount'))
         self.assertEqual(amounts[pay_default.pk], self.D('-2000'))
