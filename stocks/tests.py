@@ -1,6 +1,6 @@
 import datetime
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from .models import Customer, SalesOrder, SalesReceipt, generate_number
 
@@ -199,3 +199,27 @@ class PurchaseCurrencyTests(TestCase):
         form = PurchaseOrderAdminForm(data={**base, 'currency': 'THB', 'exchange_rate': ''})
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.cleaned_data['exchange_rate'], 1)
+
+    @override_settings(STORAGES={'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+                                 'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'}})
+    def test_settle_action_rejects_mixed_currency_and_uses_entered_rate(self):
+        import datetime
+        from django.contrib.auth.models import User
+        from django.test import Client
+        from .models import BankTransaction, PurchaseItem, PurchaseOrder, PurchasePaymentLog
+        user = User.objects.create_superuser('admin', 'a@a.a', 'x')
+        client = Client()
+        client.force_login(user)
+        PurchaseItem.objects.create(purchase_order=self.po, product=self.product, quantity_unit=100, unit_price=self.D('10'))
+        po_thb = PurchaseOrder.objects.create(supplier=self.th)
+        PurchaseItem.objects.create(purchase_order=po_thb, product=self.product, quantity_unit=1, unit_price=self.D('50'))
+        url = '/admin/stocks/financereport/'
+        data = {'action': 'settle_and_close_orders', 'apply': '1', 'payment_date': datetime.date(2026, 10, 8)}
+        client.post(url, {**data, '_selected_action': [self.po.pk, po_thb.pk]}, HTTP_HOST='localhost')
+        self.assertFalse(PurchasePaymentLog.objects.exists())  # คนละสกุลเงิน จ่ายรวมไม่ได้
+        client.post(url, {**data, '_selected_action': [self.po.pk]}, HTTP_HOST='localhost')
+        self.assertFalse(PurchasePaymentLog.objects.exists())  # RMB ไม่กรอกเรท จ่ายไม่ได้
+        client.post(url, {**data, '_selected_action': [self.po.pk], 'exchange_rate': '5.3'}, HTTP_HOST='localhost')
+        pay = PurchasePaymentLog.objects.get()
+        self.assertEqual((pay.amount, pay.exchange_rate), (self.D('1000'), self.D('5.3')))
+        self.assertEqual(BankTransaction.objects.get(purchase_payment=pay).amount, self.D('-5300'))

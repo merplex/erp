@@ -4452,11 +4452,45 @@ settle_purchase_special.short_description = "🎯 ปิดยอดกรณี
 @admin.action(description='💰 ชำระครบ/ปิดยอด (Settle Payment)')
 def settle_and_close_orders(modeladmin, request, queryset):
     # ... (Logic ปิดงาน) ...
+    # ใบสั่งซื้อ (A3): จ่ายรวมได้เฉพาะใบสกุลเงินเดียวกัน — สกุลอื่นที่ไม่ใช่บาทต้องกรอกเรทตอนจ่ายก่อน
+    # (สมุดบัญชีลงบาท = ยอดค้างของแต่ละใบ x เรทนี้ รวมเป็นรายการเดียว)
+    form_class = PaymentDateForm
+    pay_summary = ''
+    if queryset.model is not None and issubclass(queryset.model, PurchaseOrder):
+        pos = list(queryset)
+        currencies = sorted({po.currency for po in pos})
+        if len(currencies) > 1:
+            labels = ', '.join(CURRENCY_LABELS.get(c, c) for c in currencies)
+            modeladmin.message_user(
+                request, f"❌ จ่ายรวมไม่ได้: ใบที่เลือกมีหลายสกุลเงิน ({labels}) — เลือกเฉพาะใบสกุลเงินเดียวกัน",
+                messages.ERROR)
+            return None
+        currency = currencies[0] if currencies else 'THB'
+        label = CURRENCY_LABELS.get(currency, currency)
+        due = sum((max(round_money(po.balance_due), Decimal(0)) for po in pos), Decimal(0))
+        pay_summary = f"ยอดค้างจ่ายรวม {due:,.2f} {label}"
+        if currency != 'THB':
+            rates = {po.exchange_rate for po in pos}
+
+            class ForeignPaymentForm(PaymentDateForm):
+                exchange_rate = forms.DecimalField(
+                    label=f"ExRate ตอนจ่าย (บาทต่อ 1 {label})", max_digits=12, decimal_places=4,
+                    min_value=Decimal('0.0001'), initial=rates.pop() if len(rates) == 1 else None,
+                    help_text="สมุดบัญชีลงเป็นบาท = ยอดที่จ่าย x เรทนี้")
+
+                def clean_exchange_rate(self):
+                    rate = self.cleaned_data['exchange_rate']
+                    if rate == 1:
+                        raise forms.ValidationError(f"กรุณากรอกเรทจริงของ {label}")
+                    return rate
+            form_class = ForeignPaymentForm
+
     if 'apply' in request.POST:
-        form = PaymentDateForm(request.POST)
+        form = form_class(request.POST)
         if form.is_valid():
             pay_date = form.cleaned_data['payment_date']
             bank_account = form.cleaned_data['bank_account']
+            pay_rate = form.cleaned_data.get('exchange_rate')  # None = บาท / ใบสั่งขาย
             updated_count = 0
             # ชำระหลายใบพร้อมกัน = เงินก้อนเดียว -> สมุดบัญชีลงยอดรวมรายการเดียว (กดยอดเงินใน M2 ดูว่ามาจากใบไหน)
             objs = list(queryset)
@@ -4471,7 +4505,7 @@ def settle_and_close_orders(modeladmin, request, queryset):
                     if isinstance(obj, PurchaseOrder):
                         PurchasePaymentLog.objects.create(purchase_order=obj, amount=balance, payment_date=pay_date, notes="Auto Settle",
                                                           bank_account=bank_account, user=request.user,
-                                                          batch_ref=batch_ref)
+                                                          batch_ref=batch_ref, exchange_rate=pay_rate)
                         obj.refresh_from_db()
                     elif isinstance(obj, SalesOrder): # รองรับทั้ง SalesOrder และ IncomeReport
                         SalesPayment.objects.create(order=obj, amount=balance, payment_date=pay_date, remark="Auto Settle",
@@ -4494,7 +4528,7 @@ def settle_and_close_orders(modeladmin, request, queryset):
             return HttpResponseRedirect(request.get_full_path())
             
     else:
-        form = PaymentDateForm()
+        form = form_class()
 
     # HTML Template สำหรับหน้าเลือกวันที่
     html_template = """
@@ -4505,6 +4539,7 @@ def settle_and_close_orders(modeladmin, request, queryset):
     <div style="max-width: 600px; margin: 20px auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
         <h2 style="color: #007bff;">💰 ยืนยันการชำระเงินและปิดยอด ({{ queryset.count }} รายการ)</h2>
         <p>ระบบจะสร้างรายการชำระเงิน <b>"เต็มจำนวนคงเหลือ"</b> และเปลี่ยนสถานะเป็น <b>Paid</b> ให้อัตโนมัติ</p>
+        {% if pay_summary %}<p style="font-size:15px;"><b>{{ pay_summary }}</b></p>{% endif %}
         <form method="post">{% csrf_token %}
             {% for obj in queryset %}<input type="hidden" name="{{ action_checkbox_name }}" value="{{ obj.pk }}">{% endfor %}
             <input type="hidden" name="action" value="settle_and_close_orders">
@@ -4518,7 +4553,7 @@ def settle_and_close_orders(modeladmin, request, queryset):
     """
     
     context = {
-        'queryset': queryset, 'form': form, 'media': form.media, 
+        'queryset': queryset, 'form': form, 'media': form.media, 'pay_summary': pay_summary,
         'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME, 'opts': modeladmin.model._meta,
     }
     return HttpResponse(Template(html_template).render(RequestContext(request, context)))
