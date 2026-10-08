@@ -5611,8 +5611,9 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
 @admin.register(PurchaseReport)
 class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
     """F5 รายงานยอดสั่งซื้อตามสินค้า — รูปแบบเดียวกับ F4 (ฝั่งซื้อ): 1 แถว = 1 สินค้า รวมยอดจากรายการใน PO
+    จำนวน/ยอดซื้อคิดจาก "ของที่รับแล้ว" (quantity_received) เหมือน F4 ที่คิดจากของที่ส่งแล้ว — ไม่เกี่ยวกับการจ่ายเงิน
     นับเฉพาะ PO ที่ไม่ใช่ร่าง/ยกเลิก, ช่วงเวลา = วันที่สั่งซื้อของ PO (ไม่กรองวันที่ = ปีนี้)
-    PurchaseItem.quantity_ordered เป็นชิ้น และ unit_price เป็นราคาต่อชิ้นเสมอ -> มูลค่า = จำนวน x ราคา"""
+    quantity_ordered/quantity_received เป็นชิ้น และ unit_price เป็นราคาต่อชิ้นเสมอ -> มูลค่า = จำนวนรับ x ราคา"""
     list_display = (
         'get_name_link', 'get_total_qty', 'get_total_purchase', 'get_stock', 'get_pending_in', 'get_monthly_avg'
     )
@@ -5700,8 +5701,8 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
         items = (PurchaseItem.objects.filter(product=OuterRef('pk'))
                  .filter(self._po_filter_q(request, 'purchase_order'))
                  .order_by().values('product'))
-        qty = items.annotate(t=Sum('quantity_ordered')).values('t')[:1]
-        value = items.annotate(t=Sum(F('quantity_ordered') * F('unit_price'),
+        qty = items.annotate(t=Sum('quantity_received')).values('t')[:1]
+        value = items.annotate(t=Sum(F('quantity_received') * F('unit_price'),
                                      output_field=DecimalField())).values('t')[:1]
         pending_in = (PurchaseItem.objects
                       .filter(product=OuterRef('pk'), purchase_order__status__in=self.PENDING_IN_STATUSES)
@@ -5712,7 +5713,7 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
             total_qty=Coalesce(Subquery(qty), Value(0), output_field=DecimalField()),
             total_purchase_val=Coalesce(Subquery(value), Value(0), output_field=DecimalField()),
             total_pending_in=Coalesce(Subquery(pending_in), Value(0), output_field=DecimalField()),
-        ).filter(total_qty__gt=0)  # 🎯 โชว์เฉพาะสินค้าที่มียอดสั่งซื้อในช่วงนั้น
+        ).filter(Q(total_qty__gt=0) | Q(total_pending_in__gt=0))  # 🎯 สินค้าที่รับของในช่วงนั้น หรือยังค้างรับอยู่
 
     def _totals_queryset(self, request, queryset):
         """ชุดสินค้าตามตัวกรอง (ไม่ซ้ำ) พร้อมยอดต่อสินค้า — ใช้รวมยอดทั้งหมด (แถว TOTAL / กล่องสรุปยอด)"""
@@ -5741,8 +5742,8 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
         self.message_user(
             request,
             f"📊 สรุปข้อมูลที่เลือก ({count} รายการ): "
-            f"สั่งซื้อรวม: {agg['qty']:,.0f} ชิ้น | "
-            f"ยอดสั่งซื้อรวม: ฿{agg['val']:,.2f} | "
+            f"ซื้อรวม (รับแล้ว): {agg['qty']:,.0f} ชิ้น | "
+            f"ยอดซื้อรวม: ฿{agg['val']:,.2f} | "
             f"สต็อกปัจจุบัน: {agg['stock']:,.0f} ชิ้น | "
             f"สต็อกค้างรับ: {agg['pending_in']:,.0f} ชิ้น | "
             f"ยอดซื้อต่อเดือน (เฉลี่ย {agg['months']} เดือน): {agg['monthly']:,.1f} ชิ้น",
@@ -5759,10 +5760,10 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
             url += f"?{qs}"
         return format_html('<a href="{}" style="font-weight:600;">{}</a>', url, obj.name)
 
-    @admin.display(description="จำนวนสั่งซื้อ", ordering='total_qty')
+    @admin.display(description="จำนวนซื้อ (รับแล้ว)", ordering='total_qty')
     def get_total_qty(self, obj): return f"{obj.total_qty or 0:,.0f} {obj.unit}"
 
-    @admin.display(description="ยอดสั่งซื้อรวม", ordering='total_purchase_val')
+    @admin.display(description="ยอดซื้อรวม", ordering='total_purchase_val')
     def get_total_purchase(self, obj): return f"{obj.total_purchase_val or 0:,.2f}"
 
     @admin.display(description="สต็อกปัจจุบัน", ordering='stock_quantity')
@@ -5777,38 +5778,63 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
         return f"{Decimal(obj.total_qty or 0) / months:,.1f} {obj.unit}"
 
     def _po_rows_for_product(self, request, product):
-        """ยอดสั่งซื้อของสินค้าตัวนี้ตามตัวกรอง แยกเป็นแถวต่อ PO (ใช้ทั้งหน้ารายละเอียดและ Export Excel)"""
-        items = (
-            PurchaseItem.objects
-            .filter(product=product, quantity_ordered__gt=0)
-            .filter(self._po_filter_q(request, 'purchase_order'))
-            .select_related('purchase_order', 'purchase_order__supplier')
-            .order_by('purchase_order__order_date', 'purchase_order__po_number')
-        )
+        """ยอดซื้อ (รับแล้ว) ของสินค้าตัวนี้ตามตัวกรอง แยกเป็นแถวต่อ PO (ใช้ทั้งหน้ารายละเอียดและ Export Excel)
+        + PO ที่ยังเปิดอยู่และค้างรับ (ยอด ณ ปัจจุบัน ไม่ขึ้นกับช่วงวันที่ เหมือนคอลัมน์สต็อกค้างรับในหน้า list)"""
         rows_by_po = {}
-        for item in items:
-            po = item.purchase_order
-            row = rows_by_po.setdefault(po.id, {
+
+        def po_row(po):
+            return rows_by_po.setdefault(po.id, {
                 'po_id': po.id,
                 'po_number': po.po_number,
                 'order_date': po.order_date,
                 'status': po.get_status_display(),
                 'supplier_name': po.supplier.company_name if po.supplier_id else '-',
-                'qty': Decimal('0'),
-                'received': Decimal('0'),
+                'ordered': Decimal('0'),
+                'ordered_value': Decimal('0'),
+                'qty': Decimal('0'),  # จำนวนซื้อ = รับแล้ว
                 'value_before_vat': Decimal('0'),
                 'vat_percent': po.vat_percent or Decimal('0'),
+                'pending': Decimal('0'),
             })
-            row['qty'] += Decimal(item.quantity_ordered)
-            row['received'] += Decimal(item.quantity_received or 0)
-            row['value_before_vat'] += Decimal(item.quantity_ordered) * (item.unit_price or Decimal('0'))
+
+        def add_item(row, item):
+            price = item.unit_price or Decimal('0')
+            row['ordered'] += Decimal(item.quantity_ordered)
+            row['ordered_value'] += Decimal(item.quantity_ordered) * price
+            row['qty'] += Decimal(item.quantity_received or 0)
+            row['value_before_vat'] += Decimal(item.quantity_received or 0) * price
+
+        received_items = (PurchaseItem.objects
+                          .filter(product=product, quantity_received__gt=0)
+                          .filter(self._po_filter_q(request, 'purchase_order'))
+                          .select_related('purchase_order', 'purchase_order__supplier'))
+        for item in received_items:
+            add_item(po_row(item.purchase_order), item)
+
+        # PO ที่ยังเปิดอยู่และค้างรับ — ใบที่ยังไม่มีแถว (ยังไม่รับของ/อยู่นอกช่วงที่กรอง) แสดงจำนวนสั่ง/รับของใบนั้นด้วย
+        # (ใบนอกช่วงที่กรอง: ยอดซื้อในแถวเป็นของใบนั้น แต่ไม่รวมเข้ายอดซื้อของหน้า list)
+        open_items = (PurchaseItem.objects
+                      .filter(product=product, purchase_order__status__in=self.PENDING_IN_STATUSES,
+                              quantity_ordered__gt=F('quantity_received'))
+                      .select_related('purchase_order', 'purchase_order__supplier'))
+        for item in open_items:
+            pending = Decimal(item.quantity_ordered - (item.quantity_received or 0))
+            if item.purchase_order_id in rows_by_po:
+                row = rows_by_po[item.purchase_order_id]
+                if item.quantity_received == 0:
+                    add_item(row, item)  # รายการที่ยังไม่รับเลยในใบที่มีแถวแล้ว — นับจำนวนสั่งด้วย
+            else:
+                row = po_row(item.purchase_order)
+                row['ordered'] += Decimal(item.quantity_ordered)
+                row['ordered_value'] += Decimal(item.quantity_ordered) * (item.unit_price or Decimal('0'))
+            row['pending'] += pending
 
         rows = []
-        for row in rows_by_po.values():
+        for row in sorted(rows_by_po.values(), key=lambda r: (r['order_date'], r['po_number'])):
             vat_amount = row['value_before_vat'] * (Decimal(row['vat_percent']) / Decimal('100'))
             row['vat_amount'] = vat_amount
             row['value_after_vat'] = row['value_before_vat'] + vat_amount
-            row['unit_price'] = (row['value_before_vat'] / row['qty']) if row['qty'] else Decimal('0')
+            row['unit_price'] = (row['ordered_value'] / row['ordered']) if row['ordered'] else Decimal('0')
             rows.append(row)
         return rows
 
@@ -5823,7 +5849,7 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
 
         rows = self._po_rows_for_product(request, obj)
         totals = {k: sum((r[k] for r in rows), Decimal('0'))
-                  for k in ('qty', 'received', 'value_before_vat', 'vat_amount', 'value_after_vat')}
+                  for k in ('ordered', 'qty', 'value_before_vat', 'vat_amount', 'value_after_vat', 'pending')}
 
         back_url = reverse('admin:stocks_purchasereport_changelist')
         back_qs = request.GET.urlencode()
@@ -5885,7 +5911,8 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
 
         headers = [
             'บาร์โค้ดสินค้า', 'ชื่อสินค้า', 'เลขที่ PO', 'วันที่สั่งซื้อ', 'สถานะ PO', 'ผู้จำหน่าย',
-            'จำนวน', 'รับแล้ว', 'หน่วย', 'ราคาต่อหน่วย', 'มูลค่าก่อน VAT', 'VAT (%)', 'มูลค่า VAT', 'ยอดรวมหลัง VAT',
+            'จำนวนสั่ง', 'รับแล้ว (ซื้อ)', 'หน่วย', 'ราคาต่อหน่วย', 'มูลค่าก่อน VAT', 'VAT (%)', 'มูลค่า VAT', 'ยอดรวมหลัง VAT',
+            'ค้างรับ',
         ]
         header_row_idx = ws.max_row + 1
         ws.append(headers)
@@ -5915,14 +5942,15 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
                     row['order_date'],
                     row['status'],
                     row['supplier_name'],
+                    float(row['ordered']),
                     float(row['qty']),
-                    float(row['received']),
                     product.unit,
                     float(row['unit_price']),
                     float(row['value_before_vat']),
                     float(row['vat_percent']),
                     float(row['vat_amount']),
                     float(row['value_after_vat']),
+                    float(row['pending']),
                 ])
                 detail_row_idx = ws.max_row
                 ws.cell(row=detail_row_idx, column=4).number_format = 'DD/MM/YYYY'
@@ -5932,13 +5960,14 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
             subtotal_row_idx = ws.max_row + 1
             ws.append([
                 None, None, None, None, None, 'ยอดรวม',
+                float(sum((r['ordered'] for r in rows), Decimal('0'))),
                 float(sum((r['qty'] for r in rows), Decimal('0'))),
-                float(sum((r['received'] for r in rows), Decimal('0'))),
                 None, None,
                 float(sum((r['value_before_vat'] for r in rows), Decimal('0'))),
                 None,
                 float(sum((r['vat_amount'] for r in rows), Decimal('0'))),
                 float(sum((r['value_after_vat'] for r in rows), Decimal('0'))),
+                float(sum((r['pending'] for r in rows), Decimal('0'))),
             ])
             for col_idx in range(1, len(headers) + 1):
                 cell = ws.cell(row=subtotal_row_idx, column=col_idx)

@@ -35,13 +35,14 @@
                 <th>วันที่สั่งซื้อ</th>
                 <th>สถานะ PO</th>
                 <th>ผู้จำหน่าย</th>
-                <th class="sod-num">จำนวน</th>
-                <th class="sod-num">รับแล้ว</th>
+                <th class="sod-num">จำนวนสั่ง</th>
+                <th class="sod-num">รับแล้ว (ซื้อ)</th>
                 <th class="sod-num">ราคา/หน่วย</th>
                 <th class="sod-num">มูลค่าก่อน VAT</th>
                 <th class="sod-num">VAT (%)</th>
                 <th class="sod-num">มูลค่า VAT</th>
                 <th class="sod-num">ยอดรวมหลัง VAT</th>
+                <th class="sod-num">ค้างรับ</th>
             </tr>
         </thead>
         <tbody>
@@ -51,29 +52,31 @@
                 <td>{{ row.order_date|date:"d/m/Y" }}</td>
                 <td>{{ row.status }}</td>
                 <td>{{ row.supplier_name }}</td>
+                <td class="sod-num">{{ row.ordered|floatformat:0 }} {{ object.unit }}</td>
                 <td class="sod-num">{{ row.qty|floatformat:0 }} {{ object.unit }}</td>
-                <td class="sod-num">{{ row.received|floatformat:0 }} {{ object.unit }}</td>
                 <td class="sod-num">{{ row.unit_price|floatformat:2 }}</td>
                 <td class="sod-num">{{ row.value_before_vat|floatformat:2 }}</td>
                 <td class="sod-num">{{ row.vat_percent|floatformat:2 }}</td>
                 <td class="sod-num">{{ row.vat_amount|floatformat:2 }}</td>
                 <td class="sod-num">{{ row.value_after_vat|floatformat:2 }}</td>
+                <td class="sod-num">{{ row.pending|floatformat:0 }} {{ object.unit }}</td>
             </tr>
             {% empty %}
-            <tr><td colspan="11" style="text-align:center; color:#94a3b8; padding:24px;">ไม่มียอดสั่งซื้อของสินค้านี้ในช่วงที่กรอง</td></tr>
+            <tr><td colspan="12" style="text-align:center; color:#94a3b8; padding:24px;">ไม่มียอดซื้อหรือยอดค้างรับของสินค้านี้ในช่วงที่กรอง</td></tr>
             {% endfor %}
         </tbody>
         {% if rows %}
         <tfoot>
             <tr class="sod-total-row">
                 <td colspan="4">ยอดรวมทั้งหมด</td>
+                <td class="sod-num">{{ totals.ordered|floatformat:0 }} {{ object.unit }}</td>
                 <td class="sod-num">{{ totals.qty|floatformat:0 }} {{ object.unit }}</td>
-                <td class="sod-num">{{ totals.received|floatformat:0 }} {{ object.unit }}</td>
                 <td></td>
                 <td class="sod-num">{{ totals.value_before_vat|floatformat:2 }}</td>
                 <td></td>
                 <td class="sod-num">{{ totals.vat_amount|floatformat:2 }}</td>
                 <td class="sod-num">{{ totals.value_after_vat|floatformat:2 }}</td>
+                <td class="sod-num">{{ totals.pending|floatformat:0 }} {{ object.unit }}</td>
             </tr>
         </tfoot>
         {% endif %}

@@ -46,7 +46,7 @@ document.addEventListener('DOMContentLoaded', function() {
         'มูลค่ารวม', 'มูลค่า', 'รวมเงิน', 'รวมจ่าย', 'รวมยอด', 'กำไร', 'ยอดสุทธิ', 'ยอดรวมสุทธิ',
         'ค้างจ่าย', 'GET BALANCE DUE LIST', 'ยอดสุทธิ (GRAND TOTAL)', 'ค้างรับ',
         'GET BALANCE DUE DISPLAY', 'จำนวนขาย', 'ยอดขายรวม', 'ต้นทุนรวม (BUY)',
-        'กำไร (vs Buy)', 'ยอดสั่งซื้อรวม', 'ยอดซื้อต่อเดือน', 'จำนวน', 'INCL.VAT', 'EXCL.VAT', 'ยอดDC', 'ยอดREBATE', 'get_total_display', 'เงินเข้า', 'เงินออก'
+        'กำไร (vs Buy)', 'ยอดสั่งซื้อรวม', 'ยอดซื้อรวม', 'ยอดซื้อต่อเดือน', 'จำนวน', 'INCL.VAT', 'EXCL.VAT', 'ยอดDC', 'ยอดREBATE', 'get_total_display', 'เงินเข้า', 'เงินออก'
     ].map(l => l.toUpperCase());
 
     // คอลัมน์ที่รวมยอด: index ในแถว + ชื่อ field (จาก class "column-<field>" ที่ Django ใส่ให้หัวตาราง)
