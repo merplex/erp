@@ -783,14 +783,36 @@ class ProductBarcodeAdmin(UnfoldModelAdmin):
                 queryset = queryset.filter(product_id=material_id)
         return queryset, use_distinct
 
+class ProductSupplierForm(forms.ModelForm):
+    """ราคา Supplier: สกุลบาท = เรท 1 ล็อกตั้งแต่ตอนเปิดหน้า (เปลี่ยนสกุลเงินแล้ว js/currency_rate.js ปลด/ล็อกให้)"""
+    class Meta:
+        model = ProductSupplier
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        currency = (self.data.get(self.add_prefix('currency')) if self.is_bound
+                    else self.initial.get('currency', self.instance.currency)) or 'THB'
+        if currency == 'THB' and 'exchange_rate' in self.fields:
+            self.fields['exchange_rate'].widget.attrs.update({'readonly': True, 'style': 'background:#f1f5f9;'})
+
+    def clean(self):
+        cleaned = super().clean()
+        if (cleaned.get('currency') or 'THB') == 'THB':
+            cleaned['exchange_rate'] = Decimal('1')
+        return cleaned
+
+
 class ProductSupplierInline(UnfoldTabularInline):
     model = ProductSupplier
+    form = ProductSupplierForm
     extra = 1
     # ราคา + สกุลเงิน + ExRate (บาท = ล็อกเรทเป็น 1 — js/currency_rate.js) ต้นทุนเทียบเป็นบาท = ราคา x เรท
     fields = ('supplier', 'supplier_sku', 'latest_buy_price', 'currency', 'exchange_rate')
 
 class SupplierProductInline(UnfoldTabularInline):
     model = ProductSupplier
+    form = ProductSupplierForm
     extra = 1
     autocomplete_fields = ['product']
     fields = ('product', 'supplier_sku', 'latest_buy_price', 'currency', 'exchange_rate')
@@ -1838,6 +1860,11 @@ class PurchaseOrderAdminForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         if 'exchange_rate' in self.fields:
             self.fields['exchange_rate'].required = False
+            # บาท = เรท 1 ล็อกตั้งแต่ตอนเปิดหน้า (ไม่รอ JS) — เปลี่ยนสกุลเงินแล้ว js/currency_rate.js ปลด/ล็อกให้
+            currency = (self.data.get(self.add_prefix('currency')) if self.is_bound
+                        else self.initial.get('currency', getattr(self.instance, 'currency', 'THB'))) or 'THB'
+            if currency == 'THB':
+                self.fields['exchange_rate'].widget.attrs.update({'readonly': True, 'style': 'background:#f1f5f9;'})
 
     def clean(self):
         cleaned = super().clean()

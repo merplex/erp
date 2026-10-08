@@ -27,8 +27,17 @@
             document.querySelectorAll('select[name$="currency"]').forEach(syncLock);
         }
         lockAll();
-        $(document).on('change', 'select[name$="currency"]', function () { syncLock(this); });
-        $(document).on('formset:added', lockAll);  // แถวใหม่ใน inline
+        // ฟังแบบ native (capture) — ไม่พึ่ง jQuery: เลือกสกุลเงินด้วยวิธีไหนก็ล็อก/ปลดล็อกเรททันที
+        document.addEventListener('change', function (e) {
+            if (e.target && e.target.matches && e.target.matches('select[name$="currency"]')) syncLock(e.target);
+        }, true);
+        document.addEventListener('formset:added', lockAll);  // แถวใหม่ใน inline (Django 4.1+ ยิงเป็น native event)
+        $(document).on('formset:added', lockAll);
+        // กันพิมพ์/วางค่าในช่องเรทที่ล็อก (บางเบราว์เซอร์มือถือไม่เคารพ readonly ของ type=number)
+        document.addEventListener('beforeinput', function (e) {
+            var t = e.target;
+            if (t && t.name && /exchange_rate$/.test(t.name) && t.readOnly) e.preventDefault();
+        }, true);
 
         // ---- หน้าใบสั่งซื้อ ----
         var supplier = document.getElementById('id_supplier');
@@ -59,9 +68,9 @@
         }
 
         // ผู้ใช้เปลี่ยนสกุลเงินเอง -> เติมเรทจากราคา Supplier ของสกุลนั้น (แก้ได้)
-        $(currency).on('change', function (e) {
+        currency.addEventListener('change', function (e) {
             labelPriceHeader();
-            if (e.originalEvent) { window.poCurrencyUserPicked = true; fetchRate(); }
+            if (e.isTrusted) { window.poCurrencyUserPicked = true; fetchRate(); }
         });
         // ให้ purchase_item_price_autofill.js เรียกหลังตั้งสกุลเงินอัตโนมัติจากสินค้า
         window.poCurrencySync = function () { syncLock(currency); labelPriceHeader(); };
