@@ -607,6 +607,32 @@ def _normalize_rate(instance):
         instance.exchange_rate = Decimal('1')
 
 
+def supplier_product_currencies(supplier_id, product_ids):
+    """สกุลเงิน/เรท/ราคาที่ตั้งไว้ของสินค้าแต่ละตัวกับ supplier นี้ -> {product_id: ProductSupplier}
+    (สินค้าที่ยังไม่ได้ตั้งราคากับ supplier นี้ไม่อยู่ในผลลัพธ์ = ไม่รู้สกุลเงิน)"""
+    if not supplier_id or not product_ids:
+        return {}
+    return {ps.product_id: ps for ps in ProductSupplier.objects.filter(
+        supplier_id=supplier_id, product_id__in=product_ids).select_related('product')}
+
+
+def po_currency_warnings(po_currency, supplier_id, product_ids):
+    """คำเตือนสกุลเงินของใบสั่งซื้อ: สินค้าในใบมีหลายสกุลเงิน / สกุลเงินของสินค้าไม่ตรงกับใบ"""
+    by_currency = {}
+    for ps in supplier_product_currencies(supplier_id, product_ids).values():
+        by_currency.setdefault(ps.currency, []).append(ps.product.name)
+    label = lambda code: CURRENCY_LABELS.get(code, code)
+    if len(by_currency) > 1:
+        detail = ' / '.join(f"{label(c)}: {', '.join(names)}" for c, names in sorted(by_currency.items()))
+        return [f"สินค้าในใบนี้มีหลายสกุลเงิน ({detail}) — ใบสั่งซื้อ 1 ใบใช้ได้สกุลเดียว "
+                f"ราคาสินค้าที่ต่างสกุลจะถูกแปลงด้วยเรทของใบ หรือแยกเป็นคนละใบ"]
+    if by_currency:
+        code = next(iter(by_currency))
+        if code != po_currency:
+            return [f"สินค้าในใบนี้ตั้งราคาเป็น {label(code)} แต่ใบสั่งซื้อเป็น {label(po_currency)}"]
+    return []
+
+
 class ProductSupplier(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='product_suppliers')
     supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE, verbose_name="ผู้จำหน่าย")

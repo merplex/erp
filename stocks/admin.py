@@ -1776,6 +1776,29 @@ class BOMAdmin(DocumentLockMixin, UnfoldModelAdmin):
     class Media:
         js = ('js/product_barcode_sync.js', 'js/bom_name_barcode_autofill.js')
 
+class PurchaseOrderAdminForm(forms.ModelForm):
+    """สกุลเงิน + ExRate ของใบ: บาท = เรท 1 / สกุลอื่นต้องกรอกเรท (ว่างหรือ 1 = ยังไม่ได้กรอก)"""
+    class Meta:
+        model = PurchaseOrder
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if 'exchange_rate' in self.fields:
+            self.fields['exchange_rate'].required = False
+
+    def clean(self):
+        cleaned = super().clean()
+        currency = cleaned.get('currency') or 'THB'
+        rate = cleaned.get('exchange_rate')
+        if currency == 'THB':
+            cleaned['exchange_rate'] = Decimal('1')
+        elif not rate or rate == 1:
+            self.add_error('exchange_rate',
+                           f"⚠️ ใบสั่งซื้อสกุล {CURRENCY_LABELS.get(currency, currency)} ต้องกรอก ExRate (บาทต่อ 1 หน่วยเงิน)")
+        return cleaned
+
+
 @admin.register(PurchaseOrder)
 class PurchaseOrderAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     list_display = ('po_number', 'supplier', 'order_date', 'status', 'get_diff')
@@ -1789,6 +1812,7 @@ class PurchaseOrderAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelM
     search_fields = ('po_number', 'invoice_no_supplier', 'items__product__name',
     'items__product__barcodes__code', 'supplier__company_name')
     autocomplete_fields = ['supplier']
+    form = PurchaseOrderAdminForm
     inlines = [PurchaseItemInline, PurchaseReceiptLogInline]
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
     # สถานะการเงินคำนวณจากรายการจ่ายเงิน (A3) เท่านั้น — เลือกเองไม่ได้ (กันสถานะไม่ตรงกับยอดที่จ่ายจริง)
@@ -2020,6 +2044,13 @@ class PurchaseOrderAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelM
         if not change:
             obj.created_by = request.user
         super().save_model(request, obj, form, change)
+
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        po = form.instance
+        product_ids = list(po.items.values_list('product_id', flat=True))
+        for warning in po_currency_warnings(po.currency, po.supplier_id, product_ids):
+            self.message_user(request, f"⚠️ {po.po_number}: {warning}", messages.WARNING)
 
     def get_queryset(self, request):
         # .distinct() กัน PO ซ้ำแถวเวลา filter ผ่าน items__product__tags (join หลายชั้น)

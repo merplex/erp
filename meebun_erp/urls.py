@@ -18,7 +18,7 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path
 from django.views.generic import RedirectView
-from stocks.views import unlock_document_view, line_webhook_view, line_webhook2_view, barcode_remaining_api, delivery_log_autosave, pending_barcodes_api, barcode_info_api, contract_update_barcode_api, stock_report_webview, purchase_quotation_price_api, sales_quotation_price_api, product_barcodes_api, product_bom_by_barcode_api, recommended_supplier_api, supplier_currency_rate_api
+from stocks.views import unlock_document_view, line_webhook_view, line_webhook2_view, barcode_remaining_api, delivery_log_autosave, pending_barcodes_api, barcode_info_api, contract_update_barcode_api, stock_report_webview, purchase_quotation_price_api, sales_quotation_price_api, product_barcodes_api, product_bom_by_barcode_api, recommended_supplier_api, supplier_currency_rate_api, po_product_currency_api
 
 urlpatterns = [
     path("", RedirectView.as_view(url="/admin/")),
@@ -35,6 +35,7 @@ urlpatterns = [
     path("api/contract/update-barcode/", contract_update_barcode_api),
     path("api/purchase-quotation-price/", purchase_quotation_price_api),
     path("api/supplier-currency-rate/", supplier_currency_rate_api),
+    path("api/po-product-currency/", po_product_currency_api),
     path("api/sales-quotation-price/", sales_quotation_price_api),
     path("api/product-barcodes/", product_barcodes_api),
     path("api/product-bom-by-barcode/", product_bom_by_barcode_api),

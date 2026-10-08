@@ -1,7 +1,7 @@
 // สกุลเงิน + ExRate (ราคา Supplier ในหน้าสินค้า/ผู้จำหน่าย, หัวใบสั่งซื้อ)
 //  - บาท -> เรท = 1 และล็อกช่อง (readonly ไม่ใช่ disabled เพื่อให้ค่ายังถูกส่งไปบันทึก)
-//  - หน้าใบสั่งซื้อ: เลือก supplier/สกุลเงิน -> เติมเรทอัตโนมัติจากราคาที่ตั้งไว้ของ supplier นี้ (แก้เองได้)
-//    และหัวคอลัมน์ "ราคา/หน่วย" ของรายการสินค้าแสดงสกุลเงินของใบ
+//  - หน้าใบสั่งซื้อ: เปลี่ยนสกุลเงินเอง -> เติมเรทจากราคาที่ตั้งไว้ของ supplier นี้ (แก้เองได้)
+//    หัวคอลัมน์ "ราคา/หน่วย" แสดงสกุลเงินของใบ / ตั้งสกุลเงินอัตโนมัติจากสินค้า: purchase_item_price_autofill.js
 (function () {
     'use strict';
 
@@ -35,7 +35,6 @@
         var currency = document.getElementById('id_currency');
         var rate = document.getElementById('id_exchange_rate');
         if (!supplier || !currency || !rate) return;
-        var isNew = /\/add\/?$/.test(window.location.pathname);
 
         function labelPriceHeader() {
             var code = currency.value;
@@ -50,24 +49,21 @@
         }
         labelPriceHeader();
 
-        function fetchRate(pickCurrency) {
-            if (!supplier.value) return;
-            $.get('/api/supplier-currency-rate/', {
-                supplier_id: supplier.value,
-                currency: pickCurrency ? '' : currency.value,
-            }).done(function (data) {
-                if (!data) return;
-                if (pickCurrency && data.currency && data.currency !== currency.value) {
-                    currency.value = data.currency;
-                    syncLock(currency);
-                    labelPriceHeader();
-                }
-                if (data.exchange_rate && currency.value !== 'THB') rate.value = data.exchange_rate;
-            });
+        function fetchRate() {
+            if (!supplier.value || currency.value === 'THB') return;
+            $.get('/api/supplier-currency-rate/', {supplier_id: supplier.value, currency: currency.value})
+                .done(function (data) {
+                    if (data && data.exchange_rate) rate.value = data.exchange_rate;
+                    $(rate).trigger('change');
+                });
         }
 
-        $(currency).on('change', function () { labelPriceHeader(); fetchRate(false); });
-        // ใบใหม่: เลือก supplier -> เลือกสกุลเงิน/เรทที่ใช้กับ supplier นี้ล่าสุดให้ (เปลี่ยนเองได้)
-        $(supplier).on('change', function () { if (isNew) fetchRate(true); });
+        // ผู้ใช้เปลี่ยนสกุลเงินเอง -> เติมเรทจากราคา Supplier ของสกุลนั้น (แก้ได้)
+        $(currency).on('change', function (e) {
+            labelPriceHeader();
+            if (e.originalEvent) { window.poCurrencyUserPicked = true; fetchRate(); }
+        });
+        // ให้ purchase_item_price_autofill.js เรียกหลังตั้งสกุลเงินอัตโนมัติจากสินค้า
+        window.poCurrencySync = function () { syncLock(currency); labelPriceHeader(); };
     });
 }());

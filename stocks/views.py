@@ -354,6 +354,23 @@ def supplier_currency_rate_api(request):
 
 
 @staff_member_required
+def po_product_currency_api(request):
+    """API: สกุลเงิน/เรทที่ตั้งไว้ของสินค้าในใบสั่งซื้อกับ supplier นี้ + คำเตือนสกุลเงิน
+    ?supplier_id=&product_ids=1,2&currency=RMB -> {"products": {id: {currency, exchange_rate, name}}, "warnings": [...]}"""
+    from .models import supplier_product_currencies, po_currency_warnings
+    supplier_id = request.GET.get('supplier_id', '').strip()
+    product_ids = [p for p in request.GET.get('product_ids', '').split(',') if p.strip().isdigit()]
+    if not supplier_id.isdigit():
+        return JsonResponse({'products': {}, 'warnings': []})
+    found = supplier_product_currencies(supplier_id, product_ids)
+    return JsonResponse({
+        'products': {str(pid): {'currency': ps.currency, 'exchange_rate': str(ps.exchange_rate), 'name': ps.product.name}
+                     for pid, ps in found.items()},
+        'warnings': po_currency_warnings(request.GET.get('currency') or 'THB', supplier_id, product_ids),
+    })
+
+
+@staff_member_required
 def purchase_quotation_price_api(request):
     """API: ราคาซื้อล่าสุดของ product นี้จาก supplier นี้ (ใช้ prefill ช่อง new_price ในใบเสนอราคาซื้อ)"""
     from .models import Product, ProductSupplier

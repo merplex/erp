@@ -180,3 +180,22 @@ class PurchaseCurrencyTests(TestCase):
         po_usd = PurchaseOrder.objects.create(supplier=self.th, currency='USD', exchange_rate=self.D('35'))
         PurchaseItem.objects.create(purchase_order=po_usd, product=self.product, quantity_unit=1, unit_price=0)
         self.assertEqual(po_usd.items.get().unit_price, self.D('1.43'))  # 50 บาท / 35
+
+    def test_currency_warnings_and_missing_rate(self):
+        from .admin import PurchaseOrderAdminForm
+        from .models import Product, ProductSupplier, po_currency_warnings
+        thb_item = Product.objects.create(name='Y', sale_price=0)
+        ProductSupplier.objects.create(product=thb_item, supplier=self.cn, latest_buy_price=self.D('30'))
+        self.assertEqual(po_currency_warnings('RMB', self.cn.pk, [self.product.pk]), [])
+        self.assertIn('หลายสกุลเงิน', po_currency_warnings('RMB', self.cn.pk, [self.product.pk, thb_item.pk])[0])
+        self.assertIn('แต่ใบสั่งซื้อเป็น', po_currency_warnings('USD', self.cn.pk, [self.product.pk])[0])
+        base = {'supplier': self.cn.pk, 'order_date': '2026-10-08', 'vat_percent': '0', 'invoice_no_supplier': '',
+                'status': 'Pending', 'payment_status': 'Unpaid'}
+        form = PurchaseOrderAdminForm(data={**base, 'currency': 'RMB', 'exchange_rate': ''})
+        self.assertFalse(form.is_valid())
+        self.assertIn('exchange_rate', form.errors)
+        form = PurchaseOrderAdminForm(data={**base, 'currency': 'RMB', 'exchange_rate': '5.1'})
+        self.assertTrue(form.is_valid(), form.errors)
+        form = PurchaseOrderAdminForm(data={**base, 'currency': 'THB', 'exchange_rate': ''})
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data['exchange_rate'], 1)
