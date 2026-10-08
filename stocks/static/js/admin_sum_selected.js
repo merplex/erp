@@ -59,8 +59,14 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     if (activeColumns.length === 0) return;
 
+    function cellCurrency(cell) {
+        // data-cur = สกุลเงินของยอดในเซลล์ (เช่น A3 ใบสั่งซื้อ RMB) -> รวมแยกตามสกุล ไม่บวกข้ามสกุล
+        const tagged = cell.querySelector('[data-cur]');
+        return tagged ? tagged.getAttribute('data-cur') : null;
+    }
+
     function cellNumber(cell) {
-        // ค่าที่ระบุไว้ใน data-sum (เช่น ยอดใบสั่งซื้อสกุลต่างประเทศแปลงเป็นบาทแล้ว) มาก่อนตัวเลขที่แสดง
+        // ค่าที่ระบุไว้ใน data-sum มาก่อนตัวเลขที่แสดง (ข้อความในเซลล์อาจมี % หรือหน่วยเงินต่อท้าย)
         const tagged = cell.querySelector('[data-sum]');
         if (tagged) return parseFloat(tagged.getAttribute('data-sum')) || 0;
         // เอาตัวเลขแรกของเซลล์ (มี ฿ / คอมมา / บรรทัดย่อย เช่น "หัก ต.ค. 2569" ได้)
@@ -69,6 +75,13 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function fmt(n) {
+        if (n !== null && typeof n === 'object') {
+            // ยอดแยกตามสกุลเงิน {บาท: x, RMB: y} — สกุลเดียวแสดงตัวเลขเหมือนเดิม
+            const keys = Object.keys(n);
+            if (keys.length === 1 && keys[0] === 'บาท') return fmt(n[keys[0]]);
+            if (!keys.length) return fmt(0);
+            return keys.map(k => fmt(n[k]) + ' ' + k).join(' · ');
+        }
         return Number(n).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
     }
 
@@ -111,7 +124,13 @@ document.addEventListener('DOMContentLoaded', function() {
         rows.forEach(row => {
             const cells = row.querySelectorAll('td, th');
             activeColumns.forEach(col => {
-                if (cells[col.index]) totals[col.field || col.label] += cellNumber(cells[col.index]);
+                const cell = cells[col.index];
+                if (!cell) return;
+                const key = col.field || col.label;
+                const cur = cellCurrency(cell);
+                if (cur === null) { totals[key] += cellNumber(cell); return; }
+                if (typeof totals[key] !== 'object') totals[key] = {};
+                totals[key][cur] = (totals[key][cur] || 0) + cellNumber(cell);
             });
         });
         return totals;

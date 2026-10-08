@@ -190,7 +190,10 @@ class ColumnTotalsMixin:
                     if number is not None:
                         sums[f] += number
             totals.update(sums)
-        return JsonResponse({'count': count, 'totals': {f: float(v or 0) for f, v in totals.items()}})
+        # ค่าเป็น dict = ยอดแยกตามสกุลเงิน {ป้ายสกุล: ยอด} (เช่น A3 ใบสั่งซื้อหลายสกุล — ไม่บวกข้ามสกุล)
+        return JsonResponse({'count': count, 'totals': {
+            f: ({k: float(x or 0) for k, x in v.items()} if isinstance(v, dict) else float(v or 0))
+            for f, v in totals.items()}})
 
 
 class ExportToExcelMixin:
@@ -551,6 +554,11 @@ class SalesItemReadOnlyInline(UnfoldTabularInline):
     
     get_total_display.short_description = "ราคารวม"
     
+def _cur_label(po):
+    code = getattr(po, 'currency', 'THB') or 'THB'
+    return CURRENCY_LABELS.get(code, code)
+
+
 def _cur(po):
     """ต่อท้ายยอดเงินของใบสั่งซื้อด้วยสกุลเงิน (บาทไม่ต่อท้าย เหมือนเดิม)"""
     code = getattr(po, 'currency', 'THB') or 'THB'
@@ -4690,8 +4698,8 @@ class FinanceReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, DocumentLockMixi
         subtotal = getattr(obj, '_total_items_price', None) or 0
         vat_p = obj.vat_percent or 0
         total = subtotal + (subtotal * vat_p / 100)
-        # data-sum = ยอดเป็นบาท ให้กล่องสรุปยอดรวมรายการที่ติ๊กเป็นบาท (ใบคนละสกุลเงินไม่บวกข้ามสกุล)
-        return format_html('<span data-sum="{}">{}</span>', round_money(total * (obj.exchange_rate or 1)),
+        # data-sum + data-cur = ยอดและสกุลของใบ ให้กล่องสรุปยอดรวมรายการที่ติ๊กแยกตามสกุลเงิน (ไม่บวกข้ามสกุล)
+        return format_html('<span data-sum="{}" data-cur="{}">{}</span>', round_money(total), _cur_label(obj),
                            f"{total:,.2f}{_cur(obj)}")
     get_grand_total_list.short_description = "💰 ยอดสุทธิ"
 
@@ -4702,26 +4710,29 @@ class FinanceReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, DocumentLockMixi
         paid = getattr(obj, '_total_paid', None) or 0
         bal = round_money(grand_total - paid)
         if bal <= 0:
-            return format_html('<span data-sum="0" style="color:green; font-weight:bold;">{}</span>', "0.00")
+            return format_html('<span data-sum="0" data-cur="{}" style="color:green; font-weight:bold;">{}</span>',
+                               _cur_label(obj), "0.00")
         # ต่อท้ายด้วย % ที่ยังค้างจ่ายเทียบกับยอดสุทธิ เช่น ค้าง 70,000 จาก 100,000 → -70,000.00(70%)
         pct = f"({bal / grand_total * 100:.0f}%)" if grand_total > 0 else ""
-        return format_html('<span data-sum="{}" style="color:red; font-weight:bold;">-{}{}{}</span>',
-                           -round_money(bal * (obj.exchange_rate or 1)), f"{bal:,.2f}", _cur(obj), pct)
+        return format_html('<span data-sum="{}" data-cur="{}" style="color:red; font-weight:bold;">-{}{}{}</span>',
+                           -bal, _cur_label(obj), f"{bal:,.2f}", _cur(obj), pct)
     get_balance_due_list.short_description = "ค้างจ่าย"
 
     def fast_column_totals(self, queryset, fields):
-        # กล่องสรุปยอด: ใบคนละสกุลเงิน -> รวมเป็นบาท (ยอดของใบ x เรทของใบ) ไม่บวกข้ามสกุล
-        totals = {'get_grand_total_list': Decimal(0), 'get_balance_due_list': Decimal(0)}
+        # กล่องสรุปยอด: แยกตามสกุลเงินของใบ {บาท: .., RMB: ..} — ไม่บวกข้ามสกุล
+        totals = {'get_grand_total_list': {}, 'get_balance_due_list': {}}
         rows = self.model.objects.filter(pk__in=queryset.values('pk'))
         for obj in self.get_queryset(self._totals_request).filter(pk__in=rows.values('pk')):
+            label = _cur_label(obj)
             subtotal = obj._total_items_price or 0
-            grand = subtotal + subtotal * (obj.vat_percent or 0) / 100
-            rate = obj.exchange_rate or 1
-            totals['get_grand_total_list'] += grand * rate
+            grand = round_money(subtotal + subtotal * (obj.vat_percent or 0) / 100)
+            totals['get_grand_total_list'][label] = totals['get_grand_total_list'].get(label, Decimal(0)) + grand
             bal = round_money(grand - (obj._total_paid or 0))
+            due = totals['get_balance_due_list'].setdefault(label, Decimal(0))
             if bal > 0:  # ค้างจ่ายแสดงเป็นค่าติดลบ (เหมือนในตาราง)
-                totals['get_balance_due_list'] -= bal * rate
-        return {f: v for f, v in totals.items() if f in fields}
+                totals['get_balance_due_list'][label] = due - bal
+        order = [label for _, label in CURRENCY_CHOICES]  # บาท, RMB, USD
+        return {f: {k: v[k] for k in sorted(v, key=order.index)} for f, v in totals.items() if f in fields}
 
     def get_changelist_instance(self, request):
         self._totals_request = request
