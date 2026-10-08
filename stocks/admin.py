@@ -5569,7 +5569,7 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
     นับเฉพาะ PO ที่ไม่ใช่ร่าง/ยกเลิก, ช่วงเวลา = วันที่สั่งซื้อของ PO (ไม่กรองวันที่ = ปีนี้)
     PurchaseItem.quantity_ordered เป็นชิ้น และ unit_price เป็นราคาต่อชิ้นเสมอ -> มูลค่า = จำนวน x ราคา"""
     list_display = (
-        'get_name_link', 'get_total_qty', 'get_total_purchase', 'get_stock', 'get_monthly_avg'
+        'get_name_link', 'get_total_qty', 'get_total_purchase', 'get_stock', 'get_pending_in', 'get_monthly_avg'
     )
     list_filter = (
         ('purchaseitem__purchase_order__order_date', DjangoDateRangeFilter),
@@ -5582,6 +5582,10 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
     actions = ['calculate_selected_totals']
 
     EXCLUDED_STATUSES = ('Draft', 'Cancelled')
+    # สต็อกค้างรับ = สั่งแล้วยังรับไม่ครบ ของ PO ที่ยังเปิดอยู่ (เหมือน "แผนรับ (PO)" ใน F1 แต่ไม่นับใบร่างที่ยังไม่ได้สั่งจริง)
+    # เป็นยอด ณ ปัจจุบันเหมือนสต็อกปัจจุบัน ไม่ขึ้นกับช่วงวันที่/ผู้จำหน่ายที่กรอง
+    PENDING_IN_STATUSES = ('Pending', 'Confirmed', 'Ordered', 'Paid', 'Loaded', 'Departed', 'Arrived',
+                           'Received', 'Partially Received')
     _DATE_PARAM = 'purchaseitem__purchase_order__order_date'
     _SUPPLIER_PARAM = 'purchaseitem__purchase_order__supplier__id__exact'
 
@@ -5654,9 +5658,15 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
         qty = items.annotate(t=Sum('quantity_ordered')).values('t')[:1]
         value = items.annotate(t=Sum(F('quantity_ordered') * F('unit_price'),
                                      output_field=DecimalField())).values('t')[:1]
+        pending_in = (PurchaseItem.objects
+                      .filter(product=OuterRef('pk'), purchase_order__status__in=self.PENDING_IN_STATUSES)
+                      .order_by().values('product')
+                      .annotate(t=Sum(Greatest(F('quantity_ordered') - F('quantity_received'), Value(0))))
+                      .values('t')[:1])
         return qs.annotate(
             total_qty=Coalesce(Subquery(qty), Value(0), output_field=DecimalField()),
             total_purchase_val=Coalesce(Subquery(value), Value(0), output_field=DecimalField()),
+            total_pending_in=Coalesce(Subquery(pending_in), Value(0), output_field=DecimalField()),
         ).filter(total_qty__gt=0)  # 🎯 โชว์เฉพาะสินค้าที่มียอดสั่งซื้อในช่วงนั้น
 
     def _totals_queryset(self, request, queryset):
@@ -5665,7 +5675,8 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
 
     def _aggregate(self, request, queryset):
         agg = self._totals_queryset(request, queryset).aggregate(
-            qty=Sum('total_qty'), val=Sum('total_purchase_val'), stock=Sum('stock_quantity'))
+            qty=Sum('total_qty'), val=Sum('total_purchase_val'), stock=Sum('stock_quantity'),
+            pending_in=Sum('total_pending_in'))
         agg = {k: Decimal(v or 0) for k, v in agg.items()}
         agg['months'] = self._month_count(request)
         agg['monthly'] = agg['qty'] / agg['months']
@@ -5674,7 +5685,8 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
     def fast_column_totals(self, queryset, fields):
         agg = self._aggregate(self._list_request, queryset)
         totals = {'get_total_qty': agg['qty'], 'get_total_purchase': agg['val'],
-                  'get_stock': agg['stock'], 'get_monthly_avg': agg['monthly']}
+                  'get_stock': agg['stock'], 'get_pending_in': agg['pending_in'],
+                  'get_monthly_avg': agg['monthly']}
         return {f: v for f, v in totals.items() if f in fields}
 
     @admin.action(description="📝 สรุปยอดรวมรายการที่เลือก")
@@ -5687,6 +5699,7 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
             f"สั่งซื้อรวม: {agg['qty']:,.0f} ชิ้น | "
             f"ยอดสั่งซื้อรวม: ฿{agg['val']:,.2f} | "
             f"สต็อกปัจจุบัน: {agg['stock']:,.0f} ชิ้น | "
+            f"สต็อกค้างรับ: {agg['pending_in']:,.0f} ชิ้น | "
             f"ยอดซื้อต่อเดือน (เฉลี่ย {agg['months']} เดือน): {agg['monthly']:,.1f} ชิ้น",
             messages.INFO
         )
@@ -5709,6 +5722,9 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
 
     @admin.display(description="สต็อกปัจจุบัน", ordering='stock_quantity')
     def get_stock(self, obj): return f"{obj.stock_quantity or 0:,.0f} {obj.unit}"
+
+    @admin.display(description="สต็อกค้างรับ", ordering='total_pending_in')
+    def get_pending_in(self, obj): return f"{obj.total_pending_in or 0:,.0f} {obj.unit}"
 
     @admin.display(description="ยอดซื้อต่อเดือน (เฉลี่ย)", ordering='total_qty')
     def get_monthly_avg(self, obj):
@@ -5922,6 +5938,7 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
                 "qty": "{:,.0f}".format(agg['qty']),
                 "val": "{:,.2f}".format(agg['val']),
                 "stock": "{:,.0f}".format(agg['stock']),
+                "pending_in": "{:,.0f}".format(agg['pending_in']),
                 "monthly": "{:,.1f}".format(agg['monthly']),
             }
             export_url = reverse('admin:stocks_purchasereport_export_detailed')
@@ -5942,6 +5959,7 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
                                     <td>${{data.qty}}</td>
                                     <td>${{data.val}}</td>
                                     <td>${{data.stock}}</td>
+                                    <td>${{data.pending_in}}</td>
                                     <td>${{data.monthly}}</td>
                                 </tr>
                             `;
