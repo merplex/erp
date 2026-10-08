@@ -18,6 +18,11 @@ class AdvanceOrderRunnerMiddleware:
             except Exception:
                 pass
             try:
+                from .models import confirm_draft_sales_orders
+                confirm_draft_sales_orders()  # SO ร่างที่เลยวันที่ใบแล้ว -> ยืนยัน (วันรุ่งขึ้น)
+            except Exception:
+                pass
+            try:
                 from .models import refresh_factored_payment_status
                 refresh_factored_payment_status()  # ส่วนที่เหลือแฟคตอริ่งถึงวันรับ -> ขายแฟคตอริ่งแล้ว เป็นรับเงินครบแล้ว
             except Exception:

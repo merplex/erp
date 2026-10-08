@@ -5074,7 +5074,7 @@ class StockAdjustmentAdmin(UnfoldModelAdmin):
 class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
     list_display = (
         'get_name_link', 'get_total_qty', 'get_total_revenue',
-        'get_total_cost_buy', 'get_profit_margin'
+        'get_total_cost_buy', 'get_profit_margin', 'get_total_pending'
     )
     list_filter = (
         ('sales_items__sales_order__delivery_logs__shipped_date', RangeDateTimeFilter),
@@ -5125,18 +5125,15 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
             SalesItem.objects
             .filter(product=product, quantity_shipped__gt=0)
             .filter(date_filter)
+            .filter(self._list_filter_q(request, 'sales_order'))  # ตัวกรองลูกค้า/วันส่งเดียวกับหน้า list
             .select_related('sales_order', 'sales_order__customer', 'barcode_obj')
             .order_by('sales_order__order_date', 'sales_order__so_number')
         )
 
         rows_by_so = {}
-        for item in items:
-            so = item.sales_order
-            factor = (item.barcode_obj.conversion_factor if item.barcode_obj else None) or Decimal('1')
-            qty = Decimal(item.quantity_shipped)
-            value_before_vat = (item.sale_price * qty) / factor
 
-            row = rows_by_so.setdefault(so.id, {
+        def so_row(so):
+            return rows_by_so.setdefault(so.id, {
                 'so_id': so.id,
                 'so_number': so.so_number,
                 'order_date': so.order_date,
@@ -5145,9 +5142,15 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
                 'qty': Decimal('0'),
                 'value_before_vat': Decimal('0'),
                 'vat_percent': so.vat_percent or Decimal('0'),
+                'pending': Decimal('0'),
             })
+
+        for item in items:
+            factor = (item.barcode_obj.conversion_factor if item.barcode_obj else None) or Decimal('1')
+            qty = Decimal(item.quantity_shipped)
+            row = so_row(item.sales_order)
             row['qty'] += qty
-            row['value_before_vat'] += value_before_vat
+            row['value_before_vat'] += (item.sale_price * qty) / factor
 
         # หักใบลดหนี้ของสินค้านี้ในใบสั่งขายเดียวกัน (จำนวนเป็นชิ้น, มูลค่าก่อน VAT)
         cn_items = (CreditNoteItem.objects
@@ -5158,6 +5161,15 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
             row = rows_by_so[ci.sales_item.sales_order_id]
             row['qty'] -= Decimal(ci.quantity) * Decimal(factor)
             row['value_before_vat'] -= ci.amount
+
+        # ค้างส่ง (ยอด ณ ปัจจุบัน ของ SO ที่ยังเปิดอยู่ — ไม่ขึ้นกับช่วงเวลา เหมือนคอลัมน์ในหน้า list)
+        # SO ที่ยังไม่ได้ส่งเลยก็แสดงเป็นแถวด้วย (จำนวน/มูลค่าที่ส่ง = 0)
+        open_items = (SalesItem.objects.filter(product=product)
+                      .filter(self._open_so_q(request, 'sales_order'))
+                      .filter(quantity_ordered__gt=F('quantity_shipped'))
+                      .select_related('sales_order', 'sales_order__customer'))
+        for item in open_items:
+            so_row(item.sales_order)['pending'] += Decimal(item.quantity_ordered - item.quantity_shipped)
 
         rows = []
         for row in sorted(rows_by_so.values(), key=lambda r: (r['order_date'], r['so_number'])):
@@ -5183,6 +5195,7 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
             'value_before_vat': sum((r['value_before_vat'] for r in rows), Decimal('0')),
             'vat_amount': sum((r['vat_amount'] for r in rows), Decimal('0')),
             'value_after_vat': sum((r['value_after_vat'] for r in rows), Decimal('0')),
+            'pending': sum((r['pending'] for r in rows), Decimal('0')),
         }
 
         back_url = reverse('admin:stocks_salesreport_changelist')
@@ -5210,7 +5223,7 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
         from django.db.models import Prefetch
 
         cl = self.get_changelist_instance(request)
-        qs = cl.get_queryset(request).order_by('name').prefetch_related(
+        qs = self._totals_queryset(request, cl.get_queryset(request)).order_by('name').prefetch_related(
             Prefetch('barcodes', queryset=ProductBarcode.objects.order_by('id'))
         )
 
@@ -5243,7 +5256,7 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
 
         headers = [
             'บาร์โค้ดสินค้า', 'ชื่อสินค้า', 'เลขที่ SO', 'วันที่สั่งซื้อ', 'สถานะ SO', 'ลูกค้า',
-            'จำนวน', 'หน่วย', 'ราคาต่อหน่วย', 'มูลค่าก่อน VAT', 'VAT (%)', 'มูลค่า VAT', 'ยอดรวมหลัง VAT',
+            'จำนวน', 'หน่วย', 'ราคาต่อหน่วย', 'มูลค่าก่อน VAT', 'VAT (%)', 'มูลค่า VAT', 'ยอดรวมหลัง VAT', 'ค้างส่ง',
         ]
         header_row_idx = ws.max_row + 1
         ws.append(headers)
@@ -5283,12 +5296,14 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
                     float(row['vat_percent']),
                     float(row['vat_amount']),
                     float(row['value_after_vat']),
+                    float(row['pending']),
                 ])
                 detail_row_idx = ws.max_row
                 ws.cell(row=detail_row_idx, column=4).number_format = 'DD/MM/YYYY'
                 ws.row_dimensions[detail_row_idx].outlineLevel = 1
                 ws.row_dimensions[detail_row_idx].hidden = True
 
+            total_pending = sum((r['pending'] for r in rows), Decimal('0'))
             total_qty = sum((r['qty'] for r in rows), Decimal('0'))
             total_before = sum((r['value_before_vat'] for r in rows), Decimal('0'))
             total_vat = sum((r['vat_amount'] for r in rows), Decimal('0'))
@@ -5297,6 +5312,7 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
             ws.append([
                 None, None, None, None, None, 'ยอดรวม',
                 float(total_qty), None, None, float(total_before), None, float(total_vat), float(total_after),
+                float(total_pending),
             ])
             for col_idx in range(1, len(headers) + 1):
                 cell = ws.cell(row=subtotal_row_idx, column=col_idx)
@@ -5351,21 +5367,25 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
 
         # ดึงผลรวมจากตัวแปรที่เราคำนวณไว้ใน get_queryset (total_qty และ total_sales_val)
         # เนื่องจากเป็นค่าจากการ annotate เราสามารถใช้ Sum() ซ้ำใน aggregate ได้เลยครับ
-        totals = queryset.aggregate(
+        # รวมจากชุดสินค้าที่ไม่ซ้ำ (ค้นหาที่ join ตารางอื่นทำให้แถวซ้ำ)
+        totals = self._totals_queryset(request, queryset).aggregate(
             sum_qty=Sum('total_qty'),
-            sum_revenue=Sum('total_sales_val')
+            sum_revenue=Sum('total_sales_val'),
+            sum_pending=Sum('total_pending'),
         )
 
         total_qty = totals['sum_qty'] or 0
         total_revenue = totals['sum_revenue'] or 0
-        count = queryset.count()
+        total_pending = totals['sum_pending'] or 0
+        count = queryset.values('pk').distinct().count()
 
         # แสดงผลเป็นแถบข้อความสีฟ้า (Info Message) ด้านบน
         self.message_user(
             request,
             f"📊 สรุปข้อมูลที่เลือก ({count} รายการ): "
             f"ส่งสำเร็จรวม: {total_qty:,.0f} ชิ้น | "
-            f"ยอดขายรวม: ฿{total_revenue:,.2f}",
+            f"ยอดขายรวม: ฿{total_revenue:,.2f} | "
+            f"ค้างส่ง: {total_pending:,.0f} ชิ้น",
             messages.INFO
         )
 
@@ -5373,7 +5393,7 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
     def _build_period_q(prefix, period, now):
         """สร้าง Q filter (สถานะ + ช่วงวันที่) โดยพารามิเตอร์ prefix คือ path ไปหา SalesOrder
         เช่น 'sales_order__' (เริ่มจาก SalesItem) หรือ 'sales_items__sales_order__' (เริ่มจาก Product)"""
-        q = Q(**{f"{prefix}status__in": ['Shipped', 'Completed', 'ปิดงาน/ครบถ้วน', 'ส่งบางส่วน']})
+        q = Q(**{f"{prefix}status__in": ['Confirmed', 'Shipped', 'Completed', 'ยืนยัน', 'ปิดงาน/ครบถ้วน', 'ส่งบางส่วน']})
         if period == '1year':
             q &= Q(**{f"{prefix}order_date__year": now.year})
         elif period == '4months':
@@ -5415,28 +5435,43 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
             F('quantity') * Coalesce(F('sales_item__barcode_obj__conversion_factor'), Value(1)),
             output_field=DecimalField())).values('t')[:1]
         cn_val = cn_base.annotate(t=Sum('amount')).values('t')[:1]
+        # จำนวนค้างส่ง = สั่งแล้วยังส่งไม่ครบ ของ SO ที่ยังเปิดอยู่ (ยืนยัน/ส่งบางส่วน) ยอด ณ ปัจจุบัน
+        # ไม่ขึ้นกับช่วงเวลา/วันส่งที่กรอง (ใบค้างส่งข้ามปีต้องยังเห็น) แต่ตามตัวกรองลูกค้า
+        pending = (SalesItem.objects.filter(product=OuterRef('pk'))
+                   .filter(self._open_so_q(request, 'sales_order'))
+                   .order_by().values('product')
+                   .annotate(t=Sum(Greatest(F('quantity_ordered') - F('quantity_shipped'), Value(0))))
+                   .values('t')[:1])
         return qs.annotate(
             # 🎯 ยอด "ส่งสำเร็จ" (quantity_shipped) เท่านั้น
             _gross_qty=Coalesce(Subquery(gross_qty), Value(0), output_field=DecimalField()),
             _gross_val=Coalesce(Subquery(gross_val), Value(0), output_field=DecimalField()),
             _cn_qty=Coalesce(Subquery(cn_qty), Value(0), output_field=DecimalField()),
             _cn_val=Coalesce(Subquery(cn_val), Value(0), output_field=DecimalField()),
+            total_pending=Coalesce(Subquery(pending), Value(0), output_field=DecimalField()),
         ).annotate(
             # ยอดสุทธิหลังหักใบลดหนี้
             total_qty=ExpressionWrapper(F('_gross_qty') - F('_cn_qty'), output_field=DecimalField()),
             total_sales_val=ExpressionWrapper(F('_gross_val') - F('_cn_val'), output_field=DecimalField()),
-        ).filter(_gross_qty__gt=0) # 🎯 โชว์เฉพาะสินค้าที่ "ส่งสำเร็จ" จริงๆ ในรอบนั้นๆ
+        ).filter(Q(_gross_qty__gt=0) | Q(total_pending__gt=0))  # 🎯 สินค้าที่ส่งสำเร็จในรอบนั้น หรือยังค้างส่งอยู่
 
     _SHIPPED_PARAM = 'sales_items__sales_order__delivery_logs__shipped_date'
     _CUSTOMER_PARAM = 'sales_items__sales_order__customer__id__exact'
 
+    OPEN_SO_STATUSES = ('Confirmed', 'Shipped', 'ยืนยัน', 'ส่งบางส่วน')  # SO ที่ยังต้องส่งของต่อ (นับค้างส่ง)
+
+    def _customer_q(self, request, so_path):
+        customers = [v for raw in request.GET.getlist(self._CUSTOMER_PARAM) for v in raw.split(',') if v.strip()]
+        return Q(**{f"{so_path}__customer_id__in": customers}) if customers else Q()
+
+    def _open_so_q(self, request, so_path):
+        """เงื่อนไขรายการขายที่นับเป็นค้างส่ง: SO ยังเปิดอยู่ + ลูกค้าตามตัวกรอง"""
+        return Q(**{f"{so_path}__status__in": self.OPEN_SO_STATUSES}) & self._customer_q(request, so_path)
+
     def _list_filter_q(self, request, so_path):
         """ตัวกรองลูกค้า/วันส่งของหน้า list -> เงื่อนไขของรายการขาย (so_path = path ไปหา SalesOrder)"""
         from unfold.utils import parse_datetime_str
-        q = Q()
-        customers = [v for raw in request.GET.getlist(self._CUSTOMER_PARAM) for v in raw.split(',') if v.strip()]
-        if customers:
-            q &= Q(**{f"{so_path}__customer_id__in": customers})
+        q = self._customer_q(request, so_path)
         shipped = {}
         for side, lookup in (('from', 'gte'), ('to', 'lte')):
             date = request.GET.get(f"{self._SHIPPED_PARAM}_{side}_0")
@@ -5463,10 +5498,12 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
             qty=Sum('total_qty'),
             rev=Sum('total_sales_val'),
             buy=Sum(F('buy_price') * F('total_qty'), output_field=DecimalField()),
+            pending=Sum('total_pending'),
         )
         qty, rev, buy = agg['qty'] or 0, agg['rev'] or 0, agg['buy'] or 0
         totals = {'get_total_qty': qty, 'get_total_revenue': rev,
-                  'get_total_cost_buy': buy, 'get_profit_margin': rev - buy}
+                  'get_total_cost_buy': buy, 'get_profit_margin': rev - buy,
+                  'get_total_pending': agg['pending'] or 0}
         return {f: v for f, v in totals.items() if f in fields}
     
     # 🎯 หัวใจหลัก: คำนวณยอดรวมของทั้งหน้า (Grand Total)
@@ -5481,7 +5518,8 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
             aggregates = qs.aggregate(
                 g_qty=Sum('total_qty'),
                 g_rev=Sum('total_sales_val'),
-                g_buy_cost=Sum(F('buy_price') * F('total_qty'), output_field=DecimalField())
+                g_buy_cost=Sum(F('buy_price') * F('total_qty'), output_field=DecimalField()),
+                g_pending=Sum('total_pending'),
             )
 
             g_rev = aggregates['g_rev'] or 0
@@ -5492,7 +5530,8 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
                 "qty": "{:,.0f}".format(aggregates['g_qty'] or 0),
                 "rev": "{:,.2f}".format(g_rev),
                 "buy": "{:,.2f}".format(g_buy_cost),
-                "profit": "{:,.2f}".format(g_profit)
+                "profit": "{:,.2f}".format(g_profit),
+                "pending": "{:,.0f}".format(aggregates['g_pending'] or 0),
             }
             
             # ✅ ใช้ปีกกาคู่ {{ }} สำหรับส่วนที่เป็น JavaScript แท้ๆ
@@ -5511,6 +5550,7 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
                             const tfoot = document.createElement('tfoot');
                             tfoot.innerHTML = `
                                 <tr style="font-weight: bold; background: #f8f9fa; border-top: 2px solid #dee2e6;">
+                                    <td></td>
                                     <td style="color: #333;">ยอดรวมทั้งหมด (TOTAL)</td>
                                     <td>${{data.qty}}</td>
                                     <td>${{data.rev}}</td>
@@ -5518,6 +5558,7 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
                                     <td style="color: ${{parseFloat(data.profit.replace(/,/g, '')) >= 0 ? '#28a745' : '#dc3545'}}">
                                         ${{data.profit}}
                                     </td>
+                                    <td>${{data.pending}}</td>
                                 </tr>
                             `;
                             table.appendChild(tfoot);
@@ -5559,6 +5600,9 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
         color = "#28a745" if profit > 0 else "#dc3545"
         profit_display = "{:,.2f}".format(profit)
         return format_html('<b style="color: {};">{}</b>', color, profit_display)
+
+    @admin.display(description="จำนวนค้างส่ง", ordering='total_pending')
+    def get_total_pending(self, obj): return f"{obj.total_pending or 0:,.0f} {obj.unit}"
 
     class Media:
         js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน

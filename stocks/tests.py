@@ -115,3 +115,22 @@ class BOMSelfReferenceCostTests(TestCase):
         self.assertEqual(product.buy_price, 0)
         self.assertEqual(product.sale_price, 0)
         self.assertEqual(product.cost_source, 'supplier')
+
+
+class ConfirmDraftSalesOrderTests(TestCase):
+    """SO ร่าง -> ยืนยัน อัตโนมัติตั้งแต่วันรุ่งขึ้นของวันที่ใบ (ไม่แตะใบวันนี้/สถานะอื่น)"""
+
+    def test_confirms_only_drafts_before_today(self):
+        from . import models
+        customer = Customer.objects.create(company_name='C', contact_person='P', address='A', phone='0')
+        today = datetime.date(2026, 10, 8)
+        old_draft = SalesOrder.objects.create(customer=customer, order_date=today - datetime.timedelta(days=1))
+        new_draft = SalesOrder.objects.create(customer=customer, order_date=today)
+        cancelled = SalesOrder.objects.create(customer=customer, order_date=today - datetime.timedelta(days=5))
+        SalesOrder.objects.filter(pk=cancelled.pk).update(status='Cancelled')
+        models._drafts_confirmed_on = None
+        self.assertEqual(models.confirm_draft_sales_orders(today), 1)
+        statuses = dict(SalesOrder.objects.values_list('pk', 'status'))
+        self.assertEqual(statuses[old_draft.pk], 'Confirmed')
+        self.assertEqual(statuses[new_draft.pk], 'Draft')
+        self.assertEqual(statuses[cancelled.pk], 'Cancelled')

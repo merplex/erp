@@ -41,6 +41,7 @@
                 <th class="sod-num">VAT (%)</th>
                 <th class="sod-num">มูลค่า VAT</th>
                 <th class="sod-num">ยอดรวมหลัง VAT</th>
+                <th class="sod-num">ค้างส่ง</th>
             </tr>
         </thead>
         <tbody>
@@ -56,9 +57,10 @@
                 <td class="sod-num">{{ row.vat_percent|floatformat:2 }}</td>
                 <td class="sod-num">{{ row.vat_amount|floatformat:2 }}</td>
                 <td class="sod-num">{{ row.value_after_vat|floatformat:2 }}</td>
+                <td class="sod-num">{{ row.pending|floatformat:0 }} {{ object.unit }}</td>
             </tr>
             {% empty %}
-            <tr><td colspan="10" style="text-align:center; color:#94a3b8; padding:24px;">ไม่มียอดขายของสินค้านี้ในช่วงที่กรอง</td></tr>
+            <tr><td colspan="11" style="text-align:center; color:#94a3b8; padding:24px;">ไม่มียอดขายหรือยอดค้างส่งของสินค้านี้ในช่วงที่กรอง</td></tr>
             {% endfor %}
         </tbody>
         {% if rows %}
@@ -71,6 +73,7 @@
                 <td></td>
                 <td class="sod-num">{{ totals.vat_amount|floatformat:2 }}</td>
                 <td class="sod-num">{{ totals.value_after_vat|floatformat:2 }}</td>
+                <td class="sod-num">{{ totals.pending|floatformat:0 }} {{ object.unit }}</td>
             </tr>
         </tfoot>
         {% endif %}

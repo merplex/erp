@@ -4019,6 +4019,22 @@ def factoring_receivable_summary(account, today=None):
 _factored_refreshed_on = None
 
 
+_drafts_confirmed_on = None
+
+
+def confirm_draft_sales_orders(today=None):
+    """SO สถานะ "ร่าง" ที่เลยวันเปิดใบมาแล้ว (ตั้งแต่วันรุ่งขึ้นของวันที่ใบ) -> "ยืนยัน" อัตโนมัติ
+    เรียกจาก middleware (ไม่มี cron) — วันละครั้งต่อ process / ใช้ update() ตรงๆ เปลี่ยนแค่สถานะ
+    (ไม่ผ่าน save() ที่ออกเลขที่ใบ/คำนวณอื่น)"""
+    global _drafts_confirmed_on
+    today = today or timezone.localdate()
+    if _drafts_confirmed_on == today:
+        return 0
+    changed = SalesOrder.objects.filter(status='Draft', order_date__lt=today).update(status='Confirmed')
+    _drafts_confirmed_on = today
+    return changed
+
+
 def refresh_factored_payment_status(today=None):
     """SO สถานะ "ขายแฟคตอริ่งแล้ว" ที่ส่วนที่เหลือถึงวันรับเงินแล้ว -> คำนวณใหม่ (= รับเงินครบแล้ว)
     เรียกจาก middleware (ไม่มี cron) — วันละครั้งต่อ process"""
