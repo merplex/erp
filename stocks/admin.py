@@ -75,6 +75,14 @@ from unfold.utils import parse_datetime_str
 from unfold.decorators import action as unfold_action
 from unfold.widgets import UnfoldAdminRadioSelectWidget, INPUT_CLASSES, SELECT_CLASSES
 
+def cost_str(value):
+    """ต้นทุน (ทศนิยม 4 ตำแหน่ง): แสดงอย่างน้อย 2 ตำแหน่ง ตัดศูนย์ท้ายเกินนั้น เช่น 12.50 / 12.3456 / 1,234.567"""
+    text = f"{Decimal(value or 0):,.4f}"
+    whole, frac = text.split('.')
+    frac = frac.rstrip('0')
+    return f"{whole}.{frac.ljust(2, '0')}"
+
+
 # ช่องในหน้ายืนยันของ action (TemplateResponse เอง ไม่ผ่าน ModelAdmin) — ให้เป็นกล่องชัดๆ แบบช่องของ Unfold
 def box_select(width):
     return forms.Select(attrs={'class': ' '.join(SELECT_CLASSES), 'style': f'max-width:{width}px;'})
@@ -1661,7 +1669,7 @@ class ProductAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelMixin, 
 
     @admin.display(description='ราคาทุน (ใช้จริง)', ordering='buy_price')
     def get_buy_price_display(self, obj):
-        price_str = f"{obj.buy_price:,.2f}"
+        price_str = cost_str(obj.buy_price)
         if obj.cost_source == 'bom':
             return format_html('{} <span style="color:#888;font-size:11px;">(จาก BOM)</span>', price_str)
         return price_str
@@ -1741,10 +1749,10 @@ class ProductAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelMixin, 
 
         auto_filled = []
         if 'auto_cost' in changes:
-            auto_filled.append(f"ต้นทุนอัตโนมัติ = {changes['auto_cost']:,.2f}")
+            auto_filled.append(f"ต้นทุนอัตโนมัติ = {cost_str(changes['auto_cost'])}")
         if 'buy_price' in changes:
             src = self.COST_SOURCE_LABELS.get(obj.cost_source, 'อัตโนมัติ')
-            auto_filled.append(f"ต้นทุนที่ใช้จริง ({src}) = {changes['buy_price']:,.2f}")
+            auto_filled.append(f"ต้นทุนที่ใช้จริง ({src}) = {cost_str(changes['buy_price'])}")
         if 'sale_price' in changes:
             auto_filled.append(f"ราคาขาย = {changes['sale_price']:,.2f}")
 

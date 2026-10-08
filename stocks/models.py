@@ -287,9 +287,10 @@ class Product(models.Model):
     tags = models.ManyToManyField(ProductTag, blank=True, related_name='products', verbose_name="แท็ก")
     suppliers = models.ManyToManyField(Supplier, through='ProductSupplier', related_name='products')
     has_bom = models.BooleanField(default=False, verbose_name="มีBOM")
-    buy_price = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name="ราคาทุน (ใช้จริง)")
-    auto_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0, blank=True, verbose_name="ต้นทุนอัตโนมัติ (Supplier+15%)")
-    manual_buy_price = models.DecimalField(max_digits=10, decimal_places=2, default=0, blank=True, verbose_name="ต้นทุน (กำหนดเอง)")
+    # ต้นทุนเก็บทศนิยม 4 ตำแหน่ง (ราคาขายยัง 2 ตำแหน่ง)
+    buy_price = models.DecimalField(max_digits=14, decimal_places=4, default=0, verbose_name="ราคาทุน (ใช้จริง)")
+    auto_cost = models.DecimalField(max_digits=14, decimal_places=4, default=0, blank=True, verbose_name="ต้นทุนอัตโนมัติ (Supplier+15%)")
+    manual_buy_price = models.DecimalField(max_digits=14, decimal_places=4, default=0, blank=True, verbose_name="ต้นทุน (กำหนดเอง)")
     COST_SOURCE_CHOICES = [
         ('manual', 'กำหนดเอง'),
         ('bom', 'BOM'),
@@ -315,7 +316,7 @@ class Product(models.Model):
             self.manual_buy_price = Decimal('0')
         if self.auto_cost is None:
             self.auto_cost = Decimal('0')
-        if not self.sale_price: self.sale_price = self.buy_price
+        if not self.sale_price: self.sale_price = round_money(self.buy_price)
         super().save(*args, **kwargs)
     def __str__(self): return self.name
 
@@ -344,7 +345,7 @@ class Product(models.Model):
             if not boms:
                 return Decimal('0')
             total_sum = sum((bom.total_cost for bom in boms), Decimal('0'))
-            return (Decimal(total_sum) / len(boms)).quantize(Decimal('0.01'))
+            return (Decimal(total_sum) / len(boms)).quantize(Decimal('0.0001'))
         except Exception:
             return Decimal('0')
 
@@ -402,7 +403,7 @@ class Product(models.Model):
                                                 output_field=models.DecimalField())
         ).order_by('-_price_thb').first()
         new_auto_cost = (
-            (best_supplier.price_thb * Decimal('1.15')).quantize(Decimal('0.01'))
+            (best_supplier.price_thb * Decimal('1.15')).quantize(Decimal('0.0001'))
             if best_supplier else Decimal('0')
         )
 
@@ -637,7 +638,7 @@ class ProductSupplier(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='product_suppliers')
     supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE, verbose_name="ผู้จำหน่าย")
     supplier_sku = models.CharField(max_length=100, blank=True, verbose_name="รหัสสินค้าฝั่ง Supplier")
-    latest_buy_price = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name="ทุนล่าสุดจากเจ้านี้")
+    latest_buy_price = models.DecimalField(max_digits=14, decimal_places=4, default=0, verbose_name="ทุนล่าสุดจากเจ้านี้")
     currency = models.CharField(max_length=3, choices=CURRENCY_CHOICES, default='THB', verbose_name="สกุลเงิน")
     exchange_rate = _exchange_rate_field()
     class Meta: unique_together = ('product', 'supplier')
