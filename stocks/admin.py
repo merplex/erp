@@ -5071,7 +5071,6 @@ class StockAdjustmentAdmin(UnfoldModelAdmin):
 
 @admin.register(SalesReport)
 class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
-    column_totals_auto_limit = 0  # คอลัมน์คำนวณหนักต่อแถว -> ให้กดคำนวณยอดรวมเอง
     list_display = (
         'get_name_link', 'get_total_qty', 'get_total_revenue',
         'get_total_cost_buy', 'get_profit_margin'
@@ -5392,32 +5391,32 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
         period = request.GET.get('period', '1year')
         now = timezone.now()
 
-        # 2. สร้างเงื่อนไขการกรอง (เน้นที่ยอดส่งสำเร็จเท่านั้น) — path เริ่มจาก Product ผ่าน sales_items
-        date_filter = self._build_period_q('sales_items__sales_order__', period, now)
-
-        # 3. รวมยอดขาย/ยอดขายรวมเป็น query เดียว (JOIN + conditional aggregate)
-        #    ทั้ง 2 ตัวนี้ join ผ่าน path เดียวกันคือ sales_items ORM จะ reuse join เดียวกันให้อัตโนมัติ
-        # ⚠️ ตัด so_numbers (StringAgg) ออก — ไม่โชว์คอลัมน์ SO ในหน้า list แล้ว (ดูได้จากหน้ารายละเอียด
-        # ที่คลิกเข้าไปแทน) ตัดออกช่วยลดโหลด query ด้วยเพราะ StringAgg ระดับนี้ค่อนข้างหนัก
+        # 2. ยอดต่อสินค้าคิดจาก subquery ของ SalesItem/CreditNoteItem (ไม่ join จากตัวสินค้า)
+        #    ⚠️ เดิม Sum ผ่าน join sales_items ตรงๆ — พอค้นหา (join บาร์โค้ด) หรือกรองลูกค้า/วันส่ง (join เพิ่ม)
+        #    แถวถูกคูณซ้ำ ยอดต่อสินค้าเลยเบิ้ล (เช่น บาร์โค้ด 2 ตัว x ลูกค้า 2 ราย = x4) และตัวกรองลูกค้า/วันส่ง
+        #    ไม่มีผลกับยอด — ตอนนี้ใช้เงื่อนไขช่วงเวลา + ลูกค้า + วันส่งที่กรองกับรายการขายโดยตรง
+        item_q = self._build_period_q('sales_order__', period, now) & self._list_filter_q(request, 'sales_order')
+        items = (SalesItem.objects.filter(product=OuterRef('pk')).filter(item_q)
+                 .order_by().values('product'))
+        gross_qty = items.annotate(t=Sum('quantity_shipped')).values('t')[:1]
+        # sale_price = ราคาต่อหน่วยบาร์โค้ด แต่ quantity_shipped สะสมเป็นชิ้นเสมอ
+        # (ดู SalesDeliveryLog.save) จึงต้องหารด้วย conversion_factor ก่อนคูณราคา
+        gross_val = items.annotate(t=Sum(
+            F('sale_price') * F('quantity_shipped') / Coalesce(F('barcode_obj__conversion_factor'), Value(1)),
+            output_field=DecimalField())).values('t')[:1]
         cn_base = (CreditNoteItem.objects
                    .filter(sales_item__product=OuterRef('pk'))
                    .filter(self._build_period_q('sales_item__sales_order__', period, now))
+                   .filter(self._list_filter_q(request, 'sales_item__sales_order'))
                    .order_by().values('sales_item__product'))
         cn_qty = cn_base.annotate(t=Sum(
             F('quantity') * Coalesce(F('sales_item__barcode_obj__conversion_factor'), Value(1)),
             output_field=DecimalField())).values('t')[:1]
         cn_val = cn_base.annotate(t=Sum('amount')).values('t')[:1]
         return qs.annotate(
-            # 🎯 ยอด "ส่งสำเร็จ" (quantity_shipped) เท่านั้น — ดึงยอด 700 มาโชว์ (ไม่ใช่ 2,100 และไม่เบิ้ลเป็น 6,300)
-            _gross_qty=Sum('sales_items__quantity_shipped', filter=date_filter),
-            # sale_price = ราคาต่อหน่วยบาร์โค้ด แต่ quantity_shipped สะสมเป็นชิ้นเสมอ
-            # (ดู SalesDeliveryLog.save) จึงต้องหารด้วย conversion_factor ก่อนคูณราคา
-            _gross_val=Sum(
-                F('sales_items__sale_price') * F('sales_items__quantity_shipped')
-                / Coalesce(F('sales_items__barcode_obj__conversion_factor'), Value(1)),
-                filter=date_filter,
-                output_field=DecimalField()
-            ),
+            # 🎯 ยอด "ส่งสำเร็จ" (quantity_shipped) เท่านั้น
+            _gross_qty=Coalesce(Subquery(gross_qty), Value(0), output_field=DecimalField()),
+            _gross_val=Coalesce(Subquery(gross_val), Value(0), output_field=DecimalField()),
             _cn_qty=Coalesce(Subquery(cn_qty), Value(0), output_field=DecimalField()),
             _cn_val=Coalesce(Subquery(cn_val), Value(0), output_field=DecimalField()),
         ).annotate(
@@ -5425,6 +5424,48 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
             total_qty=ExpressionWrapper(F('_gross_qty') - F('_cn_qty'), output_field=DecimalField()),
             total_sales_val=ExpressionWrapper(F('_gross_val') - F('_cn_val'), output_field=DecimalField()),
         ).filter(_gross_qty__gt=0) # 🎯 โชว์เฉพาะสินค้าที่ "ส่งสำเร็จ" จริงๆ ในรอบนั้นๆ
+
+    _SHIPPED_PARAM = 'sales_items__sales_order__delivery_logs__shipped_date'
+    _CUSTOMER_PARAM = 'sales_items__sales_order__customer__id__exact'
+
+    def _list_filter_q(self, request, so_path):
+        """ตัวกรองลูกค้า/วันส่งของหน้า list -> เงื่อนไขของรายการขาย (so_path = path ไปหา SalesOrder)"""
+        from unfold.utils import parse_datetime_str
+        q = Q()
+        customers = [v for raw in request.GET.getlist(self._CUSTOMER_PARAM) for v in raw.split(',') if v.strip()]
+        if customers:
+            q &= Q(**{f"{so_path}__customer_id__in": customers})
+        shipped = {}
+        for side, lookup in (('from', 'gte'), ('to', 'lte')):
+            date = request.GET.get(f"{self._SHIPPED_PARAM}_{side}_0")
+            time = request.GET.get(f"{self._SHIPPED_PARAM}_{side}_1")
+            if date and time:
+                value = parse_datetime_str(f"{date} {time}")
+                if value:
+                    if timezone.is_naive(value):
+                        value = timezone.make_aware(value)
+                    shipped[f"shipped_date__{lookup}"] = value
+        if shipped:
+            # Exists แทน join delivery_logs (join จะทำให้รายการขายซ้ำตามจำนวนรอบส่ง ยอดเบิ้ล)
+            q &= Exists(SalesDeliveryLog.objects.filter(sales_order=OuterRef(so_path), **shipped))
+        return q
+
+    def _totals_queryset(self, request, queryset):
+        """ชุดสินค้าตามตัวกรอง (ไม่ซ้ำ) พร้อมยอดต่อสินค้า — ใช้รวมยอดทั้งหมด (แถว TOTAL / กล่องสรุปยอด)
+        ตัวกรอง/ค้นหาที่ join ตารางอื่นทำให้แถวสินค้าซ้ำ จึงรวมจากชุด pk ที่ไม่ซ้ำแทน"""
+        return self.get_queryset(request).filter(pk__in=queryset.values('pk'))
+
+    def fast_column_totals(self, queryset, fields):
+        request = self._list_request
+        agg = self._totals_queryset(request, queryset).aggregate(
+            qty=Sum('total_qty'),
+            rev=Sum('total_sales_val'),
+            buy=Sum(F('buy_price') * F('total_qty'), output_field=DecimalField()),
+        )
+        qty, rev, buy = agg['qty'] or 0, agg['rev'] or 0, agg['buy'] or 0
+        totals = {'get_total_qty': qty, 'get_total_revenue': rev,
+                  'get_total_cost_buy': buy, 'get_profit_margin': rev - buy}
+        return {f: v for f, v in totals.items() if f in fields}
     
     # 🎯 หัวใจหลัก: คำนวณยอดรวมของทั้งหน้า (Grand Total)
     def changelist_view(self, request, extra_context=None):
@@ -5433,8 +5474,8 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
         try:
             # ดึงข้อมูลมาคำนวณ
             cl = response.context_data['cl']
-            qs = cl.get_queryset(request)
-            
+            qs = self._totals_queryset(request, cl.get_queryset(request))
+
             aggregates = qs.aggregate(
                 g_qty=Sum('total_qty'),
                 g_rev=Sum('total_sales_val'),
@@ -5518,8 +5559,7 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
         return format_html('<b style="color: {};">{}</b>', color, profit_display)
 
     class Media:
-        # ยอดรวมตามตัวกรองจาก server ไม่ตรงกับหน้านี้ -> กล่องสรุปรวมเฉพาะแถวที่ติ๊ก (ติ๊กทั้งหน้าก็เหมือนกัน)
-        js = ('js/admin_sum_selected_page_only.js', 'js/admin_sum_selected.js')
+        js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
 
 # 2. ตั้งค่า Admin ตัวเดียวจบ
 # A5: SO มีรับเงินจริงแล้ว (ยอดบวก ไม่นับรายการหัก DC/Rebate)
