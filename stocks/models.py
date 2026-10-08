@@ -416,7 +416,9 @@ class Product(models.Model):
             new_source = 'supplier'
 
         new_sale = self.sale_price
-        if new_buy > 0:
+        # เคยคิดราคาจาก BOM แต่ตอนนี้ไม่มีต้นทุนเลย (เช่น สูตรเดียวที่มีคือสูตรที่ใช้ตัวเองเป็นวัตถุดิบ ซึ่งถูกข้ามแล้ว)
+        # -> ราคาขายเดิมคิดจากต้นทุน BOM ที่ใช้ไม่ได้ ต้องคิดใหม่ด้วย ไม่งั้นราคาขายที่เพี้ยนจะค้างอยู่
+        if new_buy > 0 or self.cost_source == 'bom':
             min_sale = (new_buy * Decimal('1.15')).quantize(Decimal('0.01'))
             lowest_contract = CustomerProductContract.objects.filter(
                 product=self, contract_price__gt=0

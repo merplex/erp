@@ -98,3 +98,20 @@ class BOMSelfReferenceCostTests(TestCase):
         self.recalc_times(3)
         self.assertEqual(self.product.buy_price, self.Decimal('20.00'))
         self.assertEqual(self.product.cost_source, 'bom')
+
+    def test_inflated_price_resets_when_no_other_cost(self):
+        # ไม่มีราคา Supplier และสูตรเดียวที่มีคือสูตรที่ใช้ตัวเอง (ห่วงตากผ้า 2.1 = ตัวเอง x1 + ลาเบล)
+        from .models import Product
+        product = Product.objects.create(name='H', has_bom=True, sale_price=0)
+        label = Product.objects.create(name='L', buy_price=self.Decimal('0.50'), sale_price=0)
+        bom = self.BOM.objects.create(product=product, name='H1')
+        self.BOMIngredient.objects.create(bom=bom, material=product, quantity=1)
+        self.BOMIngredient.objects.create(bom=bom, material=label, quantity=1)
+        Product.objects.filter(pk=product.pk).update(
+            buy_price=self.Decimal('9999999'), sale_price=self.Decimal('9999999'), cost_source='bom')
+        product.refresh_from_db()
+        product.recalc_cost_and_price()
+        product.refresh_from_db()
+        self.assertEqual(product.buy_price, 0)
+        self.assertEqual(product.sale_price, 0)
+        self.assertEqual(product.cost_source, 'supplier')
