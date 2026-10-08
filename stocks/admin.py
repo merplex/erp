@@ -5569,7 +5569,7 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
     นับเฉพาะ PO ที่ไม่ใช่ร่าง/ยกเลิก, ช่วงเวลา = วันที่สั่งซื้อของ PO (ไม่กรองวันที่ = ปีนี้)
     PurchaseItem.quantity_ordered เป็นชิ้น และ unit_price เป็นราคาต่อชิ้นเสมอ -> มูลค่า = จำนวน x ราคา"""
     list_display = (
-        'get_name_link', 'get_total_qty', 'get_total_received', 'get_total_purchase', 'get_avg_price'
+        'get_name_link', 'get_total_qty', 'get_total_purchase', 'get_stock', 'get_monthly_avg'
     )
     list_filter = (
         ('purchaseitem__purchase_order__order_date', DjangoDateRangeFilter),
@@ -5602,11 +5602,7 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
         """เงื่อนไขของ PO (po_path = path ไปหา PurchaseOrder): สถานะ + ช่วงวันที่สั่งซื้อ + ผู้จำหน่ายตามตัวกรองหน้า list
         ไม่กรองวันที่ = PO ปีนี้ (เหมือนค่าเริ่มต้นของ F4)"""
         q = ~Q(**{f"{po_path}__status__in": self.EXCLUDED_STATUSES})
-        date_from = request.GET.get(f"{self._DATE_PARAM}_from")
-        date_to = request.GET.get(f"{self._DATE_PARAM}_to")
-        from unfold.utils import parse_date_str  # ตัวเดียวกับที่ตัวกรองวันที่ของ unfold ใช้ อ่านรูปแบบวันที่ตรงกัน
-        parsed = {key: parse_date_str(raw) for key, raw in (('gte', date_from), ('lte', date_to)) if raw}
-        parsed = {key: value for key, value in parsed.items() if value}
+        parsed = self._date_filter(request)
         if parsed:
             q &= Q(**{f"{po_path}__order_date__{k}": v for k, v in parsed.items()})
         else:
@@ -5616,9 +5612,39 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
             q &= Q(**{f"{po_path}__supplier_id__in": suppliers})
         return q
 
+    def _date_filter(self, request):
+        """ช่วงวันที่สั่งซื้อจากตัวกรอง -> {'gte': date, 'lte': date} (เฉพาะฝั่งที่กรอก)"""
+        from unfold.utils import parse_date_str  # ตัวเดียวกับที่ตัวกรองวันที่ของ unfold ใช้ อ่านรูปแบบวันที่ตรงกัน
+        parsed = {}
+        for key, side in (('gte', 'from'), ('lte', 'to')):
+            raw = request.GET.get(f"{self._DATE_PARAM}_{side}")
+            value = parse_date_str(raw) if raw else None
+            if value:
+                parsed[key] = value
+        return parsed
+
+    def _month_count(self, request):
+        """จำนวนเดือนของช่วงที่กรอง (นับเดือนปฏิทิน รวมเดือนแรก-เดือนสุดท้าย) ใช้หาร "ยอดซื้อต่อเดือน (เฉลี่ย)"
+        ไม่กรองวันที่ = ม.ค. ปีนี้ ถึงเดือนปัจจุบัน / กรองแค่วันเริ่ม = ถึงเดือนปัจจุบัน /
+        กรองแค่วันสิ้นสุด = ตั้งแต่ PO ใบแรกในระบบ / วันสิ้นสุดเลยวันนี้ไป นับถึงเดือนปัจจุบัน (เดือนที่ยังไม่ถึงไม่นับ)"""
+        today = timezone.localdate()
+        parsed = self._date_filter(request)
+        if not parsed:
+            start, end = today.replace(month=1, day=1), today
+        else:
+            end = parsed.get('lte') or today
+            start = parsed.get('gte')
+            if start is None:
+                start = (PurchaseOrder.objects.exclude(status__in=self.EXCLUDED_STATUSES)
+                         .order_by('order_date').values_list('order_date', flat=True).first()) or end
+            if start <= today < end:
+                end = today
+        return max((end.year - start.year) * 12 + end.month - start.month + 1, 1)
+
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         # ⚠️ เก็บ request ไว้ใช้ใน get_name_link / fast_column_totals (เหมือน F4)
+        self._months = self._month_count(request)
         self._list_request = request
 
         # ยอดต่อสินค้าคิดจาก subquery ของ PurchaseItem (ไม่ join จากตัวสินค้า กันยอดเบิ้ลตอนค้นหา/กรอง)
@@ -5626,12 +5652,10 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
                  .filter(self._po_filter_q(request, 'purchase_order'))
                  .order_by().values('product'))
         qty = items.annotate(t=Sum('quantity_ordered')).values('t')[:1]
-        received = items.annotate(t=Sum('quantity_received')).values('t')[:1]
         value = items.annotate(t=Sum(F('quantity_ordered') * F('unit_price'),
                                      output_field=DecimalField())).values('t')[:1]
         return qs.annotate(
             total_qty=Coalesce(Subquery(qty), Value(0), output_field=DecimalField()),
-            total_received=Coalesce(Subquery(received), Value(0), output_field=DecimalField()),
             total_purchase_val=Coalesce(Subquery(value), Value(0), output_field=DecimalField()),
         ).filter(total_qty__gt=0)  # 🎯 โชว์เฉพาะสินค้าที่มียอดสั่งซื้อในช่วงนั้น
 
@@ -5641,13 +5665,16 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
 
     def _aggregate(self, request, queryset):
         agg = self._totals_queryset(request, queryset).aggregate(
-            qty=Sum('total_qty'), received=Sum('total_received'), val=Sum('total_purchase_val'))
-        return {k: v or Decimal('0') for k, v in agg.items()}
+            qty=Sum('total_qty'), val=Sum('total_purchase_val'), stock=Sum('stock_quantity'))
+        agg = {k: Decimal(v or 0) for k, v in agg.items()}
+        agg['months'] = self._month_count(request)
+        agg['monthly'] = agg['qty'] / agg['months']
+        return agg
 
     def fast_column_totals(self, queryset, fields):
         agg = self._aggregate(self._list_request, queryset)
-        totals = {'get_total_qty': agg['qty'], 'get_total_received': agg['received'],
-                  'get_total_purchase': agg['val']}
+        totals = {'get_total_qty': agg['qty'], 'get_total_purchase': agg['val'],
+                  'get_stock': agg['stock'], 'get_monthly_avg': agg['monthly']}
         return {f: v for f, v in totals.items() if f in fields}
 
     @admin.action(description="📝 สรุปยอดรวมรายการที่เลือก")
@@ -5658,8 +5685,9 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
             request,
             f"📊 สรุปข้อมูลที่เลือก ({count} รายการ): "
             f"สั่งซื้อรวม: {agg['qty']:,.0f} ชิ้น | "
-            f"รับแล้ว: {agg['received']:,.0f} ชิ้น | "
-            f"ยอดสั่งซื้อรวม: ฿{agg['val']:,.2f}",
+            f"ยอดสั่งซื้อรวม: ฿{agg['val']:,.2f} | "
+            f"สต็อกปัจจุบัน: {agg['stock']:,.0f} ชิ้น | "
+            f"ยอดซื้อต่อเดือน (เฉลี่ย {agg['months']} เดือน): {agg['monthly']:,.1f} ชิ้น",
             messages.INFO
         )
 
@@ -5676,16 +5704,16 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
     @admin.display(description="จำนวนสั่งซื้อ", ordering='total_qty')
     def get_total_qty(self, obj): return f"{obj.total_qty or 0:,.0f} {obj.unit}"
 
-    @admin.display(description="จำนวนรับแล้ว", ordering='total_received')
-    def get_total_received(self, obj): return f"{obj.total_received or 0:,.0f} {obj.unit}"
-
     @admin.display(description="ยอดสั่งซื้อรวม", ordering='total_purchase_val')
     def get_total_purchase(self, obj): return f"{obj.total_purchase_val or 0:,.2f}"
 
-    @admin.display(description="ราคาเฉลี่ย/หน่วย")
-    def get_avg_price(self, obj):
-        qty = obj.total_qty or 0
-        return f"{(obj.total_purchase_val or 0) / qty:,.2f}" if qty else "-"
+    @admin.display(description="สต็อกปัจจุบัน", ordering='stock_quantity')
+    def get_stock(self, obj): return f"{obj.stock_quantity or 0:,.0f} {obj.unit}"
+
+    @admin.display(description="ยอดซื้อต่อเดือน (เฉลี่ย)", ordering='total_qty')
+    def get_monthly_avg(self, obj):
+        months = getattr(self, '_months', None) or 1
+        return f"{Decimal(obj.total_qty or 0) / months:,.1f} {obj.unit}"
 
     def _po_rows_for_product(self, request, product):
         """ยอดสั่งซื้อของสินค้าตัวนี้ตามตัวกรอง แยกเป็นแถวต่อ PO (ใช้ทั้งหน้ารายละเอียดและ Export Excel)"""
@@ -5890,12 +5918,11 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
         try:
             cl = response.context_data['cl']
             agg = self._aggregate(request, cl.get_queryset(request))
-            avg = (agg['val'] / agg['qty']) if agg['qty'] else Decimal('0')
             summary = {
                 "qty": "{:,.0f}".format(agg['qty']),
-                "received": "{:,.0f}".format(agg['received']),
                 "val": "{:,.2f}".format(agg['val']),
-                "avg": "{:,.2f}".format(avg),
+                "stock": "{:,.0f}".format(agg['stock']),
+                "monthly": "{:,.1f}".format(agg['monthly']),
             }
             export_url = reverse('admin:stocks_purchasereport_export_detailed')
             request_qs = request.GET.urlencode()
@@ -5913,9 +5940,9 @@ class PurchaseReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmi
                                     <td></td>
                                     <td style="color: #333;">ยอดรวมทั้งหมด (TOTAL)</td>
                                     <td>${{data.qty}}</td>
-                                    <td>${{data.received}}</td>
                                     <td>${{data.val}}</td>
-                                    <td>${{data.avg}}</td>
+                                    <td>${{data.stock}}</td>
+                                    <td>${{data.monthly}}</td>
                                 </tr>
                             `;
                             table.appendChild(tfoot);
