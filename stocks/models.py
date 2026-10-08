@@ -338,13 +338,31 @@ class Product(models.Model):
         if not self.has_bom:
             return Decimal('0')
         try:
-            boms = list(self.bom_formulas.all())
+            # ข้ามสูตรที่มีตัวสินค้านี้เองเป็นวัตถุดิบ (เช่น สูตรแพ็ค 12 = สินค้าเดียวกัน 12 ชิ้น หรือวนผ่านสูตรวัตถุดิบ)
+            # เพราะต้นทุนสูตรคิดจาก buy_price ของตัวเอง -> คำนวณใหม่ทุกครั้งจะคูณเพิ่มไปเรื่อยๆ
+            boms = [bom for bom in self.bom_formulas.all() if not self._bom_uses_self(bom)]
             if not boms:
                 return Decimal('0')
             total_sum = sum((bom.total_cost for bom in boms), Decimal('0'))
             return (Decimal(total_sum) / len(boms)).quantize(Decimal('0.01'))
         except Exception:
             return Decimal('0')
+
+    def _bom_uses_self(self, bom):
+        """สูตรนี้ใช้สินค้านี้เองเป็นวัตถุดิบ ทั้งตรงๆ หรือผ่านสูตรของวัตถุดิบ (ไล่ทุกชั้น)"""
+        seen = set()
+        stack = [bom]
+        while stack:
+            current = stack.pop()
+            if current.pk in seen:
+                continue
+            seen.add(current.pk)
+            for ing in current.ingredients.select_related('material'):
+                if ing.material_id == self.pk:
+                    return True
+                if ing.material.has_bom:
+                    stack.extend(ing.material.bom_formulas.all())
+        return False
 
     @property
     def bom_count(self):

@@ -50,3 +50,51 @@ class DocumentNumberByDateTests(TestCase):
         so = self.make_so(datetime.date(2026, 9, 1))
         r = SalesReceipt.objects.create(sales_order=so, shipped_date=datetime.date(2026, 9, 21))
         self.assertEqual(r.receipt_number, 'IV-202609-0001')
+
+
+class BOMSelfReferenceCostTests(TestCase):
+    """สูตร BOM ที่มีตัวสินค้าเอง (ตรงๆ หรือผ่านสูตรวัตถุดิบ) เป็นวัตถุดิบ ห้ามทำให้ต้นทุนวนคูณเพิ่มทุกครั้งที่คำนวณใหม่"""
+
+    def setUp(self):
+        from decimal import Decimal
+        from .models import BOM, BOMIngredient, Product, ProductSupplier, Supplier
+        self.Decimal, self.BOM, self.BOMIngredient = Decimal, BOM, BOMIngredient
+        supplier = Supplier.objects.create(company_name='S', contact_person='P', address='A', phone='0')
+        self.product = Product.objects.create(name='X', has_bom=True, sale_price=0)
+        ProductSupplier.objects.create(product=self.product, supplier=supplier, latest_buy_price=Decimal('10'))
+        self.product.refresh_from_db()
+
+    def recalc_times(self, n):
+        for _ in range(n):
+            self.product.refresh_from_db()
+            self.product.recalc_cost_and_price()
+        self.product.refresh_from_db()
+
+    def test_pack_bom_of_itself_does_not_inflate_cost(self):
+        bom = self.BOM.objects.create(product=self.product, name='PACK12')
+        self.BOMIngredient.objects.create(bom=bom, material=self.product, quantity=12)
+        self.recalc_times(5)
+        self.assertEqual(self.product.buy_price, self.Decimal('11.50'))  # Supplier 10 +15%
+        self.assertEqual(self.product.cost_source, 'supplier')
+
+    def test_indirect_cycle_does_not_inflate_cost(self):
+        from .models import Product
+        other = Product.objects.create(name='Y', has_bom=True, sale_price=0)
+        bom_x = self.BOM.objects.create(product=self.product, name='BX')
+        self.BOMIngredient.objects.create(bom=bom_x, material=other, quantity=2)
+        bom_y = self.BOM.objects.create(product=other, name='BY')
+        self.BOMIngredient.objects.create(bom=bom_y, material=self.product, quantity=2)
+        for _ in range(5):
+            other.refresh_from_db()
+            other.recalc_cost_and_price()
+            self.recalc_times(1)
+        self.assertEqual(self.product.buy_price, self.Decimal('11.50'))
+
+    def test_normal_bom_still_used(self):
+        from .models import Product
+        raw = Product.objects.create(name='R', buy_price=self.Decimal('20'), sale_price=0)
+        bom = self.BOM.objects.create(product=self.product, name='B')
+        self.BOMIngredient.objects.create(bom=bom, material=raw, quantity=1)
+        self.recalc_times(3)
+        self.assertEqual(self.product.buy_price, self.Decimal('20.00'))
+        self.assertEqual(self.product.cost_source, 'bom')
