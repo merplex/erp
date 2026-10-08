@@ -5518,7 +5518,8 @@ class SalesReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
         return format_html('<b style="color: {};">{}</b>', color, profit_display)
 
     class Media:
-        js = ('js/admin_sum_selected.js',) # เรียกไฟล์ JS มาใช้งาน
+        # ยอดรวมตามตัวกรองจาก server ไม่ตรงกับหน้านี้ -> กล่องสรุปรวมเฉพาะแถวที่ติ๊ก (ติ๊กทั้งหน้าก็เหมือนกัน)
+        js = ('js/admin_sum_selected_page_only.js', 'js/admin_sum_selected.js')
 
 # 2. ตั้งค่า Admin ตัวเดียวจบ
 # A5: SO มีรับเงินจริงแล้ว (ยอดบวก ไม่นับรายการหัก DC/Rebate)

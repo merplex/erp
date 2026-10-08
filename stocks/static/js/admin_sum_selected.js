@@ -150,6 +150,15 @@ document.addEventListener('DOMContentLoaded', function() {
         const rows = Array.from(table.querySelectorAll('tbody tr')).filter(r => r.querySelector('.action-select'));
         const selected = rows.filter(r => r.classList.contains('selected')
                                           || (r.querySelector('.action-select') || {}).checked);
+        // หน้าที่รวมเฉพาะแถวที่ติ๊ก (admin_sum_selected_page_only.js): ไม่ได้ติ๊ก = ไม่แสดง, ติ๊กกี่แถว (รวมติ๊กทั้งหน้า) = รวมแถวนั้น
+        if (window.ADMIN_SUM_SELECTED_PAGE_ONLY) {
+            if (selected.length === 0) {
+                summaryBox.style.display = 'none';
+                return;
+            }
+            render(`เลือก <b style="color:#1e293b;">${selected.length}</b> รายการ`, pageTotals(selected));
+            return;
+        }
         // ไม่ได้กรอง/ค้นหา และไม่ได้ติ๊กอะไร (หน้าแรกของเมนู) -> ไม่ต้องแสดง
         if (selected.length === 0 && !isFiltered()) {
             summaryBox.style.display = 'none';
