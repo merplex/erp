@@ -615,9 +615,10 @@ class PurchasePaymentInline(UnfoldTabularInline):
                 amount.label = f"ยอดที่จ่าย ({CURRENCY_LABELS.get(obj.currency, obj.currency)})"
             if rate is not None:
                 rate.initial = None  # ไม่เติมเรทของใบให้ — ต้องกรอกเรทตอนจ่ายเอง
-                if obj.currency == 'THB':  # บาท = เรท 1 แก้ไม่ได้
+                if obj.currency == 'THB':  # บาท = เรท 1 แก้ไม่ได้ — disabled: เบราว์เซอร์ไหนก็พิมพ์ไม่ได้ และไม่รับค่าที่ส่งมา
                     rate.initial = Decimal('1')
-                    rate.widget.attrs.update({'readonly': True, 'style': 'background:#f1f5f9;'})
+                    rate.disabled = True
+                    rate.widget.attrs.update({'style': 'background:#f1f5f9;'})
             formset.form.parent_po = obj
         return formset
 
