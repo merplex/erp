@@ -33,7 +33,6 @@ admin.ModelAdmin.list_per_page = 200
 admin.ModelAdmin.show_full_result_count = False
 from django.contrib import messages
 
-from django.contrib.admin.widgets import AdminDateWidget
 from django.contrib.admin import helpers  # <--- helpers ต้องดึงมาจาก admin ครับ
 from django.utils.html import format_html
 from django.core.exceptions import ValidationError, PermissionDenied
@@ -48,7 +47,6 @@ from django import forms # ✅ เพิ่มบรรทัดนี้คร�
 from django.utils.safestring import mark_safe # ✅ ต้องมีบรรทัดนี้ครับ
 # เพิ่มที่บรรทัดบนสุดของไฟล์ครับ
 from django.http import HttpResponseRedirect
-from django.template import Template, RequestContext 
 from django.http import HttpResponse, HttpResponseRedirect
 from django.template.response import TemplateResponse
 from django.template.loader import render_to_string
@@ -4495,18 +4493,17 @@ class ProductTagAdmin(UnfoldModelAdmin):
     get_product_count.short_description = "จำนวนสินค้าที่ใช้"
 
 class PaymentDateForm(forms.Form):
-    payment_date = forms.DateField(
-        label="ระบุวันที่ชำระเงิน",
-        initial=timezone.now,
-        widget=AdminDateWidget()
-    )
+    """A3 ชำระเงิน: ช่องแบบกล่องเหมือนหน้ารับเงิน A1/A2 (วันที่ = date input มีปุ่มปฏิทิน)"""
     bank_account = forms.ModelChoiceField(
         label="สมุดบัญชี",
-        queryset=BankAccount.objects.filter(is_active=True),
+        queryset=BankAccount.objects.filter(is_active=True).order_by('-is_default', 'name'),
         required=False,
         initial=default_bank_account_id,
+        widget=box_select(320),
         help_text="ไม่เลือก = เข้าบัญชีหลัก",
     )
+    payment_date = forms.DateField(label="วันที่จ่ายเงิน", initial=timezone.localdate,
+                                   widget=forms.DateInput(attrs=BOX_DATE_ATTRS, format='%Y-%m-%d'))
 
 
 THAI_MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.']
@@ -4586,9 +4583,12 @@ def _settle_purchase_orders(modeladmin, request, queryset):
         # ต้องกรอกเรทตอนจ่ายใหม่เองทุกครั้ง — ไม่ดึงเรทจากใบสั่งซื้อ/Supplier/การจ่ายครั้งก่อนเด็ดขาด
 
         class ForeignPaymentForm(PaymentDateForm):
+            field_order = ['bank_account', 'exchange_rate', 'payment_date']  # เรทอยู่ก่อนบรรทัดวันที่จ่าย
             exchange_rate = forms.DecimalField(
                 label=f"ExRate ตอนจ่าย (บาทต่อ 1 {label})", max_digits=12, decimal_places=4,
                 min_value=Decimal('0.0001'),
+                widget=forms.NumberInput(attrs={'class': ' '.join(INPUT_CLASSES), 'step': '0.0001',
+                                                'style': 'max-width:220px;'}),
                 help_text="กรอกเรทจริงตอนจ่าย — สมุดบัญชีลงเป็นบาท = ยอดที่จ่าย x เรทนี้")
 
             def clean_exchange_rate(self):
@@ -4651,87 +4651,7 @@ def _settle_purchase_orders(modeladmin, request, queryset):
     })
 
 
-# ✅ Action: ปิดงาน Finance แบบมีหน้ายืนยัน (Confirmation Page)
-@admin.action(description='💰 ชำระครบ/ปิดยอด (Settle Payment)')
-def settle_and_close_orders(modeladmin, request, queryset):
-    # A3 ใบสั่งซื้อ: แยกราย PO + กรอกยอดที่จะจ่ายเองได้ (_settle_purchase_orders) / A4 ใบสั่งขาย: ปิดยอดเต็มจำนวน
-    if queryset.model is not None and issubclass(queryset.model, PurchaseOrder):
-        return _settle_purchase_orders(modeladmin, request, queryset)
-    form_class = PaymentDateForm
-    pay_summary = ''
 
-    if 'apply' in request.POST:
-        form = form_class(request.POST)
-        if form.is_valid():
-            pay_date = form.cleaned_data['payment_date']
-            bank_account = form.cleaned_data['bank_account']
-            pay_rate = form.cleaned_data.get('exchange_rate')  # None = บาท / ใบสั่งขาย
-            updated_count = 0
-            # ชำระหลายใบพร้อมกัน = เงินก้อนเดียว -> สมุดบัญชีลงยอดรวมรายการเดียว (กดยอดเงินใน M2 ดูว่ามาจากใบไหน)
-            objs = list(queryset)
-            due_count = sum(1 for o in objs if round_money(o.balance_due) > 0)
-            batch_ref = uuid.uuid4().hex[:16] if due_count > 1 else ''
-            
-            for obj in objs:
-                # ปัดเป็น 2 ตำแหน่ง ไม่งั้นเศษ VAT (เช่น 107.0749) ทำให้ยอดที่บันทึกได้ (107.07) ไม่ครบ สถานะค้างที่ Partial
-                balance = round_money(obj.balance_due)
-                # สร้างรายการจ่ายเงิน (ตามยอดที่ค้าง)
-                if balance > 0:
-                    if isinstance(obj, PurchaseOrder):
-                        PurchasePaymentLog.objects.create(purchase_order=obj, amount=balance, payment_date=pay_date, notes="Auto Settle",
-                                                          bank_account=bank_account, user=request.user,
-                                                          batch_ref=batch_ref, exchange_rate=pay_rate)
-                        obj.refresh_from_db()
-                    elif isinstance(obj, SalesOrder): # รองรับทั้ง SalesOrder และ IncomeReport
-                        SalesPayment.objects.create(order=obj, amount=balance, payment_date=pay_date, remark="Auto Settle",
-                                                bank_account=bank_account, batch_ref=batch_ref)
-                        obj.refresh_from_db()
-                    updated_count += 1
-                
-                if isinstance(obj, SalesOrder):
-                    obj.update_payment_status()  # ขายแฟคตอริ่งที่ส่วนที่เหลือยังไม่เข้า = ขายแฟคตอริ่งแล้ว ไม่ใช่ Paid
-                    continue
-                # บังคับอัปเดตสถานะการเงินเป็น "Paid"
-                if round_money(obj.balance_due) <= 0:
-                    obj.payment_status = 'Paid'
-                else:
-                    obj.payment_status = 'Partial' # เพิ่มบรรทัดนี้เผื่อปิดยอดไม่หมดค่ะ
-                
-                obj.save(update_fields=['payment_status'])
-            
-            modeladmin.message_user(request, f"✅ บันทึกการชำระเงินเรียบร้อย {updated_count} รายการ", messages.SUCCESS)
-            return HttpResponseRedirect(request.get_full_path())
-            
-    else:
-        form = form_class()
-
-    # HTML Template สำหรับหน้าเลือกวันที่
-    html_template = """
-    {% extends "admin/base_site.html" %}
-    {% load i18n admin_urls static admin_modify %}
-    {% block extrahead %}{{ block.super }}<script src="{% url 'admin:jsi18n' %}"></script>{{ media }}{% endblock %}
-    {% block content %}
-    <div style="max-width: 600px; margin: 20px auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
-        <h2 style="color: #007bff;">💰 ยืนยันการชำระเงินและปิดยอด ({{ queryset.count }} รายการ)</h2>
-        <p>ระบบจะสร้างรายการชำระเงิน <b>"เต็มจำนวนคงเหลือ"</b> และเปลี่ยนสถานะเป็น <b>Paid</b> ให้อัตโนมัติ</p>
-        {% if pay_summary %}<p style="font-size:15px;"><b>{{ pay_summary }}</b></p>{% endif %}
-        <form method="post">{% csrf_token %}
-            {% for obj in queryset %}<input type="hidden" name="{{ action_checkbox_name }}" value="{{ obj.pk }}">{% endfor %}
-            <input type="hidden" name="action" value="settle_and_close_orders">
-            <input type="hidden" name="apply" value="1">
-            <div style="margin: 20px 0;">{{ form.as_p }}</div>
-            <button type="submit" style="background: #007bff; color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 4px; cursor: pointer;">✅ ยืนยัน (Confirm)</button>
-            <a href="#" onclick="window.history.back();" style="margin-left: 10px; color: #666;">ยกเลิก</a>
-        </form>
-    </div>
-    {% endblock %}
-    """
-    
-    context = {
-        'queryset': queryset, 'form': form, 'media': form.media, 'pay_summary': pay_summary,
-        'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME, 'opts': modeladmin.model._meta,
-    }
-    return HttpResponse(Template(html_template).render(RequestContext(request, context)))
 
 class PaymentDateRangeFilter(DjangoDateRangeFilter):
     """A3/A4: ช่วงวันที่จ่าย/รับเงิน (ตารางลูก) — กรองด้วย pk__in ไม่ join ตรง
@@ -4973,7 +4893,7 @@ class IncomeReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, DocumentLockMixin
     )
     list_filter_submit = True
     search_fields = ('so_number', 'customer__company_name')
-    actions = [settle_and_close_orders, settle_income_special, sell_factoring, 'export_to_excel']
+    actions = [settle_income_special, sell_factoring, 'export_to_excel']
 
     def get_queryset(self, request):
         from django.db.models import Sum, F, ExpressionWrapper, DecimalField as DField, Q

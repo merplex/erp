@@ -337,6 +337,7 @@ class PayPurchaseActionTests(TestCase):
         a, b = self.make_po('1000'), self.make_po('250.50')
         resp = self.post([a, b], apply=False)
         for text in ('ยอดของใบ', 'ยอดค้างจ่าย', 'ยอดที่จะจ่าย', a.po_number, b.po_number,
+                     'type="date" name="payment_date"', 'วันที่จ่ายเงิน',
                      f'name="amount_{a.pk}"', 'value="1,000.00"', 'value="250.50"'):
             self.assertContains(resp, text)
 
@@ -386,3 +387,13 @@ class PayPurchaseActionTests(TestCase):
         resp = self.client.get(self.url)
         self.assertContains(resp, 'ชำระเงิน (Payment)')
         self.assertNotContains(resp, 'ชำระครบ/ปิดยอด')
+
+
+class IncomeReportActionsTests(TestCase):
+    def test_a4_has_no_full_settle_action(self):
+        from django.contrib.auth.models import User
+        self.client.force_login(User.objects.create_superuser('admin', 'a@a.com', 'x'))
+        resp = self.client.get('/admin/stocks/incomereport/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotContains(resp, 'ชำระครบ/ปิดยอด')
+        self.assertContains(resp, 'ปิดยอดกรณีพิเศษ')
