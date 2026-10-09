@@ -192,22 +192,47 @@ def _handle_cost_stock(reply_token, access_token):
 # ── มูลค่าสต๊อก ───────────────────────────────────────────────────────────────
 
 def _handle_sale_stock(reply_token, access_token):
+    """2 ใบในแถวเดียว (carousel): ใบ 1 = สต๊อกปัจจุบัน, ใบ 2 = สต๊อกคาดการณ์ (สูตรเดียวกับ F1 "คาดการณ์ (Plan)")"""
     products = list(Product.objects.filter(is_product=True).select_related('category'))
-    products.sort(key=lambda p: float(p.stock_quantity or 0) * float(p.sale_price or 0), reverse=True)
+    forecast = _get_forecast_data(products)
+
+    current = _sale_value_bubble(
+        '💲 มูลค่าสต๊อก (ปัจจุบัน)', '#2e1a3a', products,
+        lambda p: int(p.stock_quantity or 0), 'sale')
+    projected = _sale_value_bubble(
+        '🔮 มูลค่าสต๊อก (คาดการณ์)', '#1a2e4a', products,
+        lambda p: int(forecast.get(p.pk, {}).get('forecast', 0)), 'sale_forecast',
+        subtitle='สต๊อก + PO ค้างรับ − SO ค้างส่ง ± แผนผลิต')
 
     grand = sum(float(p.stock_quantity or 0) * float(p.sale_price or 0) for p in products)
+    reply_message(reply_token, [{
+        'type': 'flex', 'altText': f'💲 มูลค่าสต๊อก {grand:,.0f} ฿',
+        'contents': {'type': 'carousel', 'contents': [current, projected]},
+    }], access_token)
+
+
+def _sale_value_bubble(title, header_color, products, qty_fn, webview_type, subtitle=None):
+    """ใบมูลค่าขาย (จำนวน × ราคาขาย) เรียงมากสุด 20 อันดับ — qty_fn เลือกว่าจะใช้สต๊อกปัจจุบันหรือคาดการณ์"""
+    def _val(p):
+        return qty_fn(p) * float(p.sale_price or 0)
+
+    products = sorted(products, key=_val, reverse=True)
+    grand = sum(_val(p) for p in products)
     show = products[:20]
     rest = len(products) - len(show)
 
     rows = []
     for p in show:
-        val = float(p.stock_quantity or 0) * float(p.sale_price or 0)
+        qty = qty_fn(p)
+        val = _val(p)
         rows.append({
             'type': 'box', 'layout': 'horizontal', 'margin': 'xs',
             'contents': [
                 {'type': 'text', 'text': p.name[:22], 'size': 'xs', 'flex': 5, 'wrap': True, 'color': '#333333'},
-                {'type': 'text', 'text': f'{p.stock_quantity:,}', 'size': 'xs', 'flex': 2, 'align': 'end', 'color': '#666666'},
-                {'type': 'text', 'text': f'{val:,.0f}฿', 'size': 'xs', 'flex': 3, 'align': 'end', 'weight': 'bold', 'color': '#111111'},
+                {'type': 'text', 'text': f'{qty:,}', 'size': 'xs', 'flex': 2, 'align': 'end',
+                 'color': '#dc3545' if qty < 0 else '#666666'},
+                {'type': 'text', 'text': f'{val:,.0f}฿', 'size': 'xs', 'flex': 3, 'align': 'end', 'weight': 'bold',
+                 'color': '#dc3545' if val < 0 else '#111111'},
             ],
         })
 
@@ -223,26 +248,28 @@ def _handle_sale_stock(reply_token, access_token):
     if rest > 0:
         body_contents.append({'type': 'text', 'text': f'· · · และอีก {rest} รายการ', 'size': 'xxs', 'color': '#aaaaaa', 'margin': 'sm', 'align': 'center'})
 
+    header_contents = [
+        {'type': 'text', 'text': title, 'weight': 'bold', 'color': '#ffffff'},
+        {'type': 'text', 'text': f'รวม {grand:,.0f} ฿  |  {len(products)} รายการ', 'size': 'xs', 'color': '#aaaaaa'},
+    ]
+    if subtitle:
+        header_contents.append({'type': 'text', 'text': subtitle, 'size': 'xxs', 'color': '#888888', 'wrap': True})
+
     bubble = {
         'type': 'bubble', 'size': 'mega',
         'header': {
-            'type': 'box', 'layout': 'vertical', 'backgroundColor': '#2e1a3a', 'paddingAll': '12px',
-            'contents': [
-                {'type': 'text', 'text': '💲 มูลค่าสต๊อก', 'weight': 'bold', 'color': '#ffffff'},
-                {'type': 'text', 'text': f'รวม {grand:,.0f} ฿  |  {len(products)} รายการ', 'size': 'xs', 'color': '#aaaaaa'},
-            ],
+            'type': 'box', 'layout': 'vertical', 'backgroundColor': header_color, 'paddingAll': '12px',
+            'contents': header_contents,
         },
         'body': {'type': 'box', 'layout': 'vertical', 'paddingAll': '12px', 'contents': body_contents},
-        'footer': {
+    }
+    if rest > 0 and os.environ.get('BASE_URL'):
+        bubble['footer'] = {
             'type': 'box', 'layout': 'vertical', 'paddingAll': '8px',
             'contents': [{'type': 'button', 'style': 'secondary', 'height': 'sm',
-                'action': {'type': 'uri', 'label': '📋 ดูทั้งหมด', 'uri': _report_webview_url('sale')}}],
-        } if rest > 0 and os.environ.get('BASE_URL') else None,
-    }
-    if bubble.get('footer') is None:
-        bubble.pop('footer', None)
-
-    reply_message(reply_token, [{'type': 'flex', 'altText': f'💲 มูลค่าสต๊อก {grand:,.0f} ฿', 'contents': bubble}], access_token)
+                'action': {'type': 'uri', 'label': '📋 ดูทั้งหมด', 'uri': _report_webview_url(webview_type)}}],
+        }
+    return bubble
 
 
 # ── Product Report ────────────────────────────────────────────────────────────

@@ -627,38 +627,51 @@ td.nm{{word-break:break-word}}
         return HttpResponse(html, content_type='text/html; charset=utf-8')
 
     # ─── Cost / Sale report (เรียงตามมูลค่า) ────────────────────────────────
+    products = list(Product.objects.filter(is_product=True))
+    qty_fn = lambda p: int(p.stock_quantity or 0)
     if report_type == 'cost':
-        products = list(Product.objects.filter(is_product=True))
-        products.sort(key=lambda p: float(p.stock_quantity or 0) * float(p.buy_price or 0), reverse=True)
         title = 'ต้นทุนสต๊อก'
         emoji = '💰'
         header_color = '#1a3a2e'
         col_label = 'ต้นทุน/ชิ้น'
-        value_fn = lambda p: (float(p.stock_quantity or 0) * float(p.buy_price or 0), float(p.buy_price or 0))
+        price_fn = lambda p: float(p.buy_price or 0)
         grand_label = 'รวมต้นทุน'
+    elif report_type == 'sale_forecast':
+        # สต๊อกคาดการณ์ = สูตรเดียวกับการ์ดใบที่ 2 ใน LINE และ F1 "คาดการณ์ (Plan)"
+        from .line_webhook import _get_forecast_data
+        forecast = _get_forecast_data(products)
+        qty_fn = lambda p: int(forecast.get(p.pk, {}).get('forecast', 0))
+        title = 'มูลค่าสต๊อก (คาดการณ์)'
+        emoji = '🔮'
+        header_color = '#1a2e4a'
+        col_label = 'ราคาขาย/ชิ้น'
+        price_fn = lambda p: float(p.sale_price or 0)
+        grand_label = 'รวมมูลค่าคาดการณ์'
     else:
-        products = list(Product.objects.filter(is_product=True))
-        products.sort(key=lambda p: float(p.stock_quantity or 0) * float(p.sale_price or 0), reverse=True)
         title = 'มูลค่าสต๊อก'
         emoji = '💲'
         header_color = '#2e1a3a'
         col_label = 'ราคาขาย/ชิ้น'
-        value_fn = lambda p: (float(p.stock_quantity or 0) * float(p.sale_price or 0), float(p.sale_price or 0))
+        price_fn = lambda p: float(p.sale_price or 0)
         grand_label = 'รวมมูลค่า'
+    value_fn = lambda p: (qty_fn(p) * price_fn(p), price_fn(p))
+    products.sort(key=lambda p: value_fn(p)[0], reverse=True)
 
     grand_total = sum(value_fn(p)[0] for p in products)
 
     rows_html = ''
     for i, p in enumerate(products, 1):
         total_val, unit_price = value_fn(p)
+        qty = qty_fn(p)
+        neg = ' style="color:#dc3545"' if qty < 0 else ''
         bg = '#fafafa' if i % 2 == 0 else '#ffffff'
         rows_html += (
             f'<tr style="background:{bg}">'
             f'<td class="n">{i}</td>'
             f'<td class="nm">{p.name}</td>'
-            f'<td class="r">{int(p.stock_quantity or 0):,}</td>'
+            f'<td class="r"{neg}>{qty:,}</td>'
             f'<td class="r">{unit_price:,.2f}</td>'
-            f'<td class="r b">{total_val:,.0f}</td>'
+            f'<td class="r b"{neg}>{total_val:,.0f}</td>'
             f'</tr>'
         )
 
