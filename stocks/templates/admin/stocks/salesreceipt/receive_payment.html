@@ -1,9 +1,16 @@
 {% extends "admin/base_site.html" %}
 {% block content %}
-<div style="padding:20px;max-width:1000px;">
+<div style="padding:20px;max-width:1100px;">
     <h2>{{ title }} ({{ rows|length }} ใบ)</h2>
-    <p>ระบบจะสร้างรายการรับเงินในใบสั่งขาย 1 รายการต่อใบ ตามยอดค้างของใบนั้น และผูกกับใบนั้นโดยตรง — เงินเข้า "บัญชีรับโอน" ของลูกค้า (S1)</p>
+    <p>ระบบจะสร้างรายการรับเงินในใบสั่งขาย 1 รายการต่อใบ ตามยอดที่กรอก (ค่าเริ่มต้น = ยอดค้างชำระของใบนั้น) และผูกกับใบนั้นโดยตรง — เงินเข้า "บัญชีรับโอน" ของลูกค้า (S1)<br>
+    <span style="color:#64748b;">เว้นว่างหรือกรอก 0 = ไม่รับเงินใบนั้น · กรอกเกินยอดค้างชำระไม่ได้</span></p>
+    {% if amount_errors %}
+    <div style="margin:12px 0;padding:10px 14px;background:#fee2e2;border:1px solid #fca5a5;border-radius:6px;color:#b91c1c;">
+        <b>ยอดที่จะรับไม่ถูกต้อง {{ amount_errors|length }} ใบ</b> — แก้ช่องที่ขึ้นสีแดงแล้วกดยืนยันอีกครั้ง
+    </div>
+    {% endif %}
     {% if rows %}
+    <form method="post" id="receive-payment-form">{% csrf_token %}
     <table style="width:100%;border-collapse:collapse;margin:16px 0;">
         <thead><tr style="border-bottom:2px solid #dee2e6;">
             <th style="padding:8px;text-align:left;">เลขที่</th>
@@ -11,6 +18,7 @@
             <th style="padding:8px;text-align:left;">ใบสั่งขาย</th>
             <th style="padding:8px;text-align:left;">วันครบกำหนด</th>
             <th style="padding:8px;text-align:right;">ยอดของใบ</th>
+            <th style="padding:8px;text-align:right;">ยอดค้างชำระ</th>
             <th style="padding:8px;text-align:right;">ยอดที่จะรับ</th>
             <th style="padding:8px;text-align:left;">เข้าบัญชี</th>
         </tr></thead>
@@ -23,12 +31,20 @@
                 <td style="padding:8px;">{{ r.due_date|date:"d/m/Y"|default:"-" }}</td>
                 <td style="padding:8px;text-align:right;">{{ r.grand_total|floatformat:"2g" }}</td>
                 <td style="padding:8px;text-align:right;">{{ r.outstanding|floatformat:"2g" }}</td>
+                <td style="padding:8px;text-align:right;">
+                    <input type="text" inputmode="decimal" name="amount_{{ r.pk }}" class="receive-amount"
+                           data-max="{{ r.outstanding|stringformat:'s' }}"
+                           value="{% if r.receive_input is not None %}{{ r.receive_input }}{% else %}{{ r.outstanding|floatformat:'2' }}{% endif %}"
+                           style="width:120px;text-align:right;padding:4px 6px;border:1px solid {% if r.amount_error %}#dc2626{% else %}#cbd5e1{% endif %};border-radius:4px;">
+                    {% if r.amount_error %}<div style="color:#dc2626;font-size:12px;">{{ r.amount_error }}</div>{% endif %}
+                </td>
                 <td style="padding:8px;">{% if r.target_account %}{{ r.target_account }}{% if r.target_account.account_type == "FACTORING" %} <span style="color:#64748b;">(เข้า 100% แล้วโอนต่อเข้า {{ r.target_account.linked_account|default:"-" }})</span>{% endif %}{% else %}<span style="color:#64748b;">ตามที่เลือกด้านล่าง</span>{% endif %}</td>
             </tr>
         {% endfor %}
         <tr style="font-weight:bold;">
             <td colspan="5" style="padding:8px;text-align:right;">รวม</td>
-            <td style="padding:8px;text-align:right;">{{ total|floatformat:"2g" }}</td>
+            <td style="padding:8px;text-align:right;">{{ total_outstanding|floatformat:"2g" }}</td>
+            <td style="padding:8px;text-align:right;" id="receive-total">{{ total|floatformat:"2g" }}</td>
             <td></td>
         </tr>
         </tbody>
@@ -43,7 +59,6 @@
     </div>
     {% endif %}
     {% if rows %}
-    <form method="post">{% csrf_token %}
         {% for pk in selected_ids %}<input type="hidden" name="{{ action_checkbox_name }}" value="{{ pk }}">{% endfor %}
         <input type="hidden" name="action" value="{{ action_name }}">
         <input type="hidden" name="apply" value="1">
@@ -51,6 +66,24 @@
         <button type="submit" style="background:#2563eb;color:#fff;border:none;padding:10px 20px;border-radius:4px;cursor:pointer;">✅ ยืนยันรับเงิน</button>
         <a href="#" onclick="window.history.back();" style="margin-left:10px;color:#666;">ยกเลิก</a>
     </form>
+    <script>
+    (function () {
+        var inputs = document.querySelectorAll('#receive-payment-form .receive-amount');
+        var totalCell = document.getElementById('receive-total');
+        function num(v) { var n = parseFloat(String(v).replace(/,/g, '')); return isFinite(n) ? n : 0; }
+        function refresh() {
+            var sum = 0;
+            inputs.forEach(function (el) {
+                var v = num(el.value), max = num(el.dataset.max);
+                var bad = el.value.trim() !== '' && (!isFinite(parseFloat(el.value.replace(/,/g, ''))) || v < 0 || v > max + 1e-9);
+                el.style.borderColor = bad ? '#dc2626' : '#cbd5e1';
+                if (!bad) sum += v;
+            });
+            totalCell.textContent = sum.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        }
+        inputs.forEach(function (el) { el.addEventListener('input', refresh); });
+    })();
+    </script>
     {% else %}
     <p><a href="#" onclick="window.history.back();">← กลับ</a></p>
     {% endif %}

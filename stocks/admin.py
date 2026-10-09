@@ -58,7 +58,7 @@ from django.contrib.admin.models import LogEntry
 from django.core.paginator import Paginator
 from datetime import timedelta
 from django.utils import timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from unfold.contrib.filters.admin import RangeDateFilter as DjangoDateRangeFilter
 from unfold.contrib.filters.admin import RangeDateTimeFilter as DjangoDateTimeRangeFilter
 from unfold.contrib.filters.admin import (
@@ -3110,6 +3110,37 @@ class ReceivePaymentForm(forms.Form):
         self.fields['payment_date'].initial = timezone.localdate()
 
 
+def _read_amount_inputs(request, rows):
+    """A1/A2/A3: ยอดที่จะรับ/จ่ายต่อใบ (ช่อง amount_<pk>) — default = r.outstanding, แก้ได้
+    ว่าง/0 = ไม่ทำใบนั้น, ติดลบ/เกินยอดค้าง/ทศนิยมเกิน 2 ตำแหน่ง = error ต่อแถว (ไม่ 500)
+    ตั้ง r.receive_amount / r.amount_error / r.receive_input แล้วคืนแถวที่ error"""
+    errors = []
+    for r in rows:
+        r.receive_amount, r.amount_error, r.receive_input = r.outstanding, '', None
+        if 'apply' not in request.POST or f'amount_{r.pk}' not in request.POST:
+            continue  # ไม่มีช่องยอดส่งมาเลย = ยอดค้างเต็ม (ช่องว่าง = ไม่ทำใบนั้น)
+        raw = (request.POST.get(f'amount_{r.pk}') or '').replace(',', '').strip()
+        r.receive_input = raw
+        try:
+            value = Decimal(raw) if raw else Decimal(0)
+            if not value.is_finite():
+                raise InvalidOperation
+        except (InvalidOperation, ValueError):
+            r.amount_error = "กรอกเป็นตัวเลข"
+        else:
+            if value < 0:
+                r.amount_error = "ติดลบไม่ได้"
+            elif value > r.outstanding:
+                r.amount_error = f"เกินยอดค้าง {r.outstanding:,.2f}"
+            elif value != value.quantize(Decimal('0.01')):
+                r.amount_error = "ทศนิยมได้ 2 ตำแหน่ง"
+            else:
+                r.receive_amount = value
+        if r.amount_error:
+            errors.append(r)
+    return errors
+
+
 def _receivable_rows(queryset):
     """แยกใบที่เลือกเป็น (รับได้, ข้าม) — ข้าม: ยกเลิก / รับครบแล้ว / ปิดยอด / SO ขายแฟคตอริ่ง (ไม่ทับรายการที่ระบบสร้าง)"""
     receipts = list(queryset.select_related('sales_order__customer__receiving_account__linked_account')
@@ -3302,27 +3333,35 @@ class SalesReceiptAdmin(ColumnTotalsMixin, TaxReportActionsMixin, UnfoldModelAdm
         ok, skipped = _receivable_rows(queryset)
         form = ReceivePaymentForm(request.POST if 'apply' in request.POST else None,
                                   need_fallback=any(r.target_account is None for r in ok))
-        if 'apply' in request.POST and form.is_valid():
-            if not ok:
+        amount_errors = _read_amount_inputs(request, ok)
+        if 'apply' in request.POST and form.is_valid() and not amount_errors:
+            to_receive = [r for r in ok if r.receive_amount > 0]
+            if not to_receive:
                 self.message_user(request, "ไม่มีใบที่ต้องรับเงิน", messages.WARNING)
                 return None
             fallback, pay_date = form.cleaned_data.get('bank_account'), form.cleaned_data['payment_date']
+            # รับหลายใบพร้อมกัน = เงินก้อนเดียว -> สมุดบัญชีลง 1 รายการต่อ (บัญชี, วันที่) กดยอดใน M2 ดูราย IV ได้
+            batch_ref = uuid.uuid4().hex[:16] if len(to_receive) > 1 else ''
             with transaction.atomic():
-                for r in ok:
+                for r in to_receive:
                     # เข้าบัญชีรับโอนของลูกค้าเสมอ (บัญชีแฟคตอริ่ง: signal โอนต่อเข้าบัญชีที่ผูก 100%)
                     SalesPayment.objects.create(
-                        order=r.sales_order, receipt=r, amount=r.outstanding, payment_date=pay_date,
-                        bank_account=r.target_account or fallback, remark=f"รับชำระ {r.receipt_number}")
-            total = sum((r.outstanding for r in ok), Decimal(0))
-            msg = f"บันทึกรับเงิน {len(ok)} ใบ รวม {total:,.2f} บาท"
-            if skipped:
-                msg += f" (ข้าม {len(skipped)} ใบ)"
+                        order=r.sales_order, receipt=r, amount=r.receive_amount, payment_date=pay_date,
+                        bank_account=r.target_account or fallback, remark=f"รับชำระ {r.receipt_number}",
+                        batch_ref=batch_ref)
+            total = sum((r.receive_amount for r in to_receive), Decimal(0))
+            msg = f"บันทึกรับเงิน {len(to_receive)} ใบ รวม {total:,.2f} บาท"
+            not_received = len(skipped) + len(ok) - len(to_receive)
+            if not_received:
+                msg += f" (ข้าม {not_received} ใบ)"
             self.message_user(request, msg, messages.SUCCESS)
             return None
         return TemplateResponse(request, 'admin/stocks/salesreceipt/receive_payment.html', {
             **self.admin_site.each_context(request),
             'title': "รับเงินตามยอดค้าง", 'opts': self.model._meta, 'form': form,
-            'rows': ok, 'skipped': skipped, 'total': sum((r.outstanding for r in ok), Decimal(0)),
+            'rows': ok, 'skipped': skipped, 'amount_errors': amount_errors,
+            'total_outstanding': sum((r.outstanding for r in ok), Decimal(0)),
+            'total': sum((r.receive_amount for r in ok if not r.amount_error), Decimal(0)),
             'selected_ids': list(queryset.values_list('pk', flat=True)),
             'action_name': 'receive_payment', 'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
         })
@@ -4527,42 +4566,99 @@ def settle_purchase_special(modeladmin, request, queryset):
     })
 settle_purchase_special.short_description = "🎯 ปิดยอดกรณีพิเศษ (SETTLED)"
 
+def _settle_purchase_orders(modeladmin, request, queryset):
+    """A3 จ่ายเงิน: 1 รายการจ่ายต่อ PO ตามยอดที่กรอก (default = ยอดค้างจ่าย) — เหมือน A1/A2 รับเงินราย IV
+    จ่ายรวมได้เฉพาะใบสกุลเงินเดียวกัน — สกุลอื่นที่ไม่ใช่บาทกรอกเรทตอนจ่ายครั้งเดียวใช้ทุกใบ
+    (สมุดบัญชีลงบาท = ยอดที่จ่ายของแต่ละใบ x เรทนี้ รวมเป็นรายการเดียว)"""
+    pos = list(queryset.select_related('supplier').order_by('order_date', 'id'))
+    currencies = sorted({po.currency for po in pos})
+    if len(currencies) > 1:
+        labels = ', '.join(CURRENCY_LABELS.get(c, c) for c in currencies)
+        modeladmin.message_user(
+            request, f"❌ จ่ายรวมไม่ได้: ใบที่เลือกมีหลายสกุลเงิน ({labels}) — เลือกเฉพาะใบสกุลเงินเดียวกัน",
+            messages.ERROR)
+        return None
+    currency = currencies[0] if currencies else 'THB'
+    label = CURRENCY_LABELS.get(currency, currency)
+
+    form_class = PaymentDateForm
+    if currency != 'THB':
+        # ต้องกรอกเรทตอนจ่ายใหม่เองทุกครั้ง — ไม่ดึงเรทจากใบสั่งซื้อ/Supplier/การจ่ายครั้งก่อนเด็ดขาด
+
+        class ForeignPaymentForm(PaymentDateForm):
+            exchange_rate = forms.DecimalField(
+                label=f"ExRate ตอนจ่าย (บาทต่อ 1 {label})", max_digits=12, decimal_places=4,
+                min_value=Decimal('0.0001'),
+                help_text="กรอกเรทจริงตอนจ่าย — สมุดบัญชีลงเป็นบาท = ยอดที่จ่าย x เรทนี้")
+
+            def clean_exchange_rate(self):
+                rate = self.cleaned_data['exchange_rate']
+                if rate == 1:
+                    raise forms.ValidationError(f"กรุณากรอกเรทจริงของ {label}")
+                return rate
+        form_class = ForeignPaymentForm
+
+    rows, skipped = [], []
+    for po in pos:
+        # ปัดเป็น 2 ตำแหน่ง ไม่งั้นเศษ VAT (เช่น 107.0749) ทำให้ยอดที่บันทึกได้ (107.07) ไม่ครบ สถานะค้างที่ Partial
+        po.grand_total_money = round_money(po.grand_total)
+        po.outstanding = round_money(po.balance_due)
+        if po.payment_status == 'SETTLED':
+            skipped.append((po, "ปิดยอดกรณีพิเศษแล้ว"))
+        elif po.outstanding <= 0:
+            skipped.append((po, "จ่ายครบแล้ว"))
+        else:
+            rows.append(po)
+
+    form = form_class(request.POST if 'apply' in request.POST else None)
+    amount_errors = _read_amount_inputs(request, rows)
+    if 'apply' in request.POST and form.is_valid() and not amount_errors:
+        to_pay = [po for po in rows if po.receive_amount > 0]
+        if not to_pay:
+            modeladmin.message_user(request, "ไม่มีใบที่ต้องจ่ายเงิน", messages.WARNING)
+            return None
+        pay_date = form.cleaned_data['payment_date']
+        bank_account = form.cleaned_data['bank_account']
+        pay_rate = form.cleaned_data.get('exchange_rate')  # None = บาท
+        # จ่ายหลายใบพร้อมกัน = เงินก้อนเดียว -> สมุดบัญชีลงยอดรวมรายการเดียว (กดยอดเงินใน M2 ดูว่ามาจากใบไหน)
+        batch_ref = uuid.uuid4().hex[:16] if len(to_pay) > 1 else ''
+        with transaction.atomic():
+            for po in to_pay:
+                # สถานะการเงิน (จ่ายครบ/จ่ายบางส่วน) signal คำนวณให้เองจากยอดจ่ายเทียบยอดสุทธิ
+                PurchasePaymentLog.objects.create(
+                    purchase_order=po, amount=po.receive_amount, payment_date=pay_date, notes="Auto Settle",
+                    bank_account=bank_account, user=request.user, batch_ref=batch_ref, exchange_rate=pay_rate)
+        total = sum((po.receive_amount for po in to_pay), Decimal(0))
+        msg = f"✅ บันทึกจ่ายเงิน {len(to_pay)} ใบ รวม {total:,.2f} {label}"
+        if pay_rate:
+            msg += f" (ExRate {pay_rate} = {round_money(total * pay_rate):,.2f} บาท)"
+        not_paid = len(skipped) + len(rows) - len(to_pay)
+        if not_paid:
+            msg += f" (ข้าม {not_paid} ใบ)"
+        modeladmin.message_user(request, msg, messages.SUCCESS)
+        return None
+
+    return TemplateResponse(request, 'admin/stocks/financereport/pay_purchase.html', {
+        **modeladmin.admin_site.each_context(request),
+        'title': "จ่ายเงินตามยอดค้าง", 'opts': modeladmin.model._meta, 'form': form, 'media': form.media,
+        'rows': rows, 'skipped': skipped, 'amount_errors': amount_errors,
+        'currency_label': label, 'is_foreign': currency != 'THB',
+        'total_grand': sum((po.grand_total_money for po in rows), Decimal(0)),
+        'total_outstanding': sum((po.outstanding for po in rows), Decimal(0)),
+        'total': sum((po.receive_amount for po in rows if not po.amount_error), Decimal(0)),
+        'selected_ids': [po.pk for po in pos],
+        'action_name': 'settle_and_close_orders', 'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
+    })
+
+
 # ✅ Action: ปิดงาน Finance แบบมีหน้ายืนยัน (Confirmation Page)
 @admin.action(description='💰 ชำระครบ/ปิดยอด (Settle Payment)')
 def settle_and_close_orders(modeladmin, request, queryset):
-    # ... (Logic ปิดงาน) ...
-    # ใบสั่งซื้อ (A3): จ่ายรวมได้เฉพาะใบสกุลเงินเดียวกัน — สกุลอื่นที่ไม่ใช่บาทต้องกรอกเรทตอนจ่ายก่อน
-    # (สมุดบัญชีลงบาท = ยอดค้างของแต่ละใบ x เรทนี้ รวมเป็นรายการเดียว)
+    # A3 ใบสั่งซื้อ: แยกราย PO + กรอกยอดที่จะจ่ายเองได้ (_settle_purchase_orders) / A4 ใบสั่งขาย: ปิดยอดเต็มจำนวน
+    if queryset.model is not None and issubclass(queryset.model, PurchaseOrder):
+        return _settle_purchase_orders(modeladmin, request, queryset)
     form_class = PaymentDateForm
     pay_summary = ''
-    if queryset.model is not None and issubclass(queryset.model, PurchaseOrder):
-        pos = list(queryset)
-        currencies = sorted({po.currency for po in pos})
-        if len(currencies) > 1:
-            labels = ', '.join(CURRENCY_LABELS.get(c, c) for c in currencies)
-            modeladmin.message_user(
-                request, f"❌ จ่ายรวมไม่ได้: ใบที่เลือกมีหลายสกุลเงิน ({labels}) — เลือกเฉพาะใบสกุลเงินเดียวกัน",
-                messages.ERROR)
-            return None
-        currency = currencies[0] if currencies else 'THB'
-        label = CURRENCY_LABELS.get(currency, currency)
-        due = sum((max(round_money(po.balance_due), Decimal(0)) for po in pos), Decimal(0))
-        pay_summary = f"ยอดค้างจ่ายรวม {due:,.2f} {label}"
-        if currency != 'THB':
-            # ต้องกรอกเรทตอนจ่ายใหม่เองทุกครั้ง — ไม่ดึงเรทจากใบสั่งซื้อ/Supplier/การจ่ายครั้งก่อนเด็ดขาด
-
-            class ForeignPaymentForm(PaymentDateForm):
-                exchange_rate = forms.DecimalField(
-                    label=f"ExRate ตอนจ่าย (บาทต่อ 1 {label})", max_digits=12, decimal_places=4,
-                    min_value=Decimal('0.0001'),
-                    help_text="กรอกเรทจริงตอนจ่าย — สมุดบัญชีลงเป็นบาท = ยอดที่จ่าย x เรทนี้")
-
-                def clean_exchange_rate(self):
-                    rate = self.cleaned_data['exchange_rate']
-                    if rate == 1:
-                        raise forms.ValidationError(f"กรุณากรอกเรทจริงของ {label}")
-                    return rate
-            form_class = ForeignPaymentForm
 
     if 'apply' in request.POST:
         form = form_class(request.POST)
@@ -4674,7 +4770,12 @@ def payment_account_filter(relation, label):
 class FinanceReportAdmin(ColumnTotalsMixin, ExportToExcelMixin, DocumentLockMixin, UnfoldModelAdmin):
     # หน้ารวม: ดูง่ายๆ ว่าใบไหนค้างจ่าย
     search_fields = ('po_number', 'supplier__company_name')
-    actions = [settle_and_close_orders, settle_purchase_special, 'export_to_excel']
+    actions = ['settle_and_close_orders', settle_purchase_special, 'export_to_excel']
+
+    # ชื่อ action เดิม (settle_and_close_orders) แต่ A3 จ่ายตามยอดที่กรอก ไม่ใช่ปิดยอดเต็มเสมอ — ปิดยอดกรณีพิเศษแยก action
+    @admin.action(description="💰 ชำระเงิน (Payment)")
+    def settle_and_close_orders(self, request, queryset):
+        return _settle_purchase_orders(self, request, queryset)
 
 
     # จัดหน้าตาฟอร์ม

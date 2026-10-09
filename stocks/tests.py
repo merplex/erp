@@ -226,3 +226,163 @@ class PurchaseCurrencyTests(TestCase):
         pay = PurchasePaymentLog.objects.get()
         self.assertEqual((pay.amount, pay.exchange_rate), (self.D('1000'), self.D('5.3')))
         self.assertEqual(BankTransaction.objects.get(purchase_payment=pay).amount, self.D('-5300'))
+
+
+class ReceivePaymentActionTests(TestCase):
+    """A1/A2 action รับเงินตามยอดค้าง: มีคอลัมน์ยอดค้างชำระ + กรอกยอดที่จะรับเองได้ (ค่าเริ่มต้น = ยอดค้าง)"""
+
+    def setUp(self):
+        from decimal import Decimal
+        from django.contrib.auth.models import User
+        from .models import BankAccount
+        self.Decimal = Decimal
+        self.client.force_login(User.objects.create_superuser('admin', 'a@a.com', 'x'))
+        self.bank = BankAccount.objects.create(name='B')
+        customer = Customer.objects.create(company_name='C', contact_person='P', address='A', phone='0')
+        so = SalesOrder.objects.create(customer=customer, order_date=datetime.date(2026, 9, 1))
+        self.receipt = SalesReceipt.objects.create(sales_order=so, shipped_date=datetime.date(2026, 9, 21),
+                                                   due_date=datetime.date(2026, 11, 2))
+        SalesReceipt.objects.filter(pk=self.receipt.pk).update(grand_total=Decimal('1000'))
+        self.url = '/admin/stocks/salesreceipt/'
+
+    def post(self, amount=None, apply=True):
+        data = {'action': 'receive_payment', '_selected_action': [self.receipt.pk]}
+        if apply:
+            data.update({'apply': '1', 'bank_account': self.bank.pk, 'payment_date': '2026-10-09'})
+            if amount is not None:
+                data[f'amount_{self.receipt.pk}'] = amount
+        return self.client.post(self.url, data)
+
+    def payments(self):
+        from .models import SalesPayment
+        return list(SalesPayment.objects.filter(receipt=self.receipt).values_list('amount', flat=True))
+
+    def test_confirm_page_shows_outstanding_and_default_input(self):
+        resp = self.post(apply=False)
+        self.assertContains(resp, 'ยอดค้างชำระ')
+        self.assertContains(resp, f'name="amount_{self.receipt.pk}"')
+        self.assertContains(resp, 'value="1,000.00"')
+
+    def test_partial_amount(self):
+        self.assertEqual(self.post('400.50').status_code, 302)
+        self.assertEqual(self.payments(), [self.Decimal('400.50')])
+
+    def test_comma_amount(self):
+        self.post('1,000.00')
+        self.assertEqual(self.payments(), [self.Decimal('1000.00')])
+
+    def test_bad_inputs_rerender_without_saving(self):
+        for bad in ['abc', '-5', '1000.01', '1.234', 'NaN', 'Infinity', '1e999', '-1e999', '1e-999']:
+            resp = self.post(bad)
+            self.assertEqual(resp.status_code, 200, bad)
+            self.assertContains(resp, 'ยอดที่จะรับไม่ถูกต้อง')
+        self.assertEqual(self.payments(), [])
+
+    def test_blank_or_zero_skips(self):
+        for v in ['', '0']:
+            self.assertEqual(self.post(v).status_code, 302)
+        self.assertEqual(self.payments(), [])
+
+    def test_multiple_receipts_merge_into_one_bank_row(self):
+        from .models import BankTransaction, SalesPayment
+        second = SalesReceipt.objects.create(sales_order=self.receipt.sales_order,
+                                             shipped_date=datetime.date(2026, 9, 22))
+        SalesReceipt.objects.filter(pk=second.pk).update(grand_total=self.Decimal('500'))
+        self.client.post(self.url, {
+            'action': 'receive_payment', '_selected_action': [self.receipt.pk, second.pk], 'apply': '1',
+            'bank_account': self.bank.pk, 'payment_date': '2026-10-09',
+            f'amount_{self.receipt.pk}': '300', f'amount_{second.pk}': '500'})
+        refs = set(SalesPayment.objects.values_list('batch_ref', flat=True))
+        self.assertEqual(len(refs), 1)
+        self.assertNotEqual(refs, {''})
+        rows = BankTransaction.objects.filter(bank_account=self.bank)
+        self.assertEqual(rows.count(), 1)
+        self.assertEqual(rows.get().amount, self.Decimal('800'))
+
+
+class PayPurchaseActionTests(TestCase):
+    """A3 action ชำระ: แยกราย PO + ยอดของใบ/ยอดค้างจ่าย/ยอดที่จะจ่าย (แก้ได้) + เรทกรอกครั้งเดียว ห้ามปนสกุลเงิน"""
+
+    def setUp(self):
+        from decimal import Decimal
+        from django.contrib.auth.models import User
+        from .models import BankAccount, Product, PurchaseItem, PurchaseOrder, Supplier
+        self.Decimal = Decimal
+        self.client.force_login(User.objects.create_superuser('admin', 'a@a.com', 'x'))
+        self.bank = BankAccount.objects.create(name='B', is_default=True)
+        self.supplier = Supplier.objects.create(company_name='S', contact_person='P', address='A', phone='0')
+        self.product = Product.objects.create(name='X', sale_price=0)
+        self.PurchaseOrder, self.PurchaseItem = PurchaseOrder, PurchaseItem
+        self.url = '/admin/stocks/financereport/'
+
+    def make_po(self, total, currency='THB', rate='1'):
+        po = self.PurchaseOrder.objects.create(supplier=self.supplier, currency=currency,
+                                               exchange_rate=self.Decimal(rate), vat_percent=0)
+        item = self.PurchaseItem.objects.create(purchase_order=po, product=self.product, quantity_ordered=1)
+        self.PurchaseItem.objects.filter(pk=item.pk).update(unit_price=self.Decimal(total))
+        return po
+
+    def post(self, pos, amounts=None, apply=True, **extra):
+        data = {'action': 'settle_and_close_orders', '_selected_action': [p.pk for p in pos]}
+        if apply:
+            data.update({'apply': '1', 'bank_account': self.bank.pk, 'payment_date': '2026-10-09', **extra})
+            for po, amount in (amounts or {}).items():
+                data[f'amount_{po.pk}'] = amount
+        return self.client.post(self.url, data)
+
+    def paid(self, po):
+        return list(po.payment_logs.values_list('amount', flat=True))
+
+    def test_confirm_page_lists_each_po(self):
+        a, b = self.make_po('1000'), self.make_po('250.50')
+        resp = self.post([a, b], apply=False)
+        for text in ('ยอดของใบ', 'ยอดค้างจ่าย', 'ยอดที่จะจ่าย', a.po_number, b.po_number,
+                     f'name="amount_{a.pk}"', 'value="1,000.00"', 'value="250.50"'):
+            self.assertContains(resp, text)
+
+    def test_partial_and_skip_per_po(self):
+        from .models import BankTransaction
+        a, b, c = self.make_po('1000'), self.make_po('500'), self.make_po('300')
+        resp = self.post([a, b, c], {a: '400', b: '500', c: ''})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(self.paid(a), [self.Decimal('400')])
+        self.assertEqual(self.paid(b), [self.Decimal('500')])
+        self.assertEqual(self.paid(c), [])
+        a.refresh_from_db(); b.refresh_from_db(); c.refresh_from_db()
+        self.assertEqual((a.payment_status, b.payment_status, c.payment_status), ('Partial', 'Paid', 'Unpaid'))
+        rows = BankTransaction.objects.filter(bank_account=self.bank)
+        self.assertEqual(rows.count(), 1)
+        self.assertEqual(rows.get().amount, self.Decimal('-900'))
+        # รอบต่อไป: ยอดค้างจ่ายของใบ a = 600
+        self.assertContains(self.post([a], apply=False), 'value="600.00"')
+
+    def test_bad_inputs_rerender_without_saving(self):
+        a = self.make_po('1000')
+        for bad in ['abc', '-5', '1000.01', '1.234', 'NaN', '1e999']:
+            resp = self.post([a], {a: bad})
+            self.assertEqual(resp.status_code, 200, bad)
+            self.assertContains(resp, 'ยอดที่จะจ่ายไม่ถูกต้อง')
+        self.assertEqual(self.paid(a), [])
+
+    def test_mixed_currency_blocked(self):
+        a, b = self.make_po('1000'), self.make_po('100', 'CNY', '5')
+        resp = self.post([a, b], apply=False)
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(self.paid(a) + self.paid(b), [])
+
+    def test_foreign_currency_needs_rate_and_books_thb(self):
+        from .models import BankTransaction
+        a, b = self.make_po('100', 'CNY', '5'), self.make_po('50', 'CNY', '5')
+        resp = self.post([a, b], {a: '100', b: '20'})
+        self.assertEqual(resp.status_code, 200)  # ไม่กรอกเรท
+        self.assertEqual(self.paid(a), [])
+        self.post([a, b], {a: '100', b: '20'}, exchange_rate='5.1')
+        self.assertEqual(self.paid(a), [self.Decimal('100')])
+        self.assertEqual(self.paid(b), [self.Decimal('20')])
+        self.assertEqual(BankTransaction.objects.get(bank_account=self.bank).amount, self.Decimal('-612'))
+
+    def test_action_label(self):
+        self.make_po('10')
+        resp = self.client.get(self.url)
+        self.assertContains(resp, 'ชำระเงิน (Payment)')
+        self.assertNotContains(resp, 'ชำระครบ/ปิดยอด')
