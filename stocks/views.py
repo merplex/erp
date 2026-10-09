@@ -629,6 +629,11 @@ td.nm{{word-break:break-word}}
     # ─── Cost / Sale report (เรียงตามมูลค่า) ────────────────────────────────
     products = list(Product.objects.filter(is_product=True))
     qty_fn = lambda p: int(p.stock_quantity or 0)
+    if report_type in ('cost_forecast', 'sale_forecast'):
+        # สต๊อกคาดการณ์ = สูตรเดียวกับการ์ดใบที่ 2 ใน LINE และ F1 "คาดการณ์ (Plan)"
+        from .line_webhook import _get_forecast_data
+        forecast = _get_forecast_data(products)
+        qty_fn = lambda p: int(forecast.get(p.pk, {}).get('forecast', 0))
     if report_type == 'cost':
         title = 'ต้นทุนสต๊อก'
         emoji = '💰'
@@ -636,11 +641,14 @@ td.nm{{word-break:break-word}}
         col_label = 'ต้นทุน/ชิ้น'
         price_fn = lambda p: float(p.buy_price or 0)
         grand_label = 'รวมต้นทุน'
+    elif report_type == 'cost_forecast':
+        title = 'ต้นทุนสต๊อก (คาดการณ์)'
+        emoji = '🔮'
+        header_color = '#1a2e4a'
+        col_label = 'ต้นทุน/ชิ้น'
+        price_fn = lambda p: float(p.buy_price or 0)
+        grand_label = 'รวมต้นทุนคาดการณ์'
     elif report_type == 'sale_forecast':
-        # สต๊อกคาดการณ์ = สูตรเดียวกับการ์ดใบที่ 2 ใน LINE และ F1 "คาดการณ์ (Plan)"
-        from .line_webhook import _get_forecast_data
-        forecast = _get_forecast_data(products)
-        qty_fn = lambda p: int(forecast.get(p.pk, {}).get('forecast', 0))
         title = 'มูลค่าสต๊อก (คาดการณ์)'
         emoji = '🔮'
         header_color = '#1a2e4a'

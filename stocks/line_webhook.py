@@ -136,85 +136,47 @@ def _handle_report_menu(reply_token, access_token):
 # ── ต้นทุนสต๊อก ───────────────────────────────────────────────────────────────
 
 def _handle_cost_stock(reply_token, access_token):
-    products = list(Product.objects.filter(is_product=True).select_related('category'))
-    products.sort(key=lambda p: float(p.stock_quantity or 0) * float(p.buy_price or 0), reverse=True)
-
-    grand = sum(float(p.stock_quantity or 0) * float(p.buy_price or 0) for p in products)
-    show = products[:20]
-    rest = len(products) - len(show)
-
-    rows = []
-    for p in show:
-        val = float(p.stock_quantity or 0) * float(p.buy_price or 0)
-        rows.append({
-            'type': 'box', 'layout': 'horizontal', 'margin': 'xs',
-            'contents': [
-                {'type': 'text', 'text': p.name[:22], 'size': 'xs', 'flex': 5, 'wrap': True, 'color': '#333333'},
-                {'type': 'text', 'text': f'{p.stock_quantity:,}', 'size': 'xs', 'flex': 2, 'align': 'end', 'color': '#666666'},
-                {'type': 'text', 'text': f'{val:,.0f}฿', 'size': 'xs', 'flex': 3, 'align': 'end', 'weight': 'bold', 'color': '#111111'},
-            ],
-        })
-
-    body_contents = [
-        {'type': 'box', 'layout': 'horizontal', 'contents': [
-            {'type': 'text', 'text': 'สินค้า', 'size': 'xxs', 'flex': 5, 'color': '#aaaaaa'},
-            {'type': 'text', 'text': 'ชิ้น', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#aaaaaa'},
-            {'type': 'text', 'text': 'ต้นทุน', 'size': 'xxs', 'flex': 3, 'align': 'end', 'color': '#aaaaaa'},
-        ]},
-        {'type': 'separator', 'margin': 'sm'},
-        *rows,
-    ]
-    if rest > 0:
-        body_contents.append({'type': 'text', 'text': f'· · · และอีก {rest} รายการ', 'size': 'xxs', 'color': '#aaaaaa', 'margin': 'sm', 'align': 'center'})
-
-    bubble = {
-        'type': 'bubble', 'size': 'mega',
-        'header': {
-            'type': 'box', 'layout': 'vertical', 'backgroundColor': '#1a3a2e', 'paddingAll': '12px',
-            'contents': [
-                {'type': 'text', 'text': '💰 ต้นทุนสต๊อก', 'weight': 'bold', 'color': '#ffffff'},
-                {'type': 'text', 'text': f'รวม {grand:,.0f} ฿  |  {len(products)} รายการ', 'size': 'xs', 'color': '#aaaaaa'},
-            ],
-        },
-        'body': {'type': 'box', 'layout': 'vertical', 'paddingAll': '12px', 'contents': body_contents},
-        'footer': {
-            'type': 'box', 'layout': 'vertical', 'paddingAll': '8px',
-            'contents': [{'type': 'button', 'style': 'secondary', 'height': 'sm',
-                'action': {'type': 'uri', 'label': '📋 ดูทั้งหมด', 'uri': _report_webview_url('cost')}}],
-        } if rest > 0 and os.environ.get('BASE_URL') else None,
-    }
-    if bubble['footer'] is None:
-        bubble.pop('footer')
-
-    reply_message(reply_token, [{'type': 'flex', 'altText': f'💰 ต้นทุนสต๊อก {grand:,.0f} ฿', 'contents': bubble}], access_token)
+    """2 ใบในแถวเดียว (carousel) เหมือนมูลค่าสต๊อก แต่คิดด้วยราคาทุน (buy_price)"""
+    _reply_stock_value_carousel(
+        reply_token, access_token, lambda p: float(p.buy_price or 0), 'ต้นทุน',
+        ('💰 ต้นทุนสต๊อก', '#1a3a2e', 'cost'), ('🔮 ต้นทุนสต๊อก', '#1a2e4a', 'cost_forecast'))
 
 
 # ── มูลค่าสต๊อก ───────────────────────────────────────────────────────────────
 
 def _handle_sale_stock(reply_token, access_token):
-    """2 ใบในแถวเดียว (carousel): ใบ 1 = สต๊อกปัจจุบัน, ใบ 2 = สต๊อกคาดการณ์ (สูตรเดียวกับ F1 "คาดการณ์ (Plan)")"""
+    _reply_stock_value_carousel(
+        reply_token, access_token, lambda p: float(p.sale_price or 0), 'มูลค่าขาย',
+        ('💲 มูลค่าสต๊อก', '#2e1a3a', 'sale'), ('🔮 มูลค่าสต๊อก', '#1a2e4a', 'sale_forecast'))
+
+
+def _reply_stock_value_carousel(reply_token, access_token, price_fn, value_label, current_cfg, forecast_cfg):
+    """2 ใบในแถวเดียว (carousel): ใบ 1 = สต๊อกปัจจุบัน, ใบ 2 = สต๊อกคาดการณ์ (สูตรเดียวกับ F1 "คาดการณ์ (Plan)")
+    *_cfg = (ชื่อรายงาน, สีหัว, webview type)"""
     products = list(Product.objects.filter(is_product=True).select_related('category'))
     forecast = _get_forecast_data(products)
 
-    current = _sale_value_bubble(
-        '💲 มูลค่าสต๊อก (ปัจจุบัน)', '#2e1a3a', products,
-        lambda p: int(p.stock_quantity or 0), 'sale')
-    projected = _sale_value_bubble(
-        '🔮 มูลค่าสต๊อก (คาดการณ์)', '#1a2e4a', products,
-        lambda p: int(forecast.get(p.pk, {}).get('forecast', 0)), 'sale_forecast',
+    title, color, wv = current_cfg
+    current = _stock_value_bubble(
+        f'{title} (ปัจจุบัน)', color, products,
+        lambda p: int(p.stock_quantity or 0), price_fn, value_label, wv)
+    f_title, f_color, f_wv = forecast_cfg
+    projected = _stock_value_bubble(
+        f'{f_title} (คาดการณ์)', f_color, products,
+        lambda p: int(forecast.get(p.pk, {}).get('forecast', 0)), price_fn, value_label, f_wv,
         subtitle='สต๊อก + PO ค้างรับ − SO ค้างส่ง ± แผนผลิต')
 
-    grand = sum(float(p.stock_quantity or 0) * float(p.sale_price or 0) for p in products)
+    grand = sum(int(p.stock_quantity or 0) * price_fn(p) for p in products)
     reply_message(reply_token, [{
-        'type': 'flex', 'altText': f'💲 มูลค่าสต๊อก {grand:,.0f} ฿',
+        'type': 'flex', 'altText': f'{title} {grand:,.0f} ฿',
         'contents': {'type': 'carousel', 'contents': [current, projected]},
     }], access_token)
 
 
-def _sale_value_bubble(title, header_color, products, qty_fn, webview_type, subtitle=None):
-    """ใบมูลค่าขาย (จำนวน × ราคาขาย) เรียงมากสุด 20 อันดับ — qty_fn เลือกว่าจะใช้สต๊อกปัจจุบันหรือคาดการณ์"""
+def _stock_value_bubble(title, header_color, products, qty_fn, price_fn, value_label, webview_type, subtitle=None):
+    """ใบมูลค่า (จำนวน × ราคา) เรียงมากสุด 20 อันดับ — qty_fn เลือกสต๊อกปัจจุบัน/คาดการณ์, price_fn เลือกราคาทุน/ราคาขาย"""
     def _val(p):
-        return qty_fn(p) * float(p.sale_price or 0)
+        return qty_fn(p) * price_fn(p)
 
     products = sorted(products, key=_val, reverse=True)
     grand = sum(_val(p) for p in products)
@@ -240,7 +202,7 @@ def _sale_value_bubble(title, header_color, products, qty_fn, webview_type, subt
         {'type': 'box', 'layout': 'horizontal', 'contents': [
             {'type': 'text', 'text': 'สินค้า', 'size': 'xxs', 'flex': 5, 'color': '#aaaaaa'},
             {'type': 'text', 'text': 'ชิ้น', 'size': 'xxs', 'flex': 2, 'align': 'end', 'color': '#aaaaaa'},
-            {'type': 'text', 'text': 'มูลค่าขาย', 'size': 'xxs', 'flex': 3, 'align': 'end', 'color': '#aaaaaa'},
+            {'type': 'text', 'text': value_label, 'size': 'xxs', 'flex': 3, 'align': 'end', 'color': '#aaaaaa'},
         ]},
         {'type': 'separator', 'margin': 'sm'},
         *rows,
