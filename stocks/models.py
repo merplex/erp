@@ -1548,7 +1548,9 @@ class SalesDeliveryLog(models.Model):
 
 @receiver(post_delete, sender=SalesDeliveryLog)
 def handle_delivery_deletion(sender, instance, **kwargs):
-    factor = getattr(instance.barcode_obj, 'conversion_factor', 1) or 1
+    # ห้ามใช้ instance.barcode_obj ตรงๆ: ตอนลบสินค้า (CASCADE) บาร์โค้ดถูกลบไปก่อนแล้ว -> DoesNotExist -> 500
+    barcode = ProductBarcode.objects.filter(pk=instance.barcode_obj_id).first() if instance.barcode_obj_id else None
+    factor = getattr(barcode, 'conversion_factor', 1) or 1
     qty_pieces = instance.quantity_shipped * factor
 
     # 1. คืนสต็อกสินค้า (เป็นชิ้น)
@@ -1564,9 +1566,9 @@ def handle_delivery_deletion(sender, instance, **kwargs):
 
     # 2. หักยอดส่งสะสมใน SO (เป็นชิ้นเสมอ ให้ตรงกับ quantity_ordered)
     try:
-        qs = SalesItem.objects.filter(sales_order=instance.sales_order, product=instance.product)
+        qs = SalesItem.objects.filter(sales_order_id=instance.sales_order_id, product_id=instance.product_id)
         if instance.barcode_obj_id:
-            item = qs.filter(barcode_obj=instance.barcode_obj).first() or qs.first()
+            item = qs.filter(barcode_obj_id=instance.barcode_obj_id).first() or qs.first()
         else:
             item = qs.first()
         if item:

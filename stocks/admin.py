@@ -3219,7 +3219,12 @@ class SalesReceiptAdmin(ColumnTotalsMixin, TaxReportActionsMixin, UnfoldModelAdm
         return False
 
     def has_delete_permission(self, request, obj=None):
-        return False
+        # ห้ามลบ "จากหน้าใบเสร็จเอง" เท่านั้น (เหมือน M2) — ถ้าห้ามทุกที่ Django จะนับเป็น perms_needed
+        # ตอนลบเอกสารต้นทาง (ลูกค้า/SO ที่ลบใบเสร็จตาม CASCADE) แล้วตอบ 403
+        url_name = getattr(getattr(request, 'resolver_match', None), 'url_name', '') or ''
+        if url_name.startswith('stocks_salesreceipt_'):
+            return False
+        return super().has_delete_permission(request, obj)
 
     def get_actions_submit_line(self, request, object_id):
         # ใบที่ยกเลิกไปแล้ว ไม่ต้องโชว์ปุ่มยกเลิก
