@@ -187,6 +187,7 @@ UNFOLD = {
     "SCRIPTS": [
         lambda request: static("js/date_range_picker.js"),
         lambda request: static("js/input_hover_scroll.js"),
+        lambda request: static("js/number_input_no_wheel.js"),
     ],
     "SITE_TITLE": "Meebun ERP",
     "SITE_HEADER": "Meebun ERP",
