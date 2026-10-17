@@ -182,7 +182,7 @@ class PurchaseCurrencyTests(TestCase):
         from .models import PurchaseItem, PurchaseOrder
         po_usd = PurchaseOrder.objects.create(supplier=self.th, currency='USD', exchange_rate=self.D('35'))
         PurchaseItem.objects.create(purchase_order=po_usd, product=self.product, quantity_unit=1, unit_price=0)
-        self.assertEqual(po_usd.items.get().unit_price, self.D('1.43'))  # 50 บาท / 35
+        self.assertEqual(po_usd.items.get().unit_price, self.D('1.4286'))  # 50 บาท / 35
 
     def test_currency_warnings_and_missing_rate(self):
         from .admin import PurchaseOrderAdminForm

@@ -405,7 +405,7 @@ def purchase_quotation_price_api(request):
             suggested_price = existing_price
         else:
             price_thb = ps.price_thb if existing_price else (product.buy_price or Decimal('0'))
-            suggested_price = (price_thb / rate).quantize(Decimal('0.01'))
+            suggested_price = (price_thb / rate).quantize(Decimal('0.0001'))
 
     return JsonResponse({
         'existing_price': str(existing_price),

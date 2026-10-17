@@ -947,7 +947,8 @@ class PurchaseItem(models.Model):
     quantity_unit = models.PositiveIntegerField(default=1, verbose_name="จำนวนที่สั่ง (ตามหน่วย)")
     quantity_ordered = models.PositiveIntegerField(verbose_name="จำนวนรวม (ชิ้น)")
     quantity_received = models.PositiveIntegerField(default=0, verbose_name="รับสะสม")
-    unit_price = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name="ราคา/หน่วย")
+    # 4 ตำแหน่งให้ตรงกับต้นทุนสินค้า/ทุนจาก Supplier (0111_cost_4_decimals)
+    unit_price = models.DecimalField(max_digits=14, decimal_places=4, default=0, verbose_name="ราคา/หน่วย")
     
     @property
     def total_paid(self):
@@ -988,10 +989,10 @@ class PurchaseItem(models.Model):
                     if match.currency == po.currency:
                         self.unit_price = match.latest_buy_price # เจอ! ใช้ราคาจาก Supplier (สกุลเดียวกับใบ)
                     else:  # คนละสกุล -> แปลงเป็นบาทแล้วเป็นสกุลของใบด้วยเรทของใบ
-                        self.unit_price = round_money(match.price_thb / (po.exchange_rate or 1))
+                        self.unit_price = (match.price_thb / (po.exchange_rate or 1)).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
                 else:
                     # ไม่เจอ ใช้ราคากลาง (บาท) แปลงเป็นสกุลของใบ
-                    self.unit_price = round_money((self.product.buy_price or 0) / (po.exchange_rate or 1))
+                    self.unit_price = (Decimal(self.product.buy_price or 0) / (po.exchange_rate or 1)).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
             except:
                 pass
         super().save(*args, **kwargs)
