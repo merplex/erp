@@ -2869,6 +2869,15 @@ class BankTransactionCategory(models.Model):
         return self.name
 
 
+class BankPartyHidden(models.Model):
+    """ชื่อ บริษัท/บุคคล ที่ผู้ใช้กด x ลบออกจากรายการแนะนำ (M2) — ถ้าบันทึกชื่อนี้ใหม่หลัง hidden_at จะกลับมาขึ้นอีก"""
+    name = models.CharField(max_length=255, unique=True)
+    hidden_at = models.DateTimeField(default=timezone.now)
+
+    def __str__(self):
+        return self.name
+
+
 class BankTransaction(models.Model):
     SOURCE_CHOICES = [
         ('MANUAL', 'บันทึกเอง'),

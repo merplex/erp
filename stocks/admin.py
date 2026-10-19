@@ -7714,7 +7714,34 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
                      'description')
 
     class Media:
-        js = ('js/admin_sum_selected.js', 'js/amount_comma_preview.js')
+        js = ('js/admin_sum_selected.js', 'js/amount_comma_preview.js', 'js/bank_party_suggest.js')
+
+    def party_suggest_view(self, request):
+        # ช่อง บริษัท/บุคคล: รายชื่อที่เคยพิมพ์ (รายการบันทึกเอง) เรียงแบบช่อง URL ของ browser — ใช้บ่อย+ล่าสุดขึ้นก่อน
+        # POST hide=<ชื่อ> = กด x ลบชื่อออกจากรายการแนะนำ (ถ้าบันทึกชื่อนี้อีกภายหลังจะกลับมาขึ้นเอง)
+        from django.http import JsonResponse
+        from django.db.models import Count
+        if not self.has_view_or_change_permission(request):
+            return JsonResponse({'error': 'forbidden'}, status=403)
+        if request.method == 'POST':
+            name = (request.POST.get('hide') or '').strip()
+            if name:
+                BankPartyHidden.objects.update_or_create(name=name, defaults={'hidden_at': timezone.now()})
+            return JsonResponse({'ok': True})
+        hidden = dict(BankPartyHidden.objects.values_list('name', 'hidden_at'))
+        now = timezone.now()
+        rows = []
+        for r in (BankTransaction.objects.filter(source_type='MANUAL').exclude(party='')
+                  .values('party').annotate(n=Count('id'), last=Max('created_at'))):
+            name = r['party'].strip()
+            if not name or (name in hidden and r['last'] <= hidden[name]):
+                continue
+            # frecency: จำนวนครั้งที่ใช้ ลดน้ำหนักตามอายุครั้งล่าสุด (ครึ่งหนึ่งทุก ~30 วัน)
+            age_days = max((now - r['last']).total_seconds() / 86400, 0)
+            rows.append((r['n'] * 0.5 ** (age_days / 30), name))
+        rows.sort(reverse=True)
+        names = list(dict.fromkeys(name for _, name in rows))[:200]
+        return JsonResponse({'names': names})
 
     def fast_column_totals(self, queryset, fields):
         # กล่องสรุปยอด: เงินเข้า/เงินออก รวมด้วย DB ทีเดียว
@@ -7926,7 +7953,9 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
 
     def get_urls(self):
         return [path('batch/<str:ref>/', self.admin_site.admin_view(self.batch_view),
-                     name='stocks_banktransaction_batch')] + super().get_urls()
+                     name='stocks_banktransaction_batch'),
+                path('party-suggest/', self.admin_site.admin_view(self.party_suggest_view),
+                     name='stocks_banktransaction_party_suggest')] + super().get_urls()
 
     def batch_view(self, request, ref):
         if not self.has_view_or_change_permission(request):
