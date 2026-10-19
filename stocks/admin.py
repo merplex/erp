@@ -984,8 +984,9 @@ class SalesItemInline(UnfoldTabularInline):
     extra = 1
 
     # 🎯 กล่อง "ราคาขาย" แสดงแค่ ~5 หลักก็พอ ไม่ต้องยืดเต็มคอลัมน์
+    # step 0.0001 ให้ตรงกับ decimal_places=4 ของ sale_price (ไม่งั้น browser ไม่ยอมให้กรอก 4 ตำแหน่ง)
     formfield_overrides = {
-        models.DecimalField: {'widget': forms.NumberInput(attrs={'style': 'width: 90px;'})},
+        models.DecimalField: {'widget': forms.NumberInput(attrs={'style': 'width: 90px;', 'step': '0.0001'})},
     }
 
     def _is_locked(self, so):

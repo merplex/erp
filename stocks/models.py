@@ -1359,10 +1359,11 @@ class SalesItem(models.Model):
     is_produced = models.BooleanField(default=False, editable=False) # เก็บไว้หลังบ้านกันสร้างซ้ำ
 
 # ✅ 1. เพิ่มฟิลด์จริงลงฐานข้อมูล (เพื่อใช้เก็บราคาที่อาจจะโดนแก้ไข)
+    # 4 ตำแหน่งให้ตรงกับราคาสัญญา (contract_price) ที่เติมให้อัตโนมัติ
     sale_price = models.DecimalField(
-        max_digits=10, 
-        decimal_places=2, 
-        default=0.00, 
+        max_digits=14, 
+        decimal_places=4, 
+        default=0, 
         verbose_name="ราคาขาย"
     )
 
@@ -1798,7 +1799,8 @@ class CreditNoteItem(models.Model):
     credit_note = models.ForeignKey(CreditNote, on_delete=models.CASCADE, related_name='items')
     sales_item = models.ForeignKey('SalesItem', on_delete=models.PROTECT, related_name='credit_note_items', verbose_name="รายการในใบสั่งขาย")
     quantity = models.PositiveIntegerField(verbose_name="จำนวนลดหนี้")
-    unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="ราคา/หน่วย")
+    # 4 ตำแหน่งตาม SalesItem.sale_price ที่คัดลอกมา
+    unit_price = models.DecimalField(max_digits=14, decimal_places=4, default=0, verbose_name="ราคา/หน่วย")
     amount = models.DecimalField(max_digits=14, decimal_places=2, default=0, verbose_name="มูลค่า")
 
     class Meta:
