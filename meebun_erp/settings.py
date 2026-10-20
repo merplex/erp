@@ -292,3 +292,12 @@ UNFOLD = {
         ],
     },
 }
+
+# DEBUG = False -> Django ส่ง error ไปอีเมล admin อย่างเดียว (ไม่มี ADMINS = ไม่เห็นที่ไหนเลย)
+# พิมพ์ traceback ของ Server Error (500) ออก stderr ให้ดูได้ใน log ของ Railway
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "loggers": {"django.request": {"handlers": ["console"], "level": "ERROR", "propagate": False}},
+}
