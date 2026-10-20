@@ -12,7 +12,7 @@
             <th style="padding:8px;text-align:right;">ยอดที่จะขาย</th>
             <th style="padding:8px;text-align:right;">เบิกล่วงหน้า</th>
             <th style="padding:8px;text-align:right;">ค่าธรรมเนียม</th>
-            <th style="padding:8px;text-align:right;" title="หักดอกเบี้ยทันที: ประมาณจากวันเงินเบิกเข้าเริ่มต้นถึงวันลูกค้าจ่าย">ดอกเบี้ย (หักทันที)</th>
+            <th style="padding:8px;text-align:right;" title="หักดอกเบี้ยทันที: คิดจากวันเงินเบิกเข้าที่เลือกด้านล่างถึงวันลูกค้าจ่าย">ดอกเบี้ย (หักทันที)</th>
             <th style="padding:8px;text-align:right;">ได้รับวันเงินเบิกเข้า</th>
         </tr></thead>
         <tbody>
@@ -41,8 +41,16 @@
     <form method="post">{% csrf_token %}
         {% for pk in selected_ids %}<input type="hidden" name="{{ action_checkbox_name }}" value="{{ pk }}">{% endfor %}
         <input type="hidden" name="action" value="{{ action_name }}">
-        <input type="hidden" name="apply" value="1">
+        <input type="hidden" name="apply" value="1" id="factoring-apply">
         <div style="margin:16px 0;">{{ form.as_p }}</div>
+        <script>
+            // เปลี่ยนวันเงินเบิกเข้า -> โหลดหน้านี้ใหม่ (ยังไม่บันทึก) ให้ดอกเบี้ยในตารางคิดตามวันที่เลือก
+            document.getElementById('id_advance_date').addEventListener('change', function () {
+                if (!this.value) return;
+                document.getElementById('factoring-apply').remove();
+                this.form.submit();
+            });
+        </script>
         <button type="submit" style="background:#2563eb;color:#fff;border:none;padding:10px 20px;border-radius:4px;cursor:pointer;">✅ ยืนยันขายแฟคตอริ่ง</button>
         <a href="#" onclick="window.history.back();" style="margin-left:10px;color:#666;">ยกเลิก</a>
     </form>

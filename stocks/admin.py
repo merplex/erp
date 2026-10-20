@@ -2166,8 +2166,10 @@ class FactoringDateForm(forms.Form):
 
 def factoring_confirm(modeladmin, request, pairs, action_name, selected_ids):
     """หน้ายืนยันขายแฟคตอริ่ง (เลือกวันเงินเบิกเข้า) — pairs = [(order, receipt หรือ None)]"""
-    form = FactoringDateForm(request.POST if 'apply' in request.POST else None)
-    if 'apply' in request.POST and form.is_valid():
+    # เปลี่ยนวันเงินเบิกเข้าในหน้านี้ -> ส่งฟอร์มกลับมา (ไม่มี apply) เพื่อคำนวณดอกเบี้ยตัวอย่างใหม่ตามวันที่เลือก
+    form = FactoringDateForm(request.POST if 'advance_date' in request.POST else None)
+    valid = form.is_bound and form.is_valid()
+    if 'apply' in request.POST and valid:
         created = 0
         for order, receipt in pairs:
             with transaction.atomic():
@@ -2186,10 +2188,10 @@ def factoring_confirm(modeladmin, request, pairs, action_name, selected_ids):
         is_fx = account is not None and account.account_type == 'FACTORING'
         advance = round_money(amount * (account.advance_percent or 0) / 100) if is_fx else Decimal(0)
         fee = factoring_fee_amount(amount, account.factoring_fee_percent) if is_fx else Decimal(0)
-        # หักดอกเบี้ยทันที: ประมาณจากวันเงินเบิกเข้าเริ่มต้น (วันที่เลือกจริงอาจต่างไป) ถึงวันลูกค้าจ่าย
+        # หักดอกเบี้ยทันที: วันเงินเบิกเข้าที่เลือกในฟอร์ม (ยังไม่เลือก = ค่าเริ่มต้น) ถึงวันลูกค้าจ่าย
         interest = Decimal(0)
         if is_fx and account.factoring_interest_timing != 'LATER':
-            start = next_business_day()
+            start = form.cleaned_data['advance_date'] if valid else next_business_day()
             paid = max(factoring_paid_date(order, receipt), start)
             interest, _days = factoring_interest_amount(advance, account.factoring_interest_rate, start, paid)
         rows.append({'doc': receipt.receipt_number if receipt else order.so_number, 'customer': order.customer,
