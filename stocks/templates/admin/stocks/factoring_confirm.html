@@ -1,4 +1,5 @@
 {% extends "admin/base_site.html" %}
+{% load l10n %}
 {% block content %}
 <div style="padding:20px;max-width:1000px;">
     <h2>{{ title }} ({{ rows|length }} รายการ)</h2>
@@ -39,7 +40,7 @@
         </tbody>
     </table>
     <form method="post">{% csrf_token %}
-        {% for pk in selected_ids %}<input type="hidden" name="{{ action_checkbox_name }}" value="{{ pk }}">{% endfor %}
+        {% for pk in selected_ids %}<input type="hidden" name="{{ action_checkbox_name }}" value="{{ pk|unlocalize }}">{% endfor %}
         <input type="hidden" name="action" value="{{ action_name }}">
         <input type="hidden" name="apply" value="1" id="factoring-apply">
         <div style="margin:16px 0;">{{ form.as_p }}</div>

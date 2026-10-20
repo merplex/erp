@@ -82,7 +82,7 @@
                 {% for item in pending_items %}
                 <tr style="border-bottom:1px solid #eef2f6;">
                     <td style="padding:6px;">
-                        <input type="checkbox" class="ship-item-check" name="ship_checked_{{ item.barcode_id }}" checked>
+                        <input type="checkbox" class="ship-item-check" name="ship_checked_{{ item.barcode_id|unlocalize }}" checked>
                     </td>
                     <td style="padding:6px;">{{ item.code }}</td>
                     <td style="padding:6px;">{{ item.product_name }} ({{ item.unit_name }})</td>
@@ -92,7 +92,7 @@
                         type="number" — ค่าที่มีคอมม่า (เช่น "1,000") ไม่ผ่าน HTML5 number validation
                         เบราว์เซอร์จะเคลียร์ช่องเป็นค่าว่างทันทีสำหรับจำนวนที่ตั้งแต่ 1,000 ขึ้นไป
                         {% endcomment %}
-                        <input type="number" name="ship_qty_{{ item.barcode_id }}" value="{{ item.qty|unlocalize }}" min="0"
+                        <input type="number" name="ship_qty_{{ item.barcode_id|unlocalize }}" value="{{ item.qty|unlocalize }}" min="0"
                                style="width:100px;border:1px solid #9ca3af;border-radius:4px;padding:4px 8px;text-align:right;">
                     </td>
                 </tr>

@@ -1,4 +1,5 @@
 {% extends "admin/base_site.html" %}
+{% load l10n %}
 {% load i18n static %}
 
 {% block extrahead %}
@@ -121,7 +122,7 @@
                     <select name="category" id="stp-select-category">
                         <option value="">ทั้งหมด</option>
                         {% for c in categories %}
-                        <option value="{{ c.pk }}" {% if f_category == c.pk|stringformat:"s" %}selected{% endif %}>{{ c.name }}</option>
+                        <option value="{{ c.pk|unlocalize }}" {% if f_category == c.pk|stringformat:"s" %}selected{% endif %}>{{ c.name }}</option>
                         {% endfor %}
                     </select>
                 </label>
@@ -137,7 +138,7 @@
                     <select name="supplier" id="stp-select-supplier">
                         <option value="">ทั้งหมด</option>
                         {% for s in suppliers %}
-                        <option value="{{ s.pk }}" {% if f_supplier == s.pk|stringformat:"s" %}selected{% endif %}>{{ s.company_name }}</option>
+                        <option value="{{ s.pk|unlocalize }}" {% if f_supplier == s.pk|stringformat:"s" %}selected{% endif %}>{{ s.company_name }}</option>
                         {% endfor %}
                     </select>
                 </label>
@@ -145,7 +146,7 @@
                     <input type="text" class="stp-search-box" data-filter-target="stp-select-tag" placeholder="พิมพ์ค้นหา...">
                     <select name="tag" multiple id="stp-select-tag">
                         {% for t in tags %}
-                        <option value="{{ t.pk }}" {% if t.pk|stringformat:"s" in f_tag %}selected{% endif %}>{{ t.name }}</option>
+                        <option value="{{ t.pk|unlocalize }}" {% if t.pk|stringformat:"s" in f_tag %}selected{% endif %}>{{ t.name }}</option>
                         {% endfor %}
                     </select>
                 </label>

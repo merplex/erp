@@ -1,4 +1,5 @@
 {% extends "admin/base_site.html" %}
+{% load l10n %}
 {% block content %}
 <div style="padding:20px;max-width:1100px;">
     <h2>{{ title }} ({{ rows|length }} ใบ)</h2>
@@ -32,7 +33,7 @@
                 <td style="padding:8px;text-align:right;">{{ r.grand_total|floatformat:"2g" }}</td>
                 <td style="padding:8px;text-align:right;">{{ r.outstanding|floatformat:"2g" }}</td>
                 <td style="padding:8px;text-align:right;">
-                    <input type="text" inputmode="decimal" name="amount_{{ r.pk }}" class="receive-amount"
+                    <input type="text" inputmode="decimal" name="amount_{{ r.pk|unlocalize }}" class="receive-amount"
                            data-max="{{ r.outstanding|stringformat:'s' }}"
                            value="{% if r.receive_input is not None %}{{ r.receive_input }}{% else %}{{ r.outstanding|floatformat:'2' }}{% endif %}"
                            style="width:120px;text-align:right;padding:4px 6px;border:1px solid {% if r.amount_error %}#dc2626{% else %}#cbd5e1{% endif %};border-radius:4px;">
@@ -59,7 +60,7 @@
     </div>
     {% endif %}
     {% if rows %}
-        {% for pk in selected_ids %}<input type="hidden" name="{{ action_checkbox_name }}" value="{{ pk }}">{% endfor %}
+        {% for pk in selected_ids %}<input type="hidden" name="{{ action_checkbox_name }}" value="{{ pk|unlocalize }}">{% endfor %}
         <input type="hidden" name="action" value="{{ action_name }}">
         <input type="hidden" name="apply" value="1">
         <div style="margin:16px 0;">{{ form.as_p }}</div>
