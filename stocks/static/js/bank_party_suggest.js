@@ -16,7 +16,7 @@
 
     function injectStyle() {
         var css =
-            '.party-suggest{position:absolute;left:0;right:0;top:100%;margin-top:2px;z-index:50;max-height:320px;' +
+            '.party-suggest{position:fixed;z-index:1000;max-height:320px;' +
             'overflow-y:auto;background:#fff;border:1px solid #d1d5db;border-radius:6px;' +
             'box-shadow:0 6px 16px rgba(0,0,0,.12);font-size:14px;}' +
             '.party-suggest-item{display:flex;align-items:center;gap:8px;padding:6px 6px 6px 10px;cursor:pointer;color:#111827;}' +
@@ -46,12 +46,31 @@
 
         injectStyle();
         input.setAttribute('autocomplete', 'off');
-        var wrap = input.parentNode;
-        if (getComputedStyle(wrap).position === 'static') wrap.style.position = 'relative';
+        // ลอยไว้ที่ body แบบ fixed — ถ้าอยู่ใน fieldset จะโดนกรอบ (overflow) ตัดเหลือ 2 บรรทัด
         var box = document.createElement('div');
         box.className = 'party-suggest';
         box.style.display = 'none';
-        wrap.appendChild(box);
+        document.body.appendChild(box);
+
+        function place() {
+            if (box.style.display === 'none') return;
+            var r = input.getBoundingClientRect();
+            var below = window.innerHeight - r.bottom - 8, above = r.top - 8;
+            box.style.left = r.left + 'px';
+            box.style.width = r.width + 'px';
+            // ข้างล่างที่ว่างไม่พอ และข้างบนว่างกว่า = เปิดขึ้นด้านบนแทน
+            if (below < Math.min(box.scrollHeight, 320) && above > below) {
+                box.style.maxHeight = Math.min(320, above) + 'px';
+                box.style.top = '';
+                box.style.bottom = (window.innerHeight - r.top + 2) + 'px';
+            } else {
+                box.style.maxHeight = Math.min(320, Math.max(below, 120)) + 'px';
+                box.style.bottom = '';
+                box.style.top = (r.bottom + 2) + 'px';
+            }
+        }
+        window.addEventListener('resize', place);
+        window.addEventListener('scroll', place, true);
 
         function load(cb) {
             if (names) return cb();
@@ -120,6 +139,7 @@
                 box.appendChild(item);
             });
             box.style.display = '';
+            place();
         }
 
         function pick(name) {
