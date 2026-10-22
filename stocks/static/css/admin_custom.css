@@ -122,6 +122,12 @@ input.vDateField[type="date"],
     width: 100%;
     padding-right: 8px !important;
 }
+/* Unfold ห่อช่องวันที่ด้วย div (min-w-56) และวางไอคอนปฏิทินชิดขวาของ div นั้น
+   ช่องกรอกแคบกว่า div (เช่น ตาราง inline รับเงินต้นใน M3) -> ไอคอนล้นออกนอกกรอบ: ให้ช่องเต็ม div */
+div.relative > input.vDateField {
+    max-width: none !important;
+    width: 100% !important;
+}
 input.vTimeField {
     max-width: 90px !important;
 }
