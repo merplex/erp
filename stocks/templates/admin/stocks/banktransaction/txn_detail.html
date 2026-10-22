@@ -23,12 +23,12 @@
             <div><input type="text" id="charge_fee" name="charge_fee" inputmode="decimal" style="width:140px;text-align:right;"
                         value="{{ values.charge_fee|floatformat:"2" }}" placeholder="0.00" {% if not can_edit %}disabled{% endif %}></div>
 
-            <label for="charge_other_label">ค่าอื่นๆ</label>
+            <label for="charge_other">ค่าอื่นๆ</label>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                <input type="text" id="charge_other_label" name="charge_other_label" maxlength="100" style="flex:1;min-width:160px;"
-                       value="{{ values.charge_other_label }}" placeholder="ระบุว่าเป็นค่าอะไร" {% if not can_edit %}disabled{% endif %}>
-                <input type="text" name="charge_other" inputmode="decimal" style="width:140px;text-align:right;"
-                       value="{{ values.charge_other|floatformat:"2" }}" placeholder="0.00" aria-label="จำนวนเงินค่าอื่นๆ"
+                <input type="text" id="charge_other" name="charge_other" inputmode="decimal" style="width:140px;text-align:right;"
+                       value="{{ values.charge_other|floatformat:"2" }}" placeholder="0.00" {% if not can_edit %}disabled{% endif %}>
+                <input type="text" name="charge_other_label" maxlength="100" style="flex:1;min-width:160px;"
+                       value="{{ values.charge_other_label }}" placeholder="ระบุว่าเป็นค่าอะไร" aria-label="ค่าอื่นๆ เป็นค่าอะไร"
                        {% if not can_edit %}disabled{% endif %}>
             </div>
 
