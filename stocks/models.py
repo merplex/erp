@@ -3604,6 +3604,14 @@ def factoring_interest_amount(advance, rate, advance_date, paid_date):
 def create_factoring_payments(order, receipt=None, advance_date=None):
     """ขายแฟคตอริ่งทั้ง SO (receipt=None: S2/A4) หรือเฉพาะใบ IV ที่เลือก (A1/A2) — คืน (สร้างแล้วหรือไม่, ข้อความ)
     ราย IV: ยอด = ยอดค้างของใบนั้น, วันลูกค้าจ่าย = วันครบกำหนดของใบ, แถวรับเงินผูกใบ + เลข IV ในหมายเหตุ"""
+    from django.db import transaction
+    with transaction.atomic():
+        # ล็อกใบสั่งขายไว้จนจบ: กดยืนยันซ้ำ/ส่งฟอร์มซ้อนกัน (เน็ตช้า) -> คำขอที่ 2 รอ แล้วเห็นว่าขายไปแล้ว ไม่สร้างซ้ำ
+        SalesOrder.objects.select_for_update().filter(pk=order.pk).exists()
+        return _create_factoring_payments(order, receipt, advance_date)
+
+
+def _create_factoring_payments(order, receipt, advance_date):
     customer = order.customer
     account = customer.receiving_account if customer else None
     label = receipt.receipt_number if receipt is not None else order.so_number

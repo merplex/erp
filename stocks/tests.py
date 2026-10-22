@@ -538,3 +538,17 @@ class BankTxnChargeTests(TestCase):
         self.assertContains(resp, 'ไม่ได้ขายแฟคตอริ่ง')
         self.detail(txn, charge_fee='12')
         self.assertEqual(self.charges(txn), [('FEE', self.D('-12'))])
+
+    def test_factoring_sell_twice_does_not_duplicate(self):
+        # กดยืนยันขายแฟคตอริ่งซ้ำ (ฟอร์มถูกส่ง 2 ครั้ง) -> ครั้งที่ 2 ไม่สร้างแถวเบิก/ส่วนที่เหลือซ้ำ
+        from .models import BankAccount, SalesPayment
+        fx = BankAccount.objects.create(name='FX', account_type='FACTORING', linked_account=self.bank,
+                                        advance_percent=80, factoring_interest_rate=0)
+        Customer.objects.filter(pk=self.customer.pk).update(receiving_account=fx)
+        SalesReceipt.objects.filter(pk=self.receipt.pk).update(grand_total=self.D('1000'))
+        data = {'action': 'sell_factoring_by_receipt', '_selected_action': [self.receipt.pk], 'apply': '1',
+                'advance_date': '2026-10-16'}
+        for _ in range(2):
+            self.assertEqual(self.client.post('/admin/stocks/salesreceipt/', data).status_code, 302)
+        roles = sorted(SalesPayment.objects.filter(receipt=self.receipt).values_list('factoring_role', flat=True))
+        self.assertEqual(roles, ['ADVANCE', 'REMAINDER'])

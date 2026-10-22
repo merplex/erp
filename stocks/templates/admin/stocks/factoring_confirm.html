@@ -52,6 +52,15 @@
                 this.form.submit();
             });
         </script>
+        <script>
+            // กดยืนยันแล้วปิดปุ่ม กันกดซ้ำตอนเว็บตอบช้า (ฝั่งเซิร์ฟเวอร์ก็ล็อกกันขายซ้ำอีกชั้น)
+            document.currentScript.closest('form').addEventListener('submit', function () {
+                var apply = document.getElementById('factoring-apply');
+                var button = this.querySelector('button[type=submit]');
+                if (!apply || !button) return;
+                setTimeout(function () { button.disabled = true; button.textContent = 'กำลังบันทึก...'; }, 0);
+            });
+        </script>
         <button type="submit" style="background:#2563eb;color:#fff;border:none;padding:10px 20px;border-radius:4px;cursor:pointer;">✅ ยืนยันขายแฟคตอริ่ง</button>
         <a href="#" onclick="window.history.back();" style="margin-left:10px;color:#666;">ยกเลิก</a>
     </form>
