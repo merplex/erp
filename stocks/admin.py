@@ -8274,6 +8274,15 @@ class LoanAdminForm(forms.ModelForm):
         model = Loan
         fields = '__all__'
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        field = self.fields.get('installment_amount')
+        if field is not None:
+            # ช่องสั้นลง + ตัวเลขมีคอมมาทางขวาของช่อง (js/amount_comma_preview.js — แค่แสดง)
+            field.widget.attrs.update({'data-comma-preview': '1', 'style': 'min-width:0;width:12rem;'})
+            if self.instance.installment_amount is not None:
+                self.initial['installment_amount'] = round_money(self.instance.installment_amount)  # แสดง 2 ตำแหน่ง
+
 
 @admin.register(Loan)
 class LoanAdmin(UnfoldModelAdmin):

@@ -43,8 +43,12 @@ document.addEventListener('DOMContentLoaded', function() {
         row.style.cssText = 'display:flex;align-items:center;gap:8px;';
         input.parentNode.insertBefore(row, input);
         row.appendChild(input);
-        input.style.flex = '1 1 auto';
-        input.style.minWidth = '8rem';
+        if (input.style.width) {
+            input.style.flex = '0 0 auto';  // ช่องที่กำหนดความกว้างไว้ (เช่น ยอดผ่อนต่องวด) คงขนาดเดิม
+        } else {
+            input.style.flex = '1 1 auto';
+            input.style.minWidth = '8rem';
+        }
         const preview = document.createElement('span');
         preview.className = 'comma-preview';
         preview.style.cssText = 'font-size:13px;font-weight:600;color:#475569;white-space:nowrap;';
