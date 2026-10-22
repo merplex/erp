@@ -8170,13 +8170,24 @@ class LoanDrawdownFormSet(forms.BaseInlineFormSet):
 
 
 class PlaceholderInlineMixin:
-    """ตาราง inline บนมือถือมองไม่เห็นหัวคอลัมน์ -> ใส่คำอธิบายในช่อง (placeholder) ว่าช่องนี้กรอกอะไร"""
+    """ตาราง inline บนมือถือมองไม่เห็นหัวคอลัมน์ -> ใส่คำอธิบายในช่อง (placeholder) ว่าช่องนี้กรอกอะไร
+    widths: ช่องที่กรอกสั้นๆ (เช่น เลขงวด) ย่อให้พอดี placeholder / comma_preview: แสดงตัวเลขมีคอมมาใต้ช่อง
+    (js/amount_comma_preview.js — แค่แสดง ไม่ส่งไปบันทึก)"""
     placeholders = {}
+    widths = {}
+    comma_preview = ()
 
     def formfield_for_dbfield(self, db_field, request, **kwargs):
         field = super().formfield_for_dbfield(db_field, request, **kwargs)
-        if field is not None and db_field.name in self.placeholders:
-            field.widget.attrs['placeholder'] = self.placeholders[db_field.name]
+        if field is None:
+            return field
+        attrs = field.widget.attrs
+        if db_field.name in self.placeholders:
+            attrs['placeholder'] = self.placeholders[db_field.name]
+        if db_field.name in self.widths:
+            attrs['style'] = f"min-width:0;width:{self.widths[db_field.name]};"
+        if db_field.name in self.comma_preview:
+            attrs['data-comma-preview'] = '1'
         return field
 
 
@@ -8187,14 +8198,33 @@ class LoanDrawdownInline(PlaceholderInlineMixin, UnfoldTabularInline):
     fields = ('draw_date', 'amount', 'notes')
     placeholders = {'draw_date': "วันที่รับเงินต้น", 'amount': "ยอดเงินต้นที่รับ (บาท)",
                     'notes': "หมายเหตุ (ถ้ามี)"}
+    comma_preview = ('amount',)
+
+
+class LoanRateForm(forms.ModelForm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance.pk and self.instance.annual_rate is not None:
+            self.initial['annual_rate'] = self.instance.annual_rate.quantize(Decimal('0.001'))  # แสดง 3 ตำแหน่ง
 
 
 class LoanRateInline(PlaceholderInlineMixin, UnfoldTabularInline):
     model = LoanRate
+    form = LoanRateForm
     extra = 1
     fields = ('from_period', 'from_date', 'annual_rate')
-    placeholders = {'from_period': "เริ่มงวดที่ (เช่น 1)", 'from_date': "หรือ เริ่มวันที่",
-                    'annual_rate': "ดอกเบี้ย % ต่อปี (เช่น 5.25)"}
+    placeholders = {'from_period': "งวดที่ เช่น 1", 'from_date': "หรือ เริ่มวันที่",
+                    'annual_rate': "% ต่อปี เช่น 5.250"}
+    widths = {'from_period': '7.5rem', 'annual_rate': '10rem'}
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        field = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if db_field.name == 'annual_rate':
+            # อัตราดอกเบี้ยกรอกได้ 3 ตำแหน่ง (เก็บใน DB 4 ตำแหน่ง)
+            field.widget.attrs['step'] = '0.001'
+            field = forms.DecimalField(max_digits=8, decimal_places=3, min_value=0, label=field.label,
+                                       required=field.required, widget=field.widget, help_text=field.help_text)
+        return field
 
 
 class LoanInstallmentInline(UnfoldTabularInline):
@@ -8239,6 +8269,9 @@ class LoanAdminForm(forms.ModelForm):
 @admin.register(Loan)
 class LoanAdmin(UnfoldModelAdmin):
     form = LoanAdminForm
+
+    class Media:
+        js = ('js/amount_comma_preview.js',)
     list_display = ('name', 'lender', 'bank_account', 'get_principal', 'loan_date', 'term_months',
                     'get_outstanding', 'get_next_due', 'is_active')
     list_filter = ('is_active', 'bank_account')
