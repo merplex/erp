@@ -8201,6 +8201,15 @@ class LoanDrawdownInline(PlaceholderInlineMixin, UnfoldTabularInline):
     comma_preview = ('amount',)
 
 
+class RateDecimalField(forms.DecimalField):
+    """อัตราดอกเบี้ยทศนิยมไม่เกิน 3 ตำแหน่ง — ศูนย์ท้าย (5.0000 จากหน้าที่เปิดค้างไว้ก่อนแก้) ไม่นับ"""
+
+    def validate(self, value):
+        super().validate(value)
+        if value is not None and value != value.quantize(Decimal('0.001')):
+            raise ValidationError("อัตราดอกเบี้ยทศนิยมได้ไม่เกิน 3 ตำแหน่ง")
+
+
 class LoanRateForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -8222,8 +8231,8 @@ class LoanRateInline(PlaceholderInlineMixin, UnfoldTabularInline):
         if db_field.name == 'annual_rate':
             # อัตราดอกเบี้ยกรอกได้ 3 ตำแหน่ง (เก็บใน DB 4 ตำแหน่ง)
             field.widget.attrs['step'] = '0.001'
-            field = forms.DecimalField(max_digits=8, decimal_places=3, min_value=0, label=field.label,
-                                       required=field.required, widget=field.widget, help_text=field.help_text)
+            field = RateDecimalField(min_value=0, max_value=Decimal('9999.999'), label=field.label,
+                                     required=field.required, widget=field.widget, help_text=field.help_text)
         return field
 
 
