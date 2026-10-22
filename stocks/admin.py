@@ -7595,12 +7595,16 @@ class ManualBankTransactionForm(forms.ModelForm):
 
     class Meta:
         model = BankTransaction
-        fields = ('bank_account', 'txn_date', 'direction', 'amount', 'transfer_account', 'category', 'reference',
-                  'party', 'description')
+        fields = ('bank_account', 'txn_date', 'direction', 'amount', 'charge_fee', 'transfer_account', 'category',
+                  'reference', 'party', 'description')
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['amount'].label = "จำนวนเงิน"
+        self.fields['charge_fee'].required = False
+        self.fields['charge_fee'].help_text = ("ว่าง/0 = ไม่มี — มียอดจะลงเป็นเงินออกอีกบรรทัด "
+                                               "(เงินเข้าโดนหัก / เงินออกจ่ายเพิ่ม)")
+        self.initial['charge_fee'] = round_money(self.instance.charge_fee)  # แสดง 0.00
         self.fields['bank_account'].required = True
         if self.instance.pk and self.instance.amount is not None:
             self.initial['direction'] = 'IN' if self.instance.amount > 0 else 'OUT'
@@ -7614,6 +7618,14 @@ class ManualBankTransactionForm(forms.ModelForm):
         if amount is not None and amount <= 0:
             raise ValidationError("กรอกจำนวนเงินมากกว่า 0 (เลือกเงินเข้า/เงินออกที่ช่องประเภท)")
         return amount
+
+    def clean_charge_fee(self):
+        fee = self.cleaned_data.get('charge_fee') or Decimal(0)
+        if fee < 0:
+            raise ValidationError("ติดลบไม่ได้")
+        if fee != fee.quantize(Decimal('0.01')):
+            raise ValidationError("ทศนิยมได้ 2 ตำแหน่ง")
+        return fee
 
     def clean(self):
         cleaned = super().clean()
@@ -7770,7 +7782,7 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
                  .values('bank_account').annotate(s=Sum('amount')).values('s'))
         return super().get_queryset(request).select_related(
             'bank_account', 'category', 'sales_payment', 'purchase_payment', 'loan_installment',
-            'factoring_payment', 'loan_drawdown').annotate(
+            'factoring_payment', 'loan_drawdown', 'charge_parent').annotate(
             running_balance=ExpressionWrapper(
                 F('bank_account__opening_balance') + Coalesce(Subquery(prior, output_field=MONEY),
                                                              Value(0, output_field=MONEY)),
@@ -7794,8 +7806,9 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
         # ห้ามลบแถวจากเอกสารต้นทาง "จากหน้า M2" เท่านั้น — ถ้าเช็คทุกที่ Django จะนับเป็น perms_needed
         # ตอนลบเอกสารต้นทาง (SO/PO/เงินกู้ ที่ลบแถวนี้ตาม CASCADE) แล้วตอบ 403
         # แถวฝั่งปลายทางของการโอน (TRANSFER) ลบได้ — ระบบลบแถวต้นให้ด้วย
+        # แถวค่าธรรมเนียม (CHARGE) ลบได้ — ล้างยอดที่แถวแม่ให้ (และลบตามตอนลบแถวแม่ที่บันทึกเอง)
         url_name = getattr(getattr(request, 'resolver_match', None), 'url_name', '') or ''
-        if obj and obj.source_type not in ('MANUAL', 'TRANSFER') and url_name.startswith('stocks_banktransaction_'):
+        if obj and obj.source_type not in ('MANUAL', 'TRANSFER', 'CHARGE') and url_name.startswith('stocks_banktransaction_'):
             return False
         return super().has_delete_permission(request, obj)
 
@@ -7821,7 +7834,8 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
     def changelist_view(self, request, extra_context=None):
         if request.method == 'POST' and request.POST.get('action') == 'delete_selected':
             ids = request.POST.getlist(helpers.ACTION_CHECKBOX_NAME)
-            if BankTransaction.objects.filter(pk__in=ids).exclude(source_type__in=('MANUAL', 'TRANSFER')).exists():
+            if (BankTransaction.objects.filter(pk__in=ids)
+                    .exclude(source_type__in=('MANUAL', 'TRANSFER', 'CHARGE')).exists()):
                 self.message_user(request, "ลบได้เฉพาะรายการที่บันทึกเอง — รายการจากเอกสาร (A3/A4/A5/A6/M3/แฟคตอริ่ง) "
                                            "ให้แก้/ลบที่เอกสารต้นทาง", messages.ERROR)
                 return HttpResponseRedirect(request.get_full_path())
@@ -7855,7 +7869,7 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
                 account = form.cleaned_data['bank_account']
                 loan_rows = queryset.filter(Q(loan_drawdown__isnull=False) | Q(loan_installment__isnull=False)
                                             | Q(factoring_payment__isnull=False) | Q(transfer_peer__isnull=False)
-                                            | Q(source_type='FACTORING'))
+                                            | Q(source_type='FACTORING') | Q(charge_parent__isnull=False))
                 skipped = loan_rows.count()
                 queryset = queryset.exclude(pk__in=list(loan_rows.values_list('pk', flat=True)))
                 rows = list(queryset)
@@ -7870,10 +7884,11 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
                 count = queryset.update(bank_account=account)
                 for ref in refs:
                     rebuild_payment_batch(ref)
+                resync_txn_charges(t.pk for t in rows)  # แถวค่าธรรมเนียมย้ายตามแถวแม่
                 self.message_user(request, f"ย้าย {count} รายการไปที่ {account} แล้ว", messages.SUCCESS)
                 if skipped:
-                    self.message_user(request, f"ข้าม {skipped} รายการเงินกู้/แฟคตอริ่ง (ระบบกำหนดสมุดบัญชีเอง)",
-                                      messages.WARNING)
+                    self.message_user(request, f"ข้าม {skipped} รายการเงินกู้/แฟคตอริ่ง/ค่าธรรมเนียม "
+                                               f"(ระบบกำหนดสมุดบัญชีเอง)", messages.WARNING)
                 return None
         else:
             form = AssignBankAccountForm()
@@ -7888,6 +7903,11 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
 
     @admin.display(description="ที่มา")
     def get_source_link(self, obj):
+        if obj.charge_parent_id:
+            parent = obj.charge_parent
+            url = reverse('admin:stocks_banktransaction_detail' if parent.has_detail
+                          else 'admin:stocks_banktransaction_change', args=[parent.pk])
+            return format_html('<a href="{}" target="_blank">{} ↗</a>', url, parent.reference or 'รายการหลัก')
         if obj.sales_payment_id:
             url = reverse('admin:stocks_incomereport_change', args=[obj.sales_payment.order_id])
         elif obj.purchase_payment_id:
@@ -7937,60 +7957,180 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
     def get_reference(self, obj):
         return self.get_source_link(obj) if obj.source_type != 'MANUAL' else (obj.reference or '-')
 
-    def _batch_link(self, obj, html):
-        # รายการรวม (ชำระหลายใบพร้อมกัน): กดยอดเงิน -> เปิดแท็บใหม่ดูว่ามาจาก SO/PO ไหน
-        if not obj.batch_ref:
+    def _detail_link(self, obj, html):
+        # รับ/จ่ายจาก SO-PO-แฟคตอริ่ง (เดี่ยว/รวม): กดยอดเงิน -> แท็บใหม่ ดูว่ามาจาก SO/PO/IV ไหน + กรอกค่าธรรมเนียม
+        # แถวค่าธรรมเนียม -> หน้ารายละเอียดของแถวแม่
+        target = obj.charge_parent if obj.charge_parent_id else obj
+        if not target.has_detail:
             return html
-        url = (reverse('admin:stocks_banktransaction_batch', args=[obj.batch_ref])
-               + f"?account={obj.bank_account_id or ''}&date={obj.txn_date.isoformat()}")
-        return format_html('<a href="{}" target="_blank" title="ดูรายการในยอดนี้" '
-                           'style="text-decoration:underline dotted;">{}</a>', url, html)
+        mark = ' 🧾' if (target.charge_fee or target.charge_other) and not obj.charge_parent_id else ''
+        url = reverse('admin:stocks_banktransaction_detail', args=[target.pk])
+        return format_html('<a href="{}" target="_blank" title="ดูรายการในยอดนี้ / ค่าธรรมเนียม" '
+                           'style="text-decoration:underline dotted;">{}</a>{}', url, html, mark)
 
     @admin.display(description="เงินเข้า")
     def get_in(self, obj):
-        return self._batch_link(obj, _money_html(obj.amount, '#16a34a')) if obj.amount > 0 else ''
+        return self._detail_link(obj, _money_html(obj.amount, '#16a34a')) if obj.amount > 0 else ''
 
     @admin.display(description="เงินออก")
     def get_out(self, obj):
-        return self._batch_link(obj, _money_html(-obj.amount, '#dc2626')) if obj.amount < 0 else ''
+        return self._detail_link(obj, _money_html(-obj.amount, '#dc2626')) if obj.amount < 0 else ''
 
     def get_urls(self):
         return [path('batch/<str:ref>/', self.admin_site.admin_view(self.batch_view),
                      name='stocks_banktransaction_batch'),
+                path('<int:pk>/detail/', self.admin_site.admin_view(self.detail_view),
+                     name='stocks_banktransaction_detail'),
                 path('party-suggest/', self.admin_site.admin_view(self.party_suggest_view),
                      name='stocks_banktransaction_party_suggest')] + super().get_urls()
 
     def batch_view(self, request, ref):
-        if not self.has_view_or_change_permission(request):
-            raise PermissionDenied
-        # เฉพาะสมุดบัญชี/วันที่ของยอดที่กด (ชุดเดียวกันอาจแยกหลายบัญชี เช่น ลูกค้าตั้งบัญชีรับโอนต่างกัน)
-        cond = {'batch_ref': ref}
+        # ลิงก์แบบเดิม (รายการรวม) -> หน้ารายละเอียดของแถวนั้น
+        from django.http import Http404
+        rows = BankTransaction.objects.filter(batch_ref=ref)
         account = request.GET.get('account', '')
         if account.isdigit():
-            cond['bank_account_id'] = int(account)
+            rows = rows.filter(bank_account_id=int(account))
         try:
-            cond['payment_date'] = datetime.date.fromisoformat(request.GET['date'])
+            rows = rows.filter(txn_date=datetime.date.fromisoformat(request.GET['date']))
         except (KeyError, ValueError):
             pass
-        rows = []
-        for p in SalesPayment.objects.filter(**cond).select_related('order__customer', 'bank_account').order_by('id'):
-            rows.append({'doc': p.order.so_number, 'url': reverse('admin:stocks_incomereport_change', args=[p.order_id]),
-                         'party': p.order.customer.company_name if p.order.customer_id else '',
-                         'receipts': ', '.join(p.order.receipts.filter(is_cancelled=False).order_by('shipped_date')
-                                               .values_list('receipt_number', flat=True)),
-                         'account': p.bank_account, 'date': p.payment_date, 'amount': p.amount})
-        kind = 'รับเงิน'
-        for p in (PurchasePaymentLog.objects.filter(**cond).select_related('purchase_order__supplier', 'bank_account')
-                  .order_by('id')):
-            kind = 'จ่ายเงิน'
+        txn = rows.order_by('id').first()
+        if txn is None:
+            raise Http404("ไม่พบรายการ (อาจถูกลบไปแล้ว)")
+        return HttpResponseRedirect(reverse('admin:stocks_banktransaction_detail', args=[txn.pk]))
+
+    @staticmethod
+    def _detail_rows(txn):
+        """เอกสารที่รวมอยู่ในยอดของรายการ — ยอดบาทตามสมุด (จ่าย PO ต่างประเทศ = ยอด × เรทตอนจ่าย)"""
+        def sales_row(p, amount, note):
+            if p.receipt_id:
+                receipts = p.receipt.receipt_number
+            else:
+                receipts = ', '.join(p.order.receipts.filter(is_cancelled=False).order_by('shipped_date')
+                                     .values_list('receipt_number', flat=True))
+            return {'doc': p.order.so_number, 'url': reverse('admin:stocks_incomereport_change', args=[p.order_id]),
+                    'party': p.order.customer.company_name if p.order.customer_id else '', 'receipts': receipts,
+                    'account': p.bank_account, 'date': p.payment_date, 'note': note, 'amount': amount}
+
+        def purchase_row(p):
             po = p.purchase_order
-            rows.append({'doc': po.po_number, 'url': reverse('admin:stocks_financereport_change', args=[po.pk]),
-                         'party': po.supplier.company_name if po.supplier_id else '', 'receipts': '',
-                         'account': p.bank_account, 'date': p.payment_date, 'amount': p.amount})
-        return TemplateResponse(request, 'admin/stocks/banktransaction/batch_detail.html', {
+            note = p.notes or ''
+            if po.currency != 'THB':
+                note = f"{p.amount:,.2f} {po.currency} × {p.exchange_rate:,.4f}" + (f" — {note}" if note else '')
+            return {'doc': po.po_number, 'url': reverse('admin:stocks_financereport_change', args=[po.pk]),
+                    'party': po.supplier.company_name if po.supplier_id else '', 'receipts': '',
+                    'account': p.bank_account, 'date': p.payment_date, 'note': note, 'amount': p.amount_thb}
+
+        sales_related = ('order__customer', 'receipt', 'bank_account')
+        if txn.is_factoring_transfer:
+            # รับโอนจากแฟคตอริ่งวันนั้น = ยอดสุทธิของทุกใบ (เบิกล่วงหน้า/ส่วนที่เหลือ/รับเงินปกติ) + ภาษีหัก ณ ที่จ่ายคืน
+            labels = {'ADVANCE': "เบิกล่วงหน้า", 'REMAINDER': "ส่วนที่เหลือ", '': "รับเงิน (ไม่ได้ขายแฟคตอริ่ง)"}
+            rows = [sales_row(p, round_money(p.factoring_net), labels.get(p.factoring_role, p.factoring_role))
+                    for p in SalesPayment.objects.filter(
+                        bank_account__account_type='FACTORING', bank_account__linked_account_id=txn.bank_account_id,
+                        payment_date=txn.txn_date).exclude(factoring_net=0).select_related(*sales_related)
+                    .order_by('bank_account__name', 'id')]
+            tax = factoring_wht_by_day().get((txn.bank_account_id, txn.txn_date))
+            if tax:
+                rows.append({'doc': '', 'url': '', 'party': '', 'receipts': '', 'account': '', 'date': txn.txn_date,
+                             'note': "ภาษีหัก ณ ที่จ่ายที่แฟคตอริ่งคืน", 'amount': tax})
+            return rows
+        if txn.batch_ref:
+            # เฉพาะสมุดบัญชี/วันที่ของแถวนี้ (ชุดเดียวกันอาจแยกหลายบัญชี เช่น ลูกค้าตั้งบัญชีรับโอนต่างกัน)
+            cond = {'batch_ref': txn.batch_ref, 'bank_account_id': txn.bank_account_id, 'payment_date': txn.txn_date}
+            return ([sales_row(p, p.amount, p.remark) for p in SalesPayment.objects.filter(**cond)
+                     .select_related(*sales_related).order_by('id')]
+                    + [purchase_row(p) for p in PurchasePaymentLog.objects.filter(**cond)
+                       .select_related('purchase_order__supplier', 'bank_account').order_by('id')])
+        if txn.sales_payment_id:
+            p = SalesPayment.objects.select_related(*sales_related).get(pk=txn.sales_payment_id)
+            return [sales_row(p, p.amount, p.remark)]
+        if txn.purchase_payment_id:
+            return [purchase_row(PurchasePaymentLog.objects.select_related('purchase_order__supplier', 'bank_account')
+                                 .get(pk=txn.purchase_payment_id))]
+        return []
+
+    @staticmethod
+    def _read_charges(post):
+        """ช่องค่าธรรมเนียม/ค่าอื่นๆ/สกุลเงิน/เรท -> (ค่าที่จะบันทึก, ข้อความผิดพลาด)"""
+        def money(name, label):
+            text = (post.get(name) or '').replace(',', '').strip()
+            try:
+                value = Decimal(text) if text else Decimal(0)
+                if not value.is_finite() or value < 0 or value >= Decimal('1e14'):
+                    raise ValueError
+            except (ValueError, ArithmeticError):
+                errors.append(f"{label}: กรอกตัวเลข 0 ขึ้นไป")
+                return Decimal(0)
+            if value != value.quantize(Decimal('0.01')):
+                errors.append(f"{label}: ทศนิยมได้ 2 ตำแหน่ง")
+            return value
+
+        errors = []
+        values = {'charge_fee': money('charge_fee', "ค่าธรรมเนียม"),
+                  'charge_other': money('charge_other', "ค่าอื่นๆ"),
+                  'charge_other_label': (post.get('charge_other_label') or '').strip()[:100]}
+        currency = post.get('charge_currency') or 'THB'
+        if currency not in CURRENCY_LABELS:
+            errors.append("สกุลเงินไม่ถูกต้อง")
+            currency = 'THB'
+        rate = Decimal(1)
+        if currency != 'THB':
+            text = (post.get('charge_rate') or '').replace(',', '').strip()
+            try:
+                rate = Decimal(text)
+                if not rate.is_finite() or rate <= 0 or rate >= Decimal('1e8') or rate != rate.quantize(Decimal('0.0001')):
+                    raise ValueError
+            except (ValueError, ArithmeticError):
+                errors.append(f"เรทแลกเปลี่ยน: กรอกบาทต่อ 1 {currency} มากกว่า 0 (ทศนิยมได้ 4 ตำแหน่ง)")
+                rate = Decimal(1)
+        if values['charge_other'] and not values['charge_other_label']:
+            errors.append("ค่าอื่นๆ: ระบุว่าเป็นค่าอะไร")
+        values.update(charge_currency=currency, charge_rate=rate)
+        return values, errors
+
+    def detail_view(self, request, pk):
+        from django.http import Http404
+        if not self.has_view_or_change_permission(request):
+            raise PermissionDenied
+        txn = BankTransaction.objects.select_related('bank_account').filter(pk=pk).first()
+        if txn is None or not txn.has_detail:
+            raise Http404("ไม่พบรายการ (อาจถูกลบไปแล้ว)")
+        can_edit = self.has_change_permission(request, txn)
+        form_values, errors = None, []
+        if request.method == 'POST' and can_edit:
+            form_values, errors = self._read_charges(request.POST)
+            if not errors:
+                for field, value in form_values.items():
+                    setattr(txn, field, value)
+                txn.save(update_fields=list(form_values))  # post_save -> แถวค่าธรรมเนียมในสมุด (sync_txn_charges)
+                self.message_user(request, "บันทึกค่าธรรมเนียมแล้ว", messages.SUCCESS)
+                return HttpResponseRedirect(request.path)
+            for e in errors:
+                self.message_user(request, e, messages.ERROR)
+        income = txn.amount > 0
+        kind = 'รับเงิน' if income else 'จ่ายเงิน'
+        rows = self._detail_rows(txn)
+        total = sum((r['amount'] for r in rows), Decimal(0))
+        charges = [{'label': label, 'amount': amount, 'thb': thb} for _k, label, amount, thb in txn.charge_lines()]
+        charge_total = sum((c['thb'] for c in charges), Decimal(0))
+        if form_values is None:
+            form_values = {'charge_fee': txn.charge_fee, 'charge_other': txn.charge_other,
+                           'charge_other_label': txn.charge_other_label, 'charge_currency': txn.charge_currency,
+                           'charge_rate': txn.charge_rate}
+        if txn.batch_ref:
+            source = f'ยอด{kind}ก้อนนี้มาจากการกด "ชำระครบ/ปิดยอด" หลายใบพร้อมกัน — ในสมุดบัญชีลงเป็นรายการเดียว'
+        elif txn.is_factoring_transfer:
+            source = "ยอดรับโอนจากแฟคตอริ่งวันนี้ (รวมทุกใบในวันเดียวกัน) — ในสมุดบัญชีลงเป็นรายการเดียว"
+        else:
+            source = f"{kind}จากเอกสารนี้ — แก้ยอด/วันที่ที่เอกสารต้นทาง"
+        return TemplateResponse(request, 'admin/stocks/banktransaction/txn_detail.html', {
             **self.admin_site.each_context(request),
-            'title': f"รายการใน{kind}ยอดรวม", 'opts': self.model._meta, 'rows': rows, 'kind': kind,
-            'total': sum((r['amount'] for r in rows), Decimal(0)),
+            'title': f"รายการใน{kind}" + ("ยอดรวม" if len(rows) > 1 else ""), 'opts': self.model._meta,
+            'txn': txn, 'rows': rows, 'kind': kind, 'income': income, 'source': source, 'total': total,
+            'charges': charges, 'net': total - charge_total if income else total + charge_total,
+            'can_edit': can_edit, 'values': form_values, 'currencies': CURRENCY_CHOICES,
         })
 
     @admin.display(description="คงเหลือ")

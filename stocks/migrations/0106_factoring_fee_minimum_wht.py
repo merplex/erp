@@ -11,9 +11,12 @@ def recompute(apps, schema_editor):
     # 2) วันครบกำหนดของ IV ค้างรับ (ยังไม่ขายแฟคตอริ่ง) ตามวันหยุดใหม่ 31 ธ.ค. / 1 ม.ค.
     from stocks.models import (Customer, SalesPayment, recompute_customer_due_dates, rebuild_factoring_transfers,
                                sync_factoring_settlement)
-    for order_id in set(SalesPayment.objects.exclude(factoring_role='').values_list('order_id', flat=True)):
+    fx_orders = set(SalesPayment.objects.exclude(factoring_role='').values_list('order_id', flat=True))
+    for order_id in fx_orders:
         sync_factoring_settlement(order_id)
-    rebuild_factoring_transfers()
+    # ฐานข้อมูลใหม่ (เช่น ตอนรันเทสต์) ไม่มีอะไรให้คำนวณ — ข้ามไป เพราะโค้ดจริงอ่านคอลัมน์ที่ migration หลังจากนี้เพิ่ม
+    if fx_orders:
+        rebuild_factoring_transfers()
     for customer in Customer.objects.filter(shift_weekend_to_monday=True):
         recompute_customer_due_dates(customer)
 

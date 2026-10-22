@@ -2891,6 +2891,7 @@ class BankTransaction(models.Model):
         ('LOAN_PAYMENT', 'ผ่อนชำระเงินกู้ (M3)'),
         ('FACTORING', 'แฟคตอริ่ง: ดอกเบี้ย/โอนเข้าบัญชีที่ผูก'),
         ('TRANSFER', 'โอนระหว่างบัญชี (อีกฝั่ง)'),
+        ('CHARGE', 'ค่าธรรมเนียม/ค่าใช้จ่ายของรายการ'),
     ]
     bank_account = models.ForeignKey(BankAccount, on_delete=models.PROTECT, null=True, blank=True,
                                      related_name='transactions', verbose_name="สมุดบัญชี")
@@ -2926,6 +2927,21 @@ class BankTransaction(models.Model):
                                         editable=False)
     # รายการรวมของการชำระหลายใบพร้อมกัน (ชุดเดียวกับ SalesPayment/PurchasePaymentLog.batch_ref)
     batch_ref = models.CharField(max_length=32, blank=True, default='', db_index=True, editable=False)
+    # ค่าธรรมเนียม/ค่าอื่นๆ ของรายการนี้ (บันทึกเอง: ช่องในฟอร์ม / รับ-จ่ายจาก SO-PO-แฟคตอริ่ง: หน้ารายละเอียด)
+    # ยอดเป็นสกุล charge_currency -> ลงสมุดเป็นแถวลูก (source CHARGE) เงินออกเสมอ: รับเงินโดนหัก / จ่ายเงินโดนเก็บเพิ่ม
+    charge_fee = models.DecimalField(max_digits=18, decimal_places=4, default=0, validators=[MinValueValidator(0)],
+                                     verbose_name="ค่าธรรมเนียมโอน")
+    charge_other_label = models.CharField(max_length=100, blank=True, default='', verbose_name="ค่าอื่นๆ (ระบุ)")
+    charge_other = models.DecimalField(max_digits=18, decimal_places=4, default=0, validators=[MinValueValidator(0)],
+                                       verbose_name="ค่าอื่นๆ")
+    charge_currency = models.CharField(max_length=3, choices=CURRENCY_CHOICES, default='THB',
+                                       verbose_name="สกุลเงินค่าธรรมเนียม")
+    charge_rate = _exchange_rate_field()
+    # แถวลูกของ charge_fee / charge_other — สมุด/วันที่/อ้างอิงตามแถวแม่ (sync_txn_charges)
+    charge_parent = models.ForeignKey('self', null=True, blank=True, on_delete=models.CASCADE,
+                                      related_name='charge_rows', editable=False)
+    CHARGE_KINDS = [('FEE', 'ค่าธรรมเนียม'), ('OTHER', 'ค่าอื่นๆ')]
+    charge_kind = models.CharField(max_length=10, choices=CHARGE_KINDS, blank=True, default='', editable=False)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, editable=False,
                                    verbose_name="ผู้บันทึก")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -2947,7 +2963,71 @@ class BankTransaction(models.Model):
     def is_account_locked(self):
         # สมุดบัญชีของแถวเงินกู้/แฟคตอริ่ง ระบบกำหนดเอง (เงินกู้: หน้า M3, แฟคตอริ่ง: บัญชีที่ผูกใน M1)
         return bool(self.loan_drawdown_id or self.loan_installment_id or self.factoring_payment_id
-                    or self.transfer_peer_id or self.source_type == 'FACTORING' or self.batch_ref)
+                    or self.transfer_peer_id or self.source_type == 'FACTORING' or self.batch_ref
+                    or self.charge_parent_id)
+
+    @property
+    def is_factoring_transfer(self):
+        # รับโอนจากแฟคตอริ่ง (รวมต่อวัน) ในบัญชีที่ผูก — rebuild_factoring_transfers
+        return (self.source_type == 'FACTORING' and not self.factoring_payment_id and not self.transfer_peer_id
+                and not self.factoring_charge)
+
+    @property
+    def has_detail(self):
+        """รับ/จ่ายจาก SO-PO-แฟคตอริ่ง (เดี่ยวหรือรวม) -> มีหน้ารายละเอียด (ดูเอกสาร + กรอกค่าธรรมเนียม)"""
+        return bool(self.sales_payment_id or self.purchase_payment_id or self.batch_ref or self.is_factoring_transfer)
+
+    def charge_lines(self):
+        """[(ชนิด, ชื่อ, ยอดตามสกุลที่กรอก, ยอดบาท)] เฉพาะที่มียอด"""
+        rate = self.charge_rate if self.charge_currency != 'THB' and self.charge_rate else Decimal(1)
+        lines = []
+        if self.charge_fee:
+            lines.append(('FEE', 'ค่าธรรมเนียม', self.charge_fee, round_money(self.charge_fee * rate)))
+        if self.charge_other:
+            lines.append(('OTHER', self.charge_other_label or 'ค่าอื่นๆ', self.charge_other,
+                          round_money(self.charge_other * rate)))
+        return lines
+
+
+def sync_txn_charges(txn):
+    """แถวค่าธรรมเนียม/ค่าอื่นๆ ของรายการ: สมุด/วันที่/อ้างอิงตามแถวแม่ ยอดเป็นเงินออก (ไม่มียอดแล้วลบทิ้ง)"""
+    lines = {kind: (label, thb) for kind, label, _amount, thb in txn.charge_lines()}
+    existing = {c.charge_kind: c for c in txn.charge_rows.all()}
+    for kind, row in existing.items():
+        if kind not in lines:
+            BankTransaction.objects.filter(pk=row.pk).delete()
+    for kind, (label, thb) in lines.items():
+        fields = {'bank_account_id': txn.bank_account_id, 'txn_date': txn.txn_date, 'amount': -thb,
+                  'reference': txn.reference, 'party': txn.party,
+                  'description': (f"{label} ({txn.description})" if txn.description else label)[:255]}
+        row = existing.get(kind)
+        if row is None:
+            BankTransaction.objects.create(charge_parent=txn, charge_kind=kind, source_type='CHARGE',
+                                           created_by_id=txn.created_by_id, **fields)
+        elif any(getattr(row, k) != v for k, v in fields.items()):
+            BankTransaction.objects.filter(pk=row.pk).update(**fields)
+
+
+def resync_txn_charges(txn_ids):
+    # หลัง .update() แถวแม่ (ไม่ผ่าน post_save) เช่น ย้ายสมุดบัญชี / แก้ยอด-คำอธิบายรายการรวม
+    for txn in (BankTransaction.objects.filter(pk__in=list(txn_ids))
+                .filter(models.Q(charge_fee__gt=0) | models.Q(charge_other__gt=0))):
+        sync_txn_charges(txn)
+
+
+@receiver(post_save, sender=BankTransaction)
+def _txn_charges_follow(sender, instance, created, **kwargs):
+    if instance.charge_parent_id or (created and not (instance.charge_fee or instance.charge_other)):
+        return
+    sync_txn_charges(instance)
+
+
+@receiver(post_delete, sender=BankTransaction)
+def _charge_row_deleted(sender, instance, **kwargs):
+    # ลบแถวค่าธรรมเนียมเองจาก M2 -> ล้างยอดที่แถวแม่ด้วย (ไม่งั้นแก้แถวแม่ครั้งหน้าจะสร้างกลับมา)
+    if instance.charge_parent_id:
+        field = 'charge_fee' if instance.charge_kind == 'FEE' else 'charge_other'
+        BankTransaction.objects.filter(pk=instance.charge_parent_id).update(**{field: 0})
 
 
 @receiver(post_delete, sender=BankTransaction)
@@ -3011,6 +3091,7 @@ def rebuild_payment_batch(ref):
                                            batch_ref=ref, **fields)
         elif any(getattr(row, k) != v for k, v in fields.items()):
             BankTransaction.objects.filter(pk=row.pk).update(**fields)
+            resync_txn_charges([row.pk])
     for row in existing.values():
         row.delete()
 
@@ -3625,6 +3706,7 @@ def rebuild_factoring_transfers():
                                            source_type='FACTORING', **fields)
         elif any(getattr(row, k) != v for k, v in fields.items()):
             BankTransaction.objects.filter(pk=row.pk).update(**fields)
+            resync_txn_charges([row.pk])
     for row in existing.values():
         row.delete()
     rebuild_factoring_charges()

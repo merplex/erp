@@ -397,3 +397,144 @@ class IncomeReportActionsTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertNotContains(resp, 'ชำระครบ/ปิดยอด')
         self.assertContains(resp, 'ปิดยอดกรณีพิเศษ')
+
+
+class BankTxnChargeTests(TestCase):
+    """M2: ค่าธรรมเนียมโอนของรายการบันทึกเอง + หน้ารายละเอียดรับ/จ่ายจาก SO-PO-แฟคตอริ่ง (เดี่ยว/รวม)
+    ค่าธรรมเนียม/ค่าอื่นๆ ลงสมุดเป็นแถวเงินออกแยก (source CHARGE) ตามสมุด/วันที่ของแถวแม่"""
+
+    def setUp(self):
+        from decimal import Decimal
+        from django.contrib.auth.models import User
+        from .models import BankAccount
+        self.D = Decimal
+        self.client.force_login(User.objects.create_superuser('admin', 'a@a.com', 'x'))
+        self.bank = BankAccount.objects.create(name='B', is_default=True, opening_date=datetime.date(2026, 1, 1))
+        self.customer = Customer.objects.create(company_name='C', contact_person='P', address='A', phone='0')
+        so = SalesOrder.objects.create(customer=self.customer, order_date=datetime.date(2026, 9, 1))
+        self.so = SalesOrder.objects.get(pk=so.pk)  # อ่านจาก DB (vat_percent เป็น Decimal)
+        self.receipt = SalesReceipt.objects.create(sales_order=self.so, shipped_date=datetime.date(2026, 9, 21),
+                                                   due_date=datetime.date(2026, 11, 2))
+
+    def pay(self, amount, **kw):
+        from .models import SalesPayment
+        kw.setdefault('bank_account', self.bank)
+        return SalesPayment.objects.create(order=self.so, receipt=self.receipt, amount=self.D(amount),
+                                           payment_date=datetime.date(2026, 10, 9), **kw)
+
+    def charges(self, parent):
+        return sorted((c.charge_kind, c.amount) for c in parent.charge_rows.all())
+
+    def detail(self, txn, **post):
+        url = f'/admin/stocks/banktransaction/{txn.pk}/detail/'
+        return self.client.post(url, post) if post else self.client.get(url)
+
+    def test_manual_fee_books_extra_out_row(self):
+        from .models import BankTransaction
+        data = {'bank_account': self.bank.pk, 'txn_date': '2026-10-09', 'direction': 'OUT', 'amount': '1000',
+                'charge_fee': '15.50', 'description': 'ค่าเช่า'}
+        resp = self.client.post('/admin/stocks/banktransaction/add/', data)
+        self.assertEqual(resp.status_code, 302)
+        parent = BankTransaction.objects.get(source_type='MANUAL')
+        self.assertEqual(parent.amount, self.D('-1000'))
+        self.assertEqual(self.charges(parent), [('FEE', self.D('-15.50'))])
+        self.assertEqual(self.bank.current_balance, self.D('-1015.50'))
+        # แก้เป็นว่าง = ไม่มีค่าธรรมเนียม -> แถวค่าธรรมเนียมหาย
+        data['charge_fee'] = ''
+        self.client.post(f'/admin/stocks/banktransaction/{parent.pk}/change/', data)
+        self.assertEqual(self.charges(parent), [])
+
+    def test_manual_fee_rejects_bad_values(self):
+        from .models import BankTransaction
+        for bad in ['1.234', '-1']:
+            resp = self.client.post('/admin/stocks/banktransaction/add/', {
+                'bank_account': self.bank.pk, 'txn_date': '2026-10-09', 'direction': 'IN', 'amount': '10',
+                'charge_fee': bad})
+            self.assertEqual(resp.status_code, 200, bad)
+        self.assertFalse(BankTransaction.objects.exists())
+
+    def test_delete_manual_row_with_fee(self):
+        from .models import BankTransaction
+        parent = BankTransaction.objects.create(bank_account=self.bank, amount=self.D('-100'),
+                                                charge_fee=self.D('5'))
+        resp = self.client.post(f'/admin/stocks/banktransaction/{parent.pk}/delete/', {'post': 'yes'})
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(BankTransaction.objects.exists())
+
+    def test_single_sales_payment_detail_and_charges(self):
+        p = self.pay('1000')
+        txn = p.bank_txn
+        self.assertTrue(txn.has_detail)
+        resp = self.detail(txn)
+        self.assertContains(resp, self.receipt.receipt_number)
+        self.assertContains(resp, 'name="charge_fee"')
+        self.assertContains(resp, 'value="0.00"')
+        resp = self.detail(txn, charge_fee='10', charge_other_label='ค่าส่งเอกสาร', charge_other='5',
+                           charge_currency='USD', charge_rate='35')
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(self.charges(txn), [('FEE', self.D('-350')), ('OTHER', self.D('-175'))])
+        resp = self.detail(txn)
+        self.assertContains(resp, 'ค่าส่งเอกสาร')
+        self.assertContains(resp, 'ยอดรับสุทธิ')
+        self.assertContains(resp, '475.00')
+        # แก้ที่ต้นทาง (ย้ายวันที่) -> แถวค่าธรรมเนียมตามไป
+        p.payment_date = datetime.date(2026, 10, 12)
+        p.save()
+        txn.refresh_from_db()
+        self.assertEqual(set(txn.charge_rows.values_list('txn_date', flat=True)), {datetime.date(2026, 10, 12)})
+
+    def test_charge_input_errors(self):
+        txn = self.pay('1000').bank_txn
+        for post in ({'charge_fee': '1.234'}, {'charge_fee': 'abc'}, {'charge_other': '5'},
+                     {'charge_fee': '1', 'charge_currency': 'USD', 'charge_rate': ''}):
+            resp = self.detail(txn, **post)
+            self.assertEqual(resp.status_code, 200, post)
+        self.assertEqual(self.charges(txn), [])
+
+    def test_batch_detail_and_charges_survive_rebuild_and_move(self):
+        from .models import BankAccount, BankTransaction
+        p1 = self.pay('300', batch_ref='abc')
+        self.pay('500', batch_ref='abc')
+        txn = BankTransaction.objects.get(batch_ref='abc')
+        self.assertEqual(txn.amount, self.D('800'))
+        self.detail(txn, charge_fee='25')
+        self.assertEqual(self.charges(txn), [('FEE', self.D('-25'))])
+        p1.amount = self.D('200')
+        p1.save()  # rebuild_payment_batch แก้ยอดแถวเดิม
+        txn.refresh_from_db()
+        self.assertEqual(txn.amount, self.D('700'))
+        self.assertEqual(self.charges(txn), [('FEE', self.D('-25'))])
+        other = BankAccount.objects.create(name='K')
+        self.client.post('/admin/stocks/banktransaction/', {
+            'action': 'assign_bank_account', '_selected_action': [txn.pk], 'apply': '1', 'bank_account': other.pk})
+        self.assertEqual(set(txn.charge_rows.values_list('bank_account', flat=True)), {other.pk})
+        # ลิงก์แบบเดิมของรายการรวม -> หน้ารายละเอียด
+        resp = self.client.get(f'/admin/stocks/banktransaction/batch/abc/?account={other.pk}&date=2026-10-09')
+        self.assertRedirects(resp, f'/admin/stocks/banktransaction/{txn.pk}/detail/', fetch_redirect_response=False)
+
+    def test_purchase_payment_fee_is_paid_on_top(self):
+        from .models import PurchaseOrder, PurchasePaymentLog, Supplier
+        supplier = Supplier.objects.create(company_name='S', contact_person='P', address='A', phone='0')
+        po = PurchaseOrder.objects.create(supplier=supplier, vat_percent=0)
+        log = PurchasePaymentLog.objects.create(purchase_order=po, amount=self.D('1000'), bank_account=self.bank,
+                                                payment_date=datetime.date(2026, 10, 9))
+        txn = log.bank_txn
+        self.detail(txn, charge_fee='30')
+        resp = self.detail(txn)
+        self.assertContains(resp, po.po_number)
+        self.assertContains(resp, 'ยอดจ่ายรวมค่าธรรมเนียม')
+        self.assertContains(resp, '1,030.00')
+        self.assertEqual(self.charges(txn), [('FEE', self.D('-30'))])
+
+    def test_factoring_transfer_row_lists_documents(self):
+        from .models import BankAccount, BankTransaction
+        fx = BankAccount.objects.create(name='FX', account_type='FACTORING', linked_account=self.bank,
+                                        advance_percent=80, factoring_interest_rate=0)
+        self.pay('1000', bank_account=fx)  # รับเงินปกติเข้าแฟคตอริ่ง -> โอนต่อเข้าบัญชีที่ผูก
+        txn = BankTransaction.objects.get(bank_account=self.bank, source_type='FACTORING')
+        self.assertTrue(txn.has_detail)
+        resp = self.detail(txn)
+        self.assertContains(resp, self.so.so_number)
+        self.assertContains(resp, 'ไม่ได้ขายแฟคตอริ่ง')
+        self.detail(txn, charge_fee='12')
+        self.assertEqual(self.charges(txn), [('FEE', self.D('-12'))])
