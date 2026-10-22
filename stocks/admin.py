@@ -8169,17 +8169,32 @@ class LoanDrawdownFormSet(forms.BaseInlineFormSet):
                                   f"({first:%d/%m/%Y})")
 
 
-class LoanDrawdownInline(UnfoldTabularInline):
+class PlaceholderInlineMixin:
+    """ตาราง inline บนมือถือมองไม่เห็นหัวคอลัมน์ -> ใส่คำอธิบายในช่อง (placeholder) ว่าช่องนี้กรอกอะไร"""
+    placeholders = {}
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        field = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if field is not None and db_field.name in self.placeholders:
+            field.widget.attrs['placeholder'] = self.placeholders[db_field.name]
+        return field
+
+
+class LoanDrawdownInline(PlaceholderInlineMixin, UnfoldTabularInline):
     model = LoanDrawdown
     formset = LoanDrawdownFormSet
     extra = 1
     fields = ('draw_date', 'amount', 'notes')
+    placeholders = {'draw_date': "วันที่รับเงินต้น", 'amount': "ยอดเงินต้นที่รับ (บาท)",
+                    'notes': "หมายเหตุ (ถ้ามี)"}
 
 
-class LoanRateInline(UnfoldTabularInline):
+class LoanRateInline(PlaceholderInlineMixin, UnfoldTabularInline):
     model = LoanRate
     extra = 1
     fields = ('from_period', 'from_date', 'annual_rate')
+    placeholders = {'from_period': "เริ่มงวดที่ (เช่น 1)", 'from_date': "หรือ เริ่มวันที่",
+                    'annual_rate': "ดอกเบี้ย % ต่อปี (เช่น 5.25)"}
 
 
 class LoanInstallmentInline(UnfoldTabularInline):
