@@ -552,3 +552,37 @@ class BankTxnChargeTests(TestCase):
             self.assertEqual(self.client.post('/admin/stocks/salesreceipt/', data).status_code, 302)
         roles = sorted(SalesPayment.objects.filter(receipt=self.receipt).values_list('factoring_role', flat=True))
         self.assertEqual(roles, ['ADVANCE', 'REMAINDER'])
+
+
+class SubmitOnceTests(TestCase):
+    """ฟอร์มเดิม (รหัส _once เดียวกัน) ถูกส่งซ้ำ -> บันทึกครั้งเดียว / ครั้งแรกไม่ได้บันทึก -> ส่งใหม่ได้"""
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        from .models import BankAccount
+        self.client.force_login(User.objects.create_superuser('admin', 'a@a.com', 'x'))
+        self.bank = BankAccount.objects.create(name='B', is_default=True)
+        self.url = '/admin/stocks/banktransaction/add/'
+
+    def data(self, amount='100', token='t1'):
+        return {'bank_account': self.bank.pk, 'txn_date': '2026-10-09', 'direction': 'OUT', 'amount': amount,
+                '_once': token}
+
+    def test_same_token_saves_once(self):
+        from .models import BankTransaction
+        self.assertEqual(self.client.post(self.url, self.data()).status_code, 302)
+        resp = self.client.post(self.url, self.data(), follow=True)
+        self.assertContains(resp, 'ได้รับคำสั่งนี้ซ้ำ')
+        self.assertEqual(BankTransaction.objects.count(), 1)
+        # รหัสใหม่ (โหลดหน้าใหม่) = บันทึกได้ตามปกติ
+        self.client.post(self.url, self.data(token='t2'))
+        self.assertEqual(BankTransaction.objects.count(), 2)
+
+    def test_failed_first_submit_can_resend(self):
+        from .models import BankTransaction
+        self.assertEqual(self.client.post(self.url, self.data(amount='-5')).status_code, 200)  # กรอกผิด
+        self.assertEqual(self.client.post(self.url, self.data()).status_code, 302)
+        self.assertEqual(BankTransaction.objects.count(), 1)
+
+    def test_script_on_admin_pages(self):
+        self.assertContains(self.client.get('/admin/stocks/banktransaction/'), 'submit_once')

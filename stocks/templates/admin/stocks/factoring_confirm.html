@@ -49,6 +49,7 @@
             document.getElementById('id_advance_date').addEventListener('change', function () {
                 if (!this.value) return;
                 document.getElementById('factoring-apply').remove();
+                if (window.submitOnceRenew) window.submitOnceRenew(this.form);  // แค่โหลดตัวอย่างใหม่ ไม่ใช่การบันทึก
                 this.form.submit();
             });
         </script>

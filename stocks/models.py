@@ -2871,6 +2871,17 @@ class BankTransactionCategory(models.Model):
         return self.name
 
 
+class SubmitOnce(models.Model):
+    """รหัสฟอร์มที่ส่งเข้ามาแล้ว (SubmitOnceMiddleware) — กันคำขอเดิมที่ถูกส่งซ้ำบันทึกซ้ำ"""
+    token = models.CharField(max_length=64, primary_key=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    done = models.BooleanField(default=False)
+
+    @classmethod
+    def cleanup(cls):
+        cls.objects.filter(created_at__lt=timezone.now() - datetime.timedelta(days=1)).delete()
+
+
 class BankPartyHidden(models.Model):
     """ชื่อ บริษัท/บุคคล ที่ผู้ใช้กด x ลบออกจากรายการแนะนำ (M2) — ถ้าบันทึกชื่อนี้ใหม่หลัง hidden_at จะกลับมาขึ้นอีก"""
     name = models.CharField(max_length=255, unique=True)
