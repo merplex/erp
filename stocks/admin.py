@@ -8171,7 +8171,7 @@ class LoanDrawdownFormSet(forms.BaseInlineFormSet):
 
 class PlaceholderInlineMixin:
     """ตาราง inline บนมือถือมองไม่เห็นหัวคอลัมน์ -> ใส่คำอธิบายในช่อง (placeholder) ว่าช่องนี้กรอกอะไร
-    widths: ช่องที่กรอกสั้นๆ (เช่น เลขงวด) ย่อให้พอดี placeholder / comma_preview: แสดงตัวเลขมีคอมมาใต้ช่อง
+    widths: ช่องที่กรอกสั้นๆ (เช่น เลขงวด) ย่อให้พอดี placeholder / comma_preview: แสดงตัวเลขมีคอมมาขวาของช่อง
     (js/amount_comma_preview.js — แค่แสดง ไม่ส่งไปบันทึก)"""
     placeholders = {}
     widths = {}
