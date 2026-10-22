@@ -1,5 +1,14 @@
 {% extends "admin/base_site.html" %}
 {% block content %}
+<style>
+    .charge-form input[type=text], .charge-form select {
+        border:1px solid #cbd5e1;border-radius:6px;padding:6px 10px;background:#fff;color:inherit;
+    }
+    .charge-form input:disabled, .charge-form select:disabled { background:#f1f5f9; }
+    .charge-form button {
+        background:#16a34a;color:#fff;border-radius:6px;padding:6px 18px;font-weight:600;
+    }
+</style>
 <div style="padding:20px;max-width:1000px;">
     <h2>🧾 {{ title }} ({{ rows|length }} รายการ)</h2>
     <p>{{ source }}</p>
@@ -7,7 +16,7 @@
         · ยอดในสมุด {{ txn.amount|floatformat:"2g" }}</p>
 
     {# ค่าธรรมเนียม/ค่าอื่นๆ ของยอดนี้ — เงินออกเสมอ: รับเงินโดนหัก / จ่ายเงินโดนเก็บเพิ่ม (ลงสมุดเป็นอีกบรรทัด) #}
-    <form method="post" style="margin:16px 0;padding:12px;border:1px solid #dee2e6;border-radius:6px;max-width:640px;">
+    <form method="post" class="charge-form" style="margin:16px 0;padding:12px;border:1px solid #dee2e6;border-radius:6px;max-width:640px;">
         {% csrf_token %}
         <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center;">
             <label for="charge_fee">ค่าธรรมเนียม</label>
@@ -39,7 +48,7 @@
         </div>
         {% if can_edit %}
         <div style="margin-top:10px;">
-            <button type="submit" style="padding:4px 16px;">บันทึก</button>
+            <button type="submit">บันทึก</button>
             <span style="color:#555;font-size:12px;">ว่าง/0 = ไม่มี — มียอดจะลงสมุดเป็นเงินออกอีกบรรทัด
                 ({% if income %}เงินที่รับโดนหัก{% else %}จ่ายเพิ่มจากยอดนี้{% endif %})</span>
         </div>

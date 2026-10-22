@@ -8049,6 +8049,12 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
         if txn.purchase_payment_id:
             return [purchase_row(PurchasePaymentLog.objects.select_related('purchase_order__supplier', 'bank_account')
                                  .get(pk=txn.purchase_payment_id))]
+        if txn.source_type == 'MANUAL':
+            return [{'doc': txn.reference or 'แก้ไขรายการ',
+                     'url': reverse('admin:stocks_banktransaction_change', args=[txn.pk]), 'receipts': '',
+                     'party': txn.party, 'account': txn.bank_account, 'date': txn.txn_date,
+                     'note': ' · '.join(x for x in (txn.category.name if txn.category_id else '', txn.description) if x),
+                     'amount': abs(txn.amount)}]
         return []
 
     @staticmethod
@@ -8094,7 +8100,7 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
         from django.http import Http404
         if not self.has_view_or_change_permission(request):
             raise PermissionDenied
-        txn = BankTransaction.objects.select_related('bank_account').filter(pk=pk).first()
+        txn = BankTransaction.objects.select_related('bank_account', 'category').filter(pk=pk).first()
         if txn is None or not txn.has_detail:
             raise Http404("ไม่พบรายการ (อาจถูกลบไปแล้ว)")
         can_edit = self.has_change_permission(request, txn)
@@ -8123,6 +8129,8 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
             source = f'ยอด{kind}ก้อนนี้มาจากการกด "ชำระครบ/ปิดยอด" หลายใบพร้อมกัน — ในสมุดบัญชีลงเป็นรายการเดียว'
         elif txn.is_factoring_transfer:
             source = "ยอดรับโอนจากแฟคตอริ่งวันนี้ (รวมทุกใบในวันเดียวกัน) — ในสมุดบัญชีลงเป็นรายการเดียว"
+        elif txn.source_type == 'MANUAL':
+            source = f"{kind}ที่บันทึกเอง — แก้ยอด/วันที่ได้ที่ลิงก์ในตาราง"
         else:
             source = f"{kind}จากเอกสารนี้ — แก้ยอด/วันที่ที่เอกสารต้นทาง"
         return TemplateResponse(request, 'admin/stocks/banktransaction/txn_detail.html', {

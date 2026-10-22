@@ -2974,8 +2974,9 @@ class BankTransaction(models.Model):
 
     @property
     def has_detail(self):
-        """รับ/จ่ายจาก SO-PO-แฟคตอริ่ง (เดี่ยวหรือรวม) -> มีหน้ารายละเอียด (ดูเอกสาร + กรอกค่าธรรมเนียม)"""
-        return bool(self.sales_payment_id or self.purchase_payment_id or self.batch_ref or self.is_factoring_transfer)
+        """บันทึกเอง / รับ-จ่ายจาก SO-PO-แฟคตอริ่ง (เดี่ยวหรือรวม) -> มีหน้ารายละเอียด (ดูเอกสาร + กรอกค่าธรรมเนียม)"""
+        return bool(self.source_type == 'MANUAL' or self.sales_payment_id or self.purchase_payment_id
+                    or self.batch_ref or self.is_factoring_transfer)
 
     def charge_lines(self):
         """[(ชนิด, ชื่อ, ยอดตามสกุลที่กรอก, ยอดบาท)] เฉพาะที่มียอด"""
