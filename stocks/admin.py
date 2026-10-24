@@ -3308,8 +3308,10 @@ class SalesReceiptAdmin(ColumnTotalsMixin, TaxReportActionsMixin, UnfoldModelAdm
         # คำนวณสถานะรับเงินของทั้งหน้าทีเดียว (query คงที่) แล้วแปะไว้ที่ object ให้ get_payment_status ใช้
         cl = super().get_changelist_instance(request)
         states = receipt_payment_states({r.sales_order_id for r in cl.result_list})
+        credited = set(CreditNote.objects.filter(receipt__in=cl.result_list).values_list('receipt_id', flat=True))
         for r in cl.result_list:
             r._pay_state = states.get(r.pk)
+            r._has_cn = r.pk in credited
         return cl
 
     def _state_of(self, obj):
@@ -3333,7 +3335,20 @@ class SalesReceiptAdmin(ColumnTotalsMixin, TaxReportActionsMixin, UnfoldModelAdm
         if obj.is_cancelled:
             return '-'
         state = self._state_of(obj)
-        return f"{state[1]:,.2f}" if state else '-'
+        if not state:
+            return '-'
+        # ค้างรับหักใบลดหนี้ที่ผูกใบนี้แล้ว -> ติด flag ให้รู้ว่าทำไมไม่เท่ายอดรวมสุทธิ
+        has_cn = getattr(obj, '_has_cn', None)
+        if has_cn is None:
+            has_cn = obj.credit_notes.exists()
+        if not has_cn:
+            return f"{state[1]:,.2f}"
+        # flag วางมุมขวาบนเหนือตัวเลข ไม่ให้คอลัมน์กว้างขึ้น
+        return format_html(
+            '<div style="text-align:right; line-height:1; margin-bottom:2px;">'
+            '<span style="display:inline-block; background:#ffc107; color:#000; font-size:10px; font-weight:bold; '
+            'line-height:14px; padding:0 5px; border-radius:8px;">ลดหนี้</span></div>{}',
+            f"{state[1]:,.2f}")
 
     @admin.action(description="💰 รับเงินตามยอดค้าง (เลือกบัญชีที่รับ)")
     def receive_payment(self, request, queryset):
