@@ -2557,6 +2557,12 @@ class ContractCondition(models.Model):
     method = models.CharField(max_length=20, choices=CALC_METHOD, verbose_name="วิธีคำนวณ")
     value = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="ค่าที่ระบุ (% หรือ บาท)")
 
+    def delivery_rebate(self, delivery):
+        """Rebate ของรายการส่งของ 1 แถวตามเงื่อนไขนี้ (แถวลดหนี้ติดลบ = ลดยอด)"""
+        if self.method == 'PERCENT_SALES':
+            return round_money((delivery.shipment_value or 0) * self.value / Decimal(100))
+        return round_money(Decimal(delivery.quantity_shipped or 0) * self.value)
+
     class Meta:
         verbose_name = "เงื่อนไขสัญญา"
         verbose_name_plural = "เงื่อนไขสัญญา"
@@ -2568,6 +2574,9 @@ class RebatePayout(models.Model):
                                  verbose_name="สัญญาการขาย")
     purchase_contract = models.ForeignKey('PurchaseContract', on_delete=models.CASCADE, null=True, blank=True,
                                           related_name='payouts', verbose_name="สัญญาการซื้อ")
+    # เงื่อนไขที่ใช้คำนวณใบนี้ — 1 ใบ = 1 เงื่อนไข (หลายเงื่อนไขในสัญญาเดียว = ค่าคอมฯ บวกกัน แยกใบ)
+    sales_condition = models.ForeignKey('ContractCondition', on_delete=models.SET_NULL, null=True,
+                                        blank=True, related_name='payouts', editable=False)
     purchase_condition = models.ForeignKey('PurchaseContractCondition', on_delete=models.SET_NULL, null=True,
                                            blank=True, related_name='payouts', editable=False)
     # รอบ "ต่อคำสั่งซื้อ" = 1 ใบสั่งซื้อต่อ 1 ใบสรุป
@@ -2608,13 +2617,8 @@ class RebatePayout(models.Model):
     def recalculate_totals(self):
         """คำนวณยอดรวมใหม่จากรายการในใบ (ขาย: รายการส่งของ | ซื้อ: รายการจ่ายเงินค่าสินค้า)"""
         from django.db.models import Sum
-        if self.purchase_contract_id:
-            totals = self.purchase_items.aggregate(total_sales=Sum('base_amount'), total_rebate=Sum('commission_amount'))
-        else:
-            totals = self.items.aggregate(
-                total_sales=Sum('delivery__shipment_value'),
-                total_rebate=Sum('delivery__rebate_amount'),
-            )
+        items = self.purchase_items if self.purchase_contract_id else self.items
+        totals = items.aggregate(total_sales=Sum('base_amount'), total_rebate=Sum('commission_amount'))
         RebatePayout.objects.filter(pk=self.pk).update(
             total_sales_amount=totals['total_sales'] or 0,
             rebate_amount=totals['total_rebate'] or 0,
@@ -2641,6 +2645,9 @@ class RebatePayoutItem(models.Model):
         related_name='payout_items', verbose_name="รายการส่งของ"
     )
     shipped_date = models.DateTimeField(verbose_name="วันที่ส่งของ")
+    # ยอดตามเงื่อนไขสัญญา (A7) ตอนคำนวณ — ไม่เปลี่ยนตามรายการส่งของที่แก้ทีหลัง
+    base_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0, verbose_name="ยอดขาย (ก่อน VAT)")
+    commission_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0, verbose_name="Rebate")
 
     def save(self, *args, **kwargs):
         # ซิงค์วันที่กลับไปที่ SalesDeliveryLog จริง
@@ -2825,16 +2832,20 @@ FULLY_PAID = ('Paid', 'SETTLED')
 
 
 def create_sales_rebate_payouts(contract):
-    """A7 -> ใบสรุป Rebate ใน A6 -> (สร้างใหม่, เพิ่มเข้าใบเดิม, ข้าม)
-    นับรายการส่งของที่ยังไม่อยู่ในใบไหน ของใบสั่งขายที่รับเงินครบแล้ว — รอบที่มีใบ "รอจ่าย" อยู่ = เพิ่มเข้าใบเดิม"""
+    """A7 -> ใบสรุป Rebate ใน A6 แยกตามเงื่อนไข/รอบ -> (สร้างใหม่, เพิ่มเข้าใบเดิม, ข้าม)
+    นับรายการส่งของของใบสั่งขายที่รับเงินครบแล้ว ที่ยังไม่อยู่ในใบของเงื่อนไขเดียวกัน (เหมือนฝั่งซื้อ)
+    — ใบเก่าก่อนแยกตามเงื่อนไข (ไม่มีเงื่อนไขผูก) นับว่าใช้ไปแล้วกับทุกเงื่อนไข
+    รอบที่มีใบ "รอจ่าย" อยู่ = เพิ่มเข้าใบเดิม"""
     from django.db import transaction
-    from django.db.models import Max
+    from django.db.models import Max, Q
     created = added = skipped = 0
     for condition in contract.conditions.all():
+        counted = RebatePayoutItem.objects.filter(
+            Q(payout__sales_condition=condition) | Q(payout__sales_condition__isnull=True)).values('delivery_id')
         qs = SalesDeliveryLog.objects.filter(
             sales_order__customer=contract.customer, sales_order__payment_status__in=FULLY_PAID,
             shipped_date__date__gte=contract.start_date, shipped_date__date__lte=contract.end_date,
-            payout_items__isnull=True)
+        ).exclude(pk__in=counted)
         if condition.type == 'PRODUCT_BASED':
             if condition.product_id:
                 qs = qs.filter(product=condition.product)
@@ -2854,20 +2865,22 @@ def create_sales_rebate_payouts(contract):
             groups.setdefault(_contract_period(condition.period, day), []).append(d)
         for (kind, period_start, period_end), items in groups.items():
             with transaction.atomic():
-                payout = _pending_payout({'contract': contract}, period_start, period_end)
+                payout = _pending_payout({'sales_condition': condition}, period_start, period_end)
                 if payout == 'PAID':
                     skipped += 1
                     continue
                 if payout is None:
                     payout = RebatePayout.objects.create(
-                        contract=contract, period_start=period_start, period_end=period_end,
+                        contract=contract, sales_condition=condition, period_start=period_start, period_end=period_end,
                         payout_date=_contract_payout_date(contract, period_end, kind == 'M'),
                         total_sales_amount=0, rebate_amount=0)
                     created += 1
                 else:
                     added += 1
-                for d in items:  # ยอดใบ = ผลรวม Rebate ของรายการส่งของ (recalculate_totals)
-                    RebatePayoutItem.objects.create(payout=payout, delivery=d, shipped_date=d.shipped_date)
+                for d in items:  # ยอดใบ = ผลรวมของรายการ (recalculate_totals)
+                    RebatePayoutItem.objects.create(payout=payout, delivery=d, shipped_date=d.shipped_date,
+                                                    base_amount=d.shipment_value or 0,
+                                                    commission_amount=condition.delivery_rebate(d))
     return created, added, skipped
 
 

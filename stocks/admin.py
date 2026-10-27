@@ -6831,11 +6831,11 @@ class RebatePayoutItemInline(UnfoldTabularInline):
     get_qty.short_description = "จำนวน"
 
     def get_value(self, obj):
-        return f"{obj.delivery.shipment_value:,.2f}"
+        return f"{obj.base_amount:,.2f}"
     get_value.short_description = "มูลค่า (บาท)"
 
     def get_rebate(self, obj):
-        return f"{obj.delivery.rebate_amount:,.2f}"
+        return f"{obj.commission_amount:,.2f}"
     get_rebate.short_description = "Rebate (บาท)"
 
 
@@ -7000,14 +7000,14 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                 'url': (reverse('admin:stocks_salesinvoice_change', args=[rc.pk]) if rc
                         else reverse('admin:stocks_incomereport_change', args=[d.sales_order_id])),
                 'dates': [day], 'base': Decimal(0), 'commission': Decimal(0), 'products': {}})
-            doc['base'] += d.shipment_value or 0
-            doc['commission'] += d.rebate_amount or 0
+            doc['base'] += item.base_amount
+            doc['commission'] += item.commission_amount
             name = str(d.product) + (" (ลดหนี้)" if d.credit_note_item_id else "")
             row = doc['products'].setdefault((d.product_id, bool(d.credit_note_item_id)), {
                 'name': name, 'qty': Decimal(0), 'base': Decimal(0), 'commission': Decimal(0)})
             row['qty'] += d.quantity_shipped
-            row['base'] += d.shipment_value or 0
-            row['commission'] += d.rebate_amount or 0
+            row['base'] += item.base_amount
+            row['commission'] += item.commission_amount
         return sorted(docs.values(), key=lambda x: x['dates'][0])
 
     def detail_view(self, request, pk):
@@ -7015,7 +7015,7 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         if not self.has_view_or_change_permission(request):
             raise PermissionDenied
         payout = (RebatePayout.objects.select_related('contract__customer', 'purchase_contract__supplier',
-                                                      'purchase_condition').filter(pk=pk).first())
+                                                      'purchase_condition', 'sales_condition').filter(pk=pk).first())
         if payout is None:
             raise Http404("ไม่พบรายการ (อาจถูกลบไปแล้ว)")
         docs = self._purchase_docs(payout) if payout.is_purchase else self._sales_docs(payout)
@@ -7028,13 +7028,21 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             doc['percent'] = (doc['commission'] / doc['base'] * 100) if doc['base'] else Decimal(0)
         contract = payout.purchase_contract or payout.contract
         cond = payout.purchase_condition
+        if cond:
+            condition = (f"{cond.get_type_display()} · {cond.get_period_display()} · {cond.get_method_display()} "
+                         f"{cond.value.normalize():f} · สกุล{cond.get_currency_display()}")
+        elif payout.sales_condition:
+            cond = payout.sales_condition
+            condition = (f"{cond.get_type_display()} · {cond.get_period_display()} · {cond.get_method_display()} "
+                         f"{cond.value.normalize():f}")
+        else:
+            condition = ''
         return TemplateResponse(request, 'admin/stocks/rebatepayout/detail.html', {
             **self.admin_site.each_context(request),
             'title': ("ค่าคอมฯ ตามสัญญาซื้อ" if payout.is_purchase else "Rebate ตามสัญญาขาย") + f" — {contract}",
             'opts': self.model._meta, 'payout': payout, 'docs': docs,
             'doc_label': "ใบสั่งซื้อ (PO)" if payout.is_purchase else "ใบกำกับ (IV)",
-            'condition': (f"{cond.get_type_display()} · {cond.get_period_display()} · {cond.get_method_display()} "
-                          f"{cond.value.normalize():f} · สกุล{cond.get_currency_display()}") if cond else '',
+            'condition': condition,
             'currency': '' if payout.currency == 'THB' else payout.currency,
             'total_base': sum((d['base'] for d in docs), Decimal(0)),
             'total_commission': sum((d['commission'] for d in docs), Decimal(0)),
