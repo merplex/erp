@@ -209,7 +209,8 @@ class ExportToExcelMixin:
     def export_to_excel(self, request, queryset):
         wb = openpyxl.Workbook()
         ws = wb.active
-        ws.title = str(self.model._meta.verbose_name_plural or 'Export')[:31]
+        # Excel ไม่รับ / \\ ? * [ ] : ในชื่อแผ่นงาน (เช่น "A6. รายการสัญญาซื้อ/ขาย")
+        ws.title = re.sub(r'[\\/?*\[\]:]', '-', str(self.model._meta.verbose_name_plural or 'Export'))[:31]
 
         header_font = Font(bold=True, color='FFFFFF')
         header_fill = PatternFill(start_color='2563EB', end_color='2563EB', fill_type='solid')
@@ -6786,8 +6787,28 @@ def _contract_payout_message(label, created, added, skipped):
     return msg
 
 
+def _plain_decimal(value):
+    """ค่าในช่องกรอก: ตัดศูนย์ท้าย (2.0000 -> 2, 33.5000 -> 33.5) ไม่มีคอมมา — ส่งกลับไปบันทึกได้ตรงๆ"""
+    if value in (None, ''):
+        return value
+    text = f"{Decimal(value):f}"
+    return text.rstrip('0').rstrip('.') if '.' in text else text
+
+
+class PurchaseContractConditionForm(forms.ModelForm):
+    class Meta:
+        model = PurchaseContractCondition
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance.pk:
+            self.initial['value'] = _plain_decimal(self.instance.value)
+
+
 class PurchaseContractConditionInline(UnfoldTabularInline):
     model = PurchaseContractCondition
+    form = PurchaseContractConditionForm
     extra = 1
     autocomplete_fields = ['product', 'product_tag_link']
     fields = ['type', 'period', 'product', 'product_tag_link', 'method', 'value', 'currency']
@@ -6880,10 +6901,23 @@ class RebatePayoutKindFilter(admin.SimpleListFilter):
         return queryset
 
 
+class RebatePayoutForm(forms.ModelForm):
+    class Meta:
+        model = RebatePayout
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance.pk and self.instance.exchange_rate:
+            self.initial['exchange_rate'] = _plain_decimal(self.instance.exchange_rate)
+
+
 @admin.register(RebatePayout)
 class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
+    form = RebatePayoutForm
+    actions = ['export_to_excel']
     list_display = ('get_kind', 'get_contract', 'get_party', 'period_start', 'period_end', 'payout_date',
-                    'get_total', 'get_commission', 'status', 'ref_invoice')
+                    'get_total', 'get_commission', 'currency', 'status', 'ref_invoice')
     list_filter = (
         RebatePayoutKindFilter,
         ('status', MultipleChoicesDropdownFilter),
@@ -6935,10 +6969,10 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         return obj.contract.customer.company_name if obj.contract_id else '-'
 
     def _detail_anchor(self, obj, value):
+        # แค่ตัวเลข (คอมมาคั่นหลักพัน 2 ตำแหน่ง) — สกุลเงินอยู่คอลัมน์ของตัวเอง, Export Excel ได้เป็นตัวเลข
         url = reverse('admin:stocks_rebatepayout_detail', args=[obj.pk])
-        label = '' if obj.currency == 'THB' else f" {obj.currency}"
         return format_html('<a href="{}" target="_blank" title="ดูว่ามาจาก PO/IV ไหน" '
-                           'style="text-decoration:underline dotted;">{}</a>{}', url, f"{value:,.2f}", label)
+                           'style="text-decoration:underline dotted;">{}</a>', url, f"{value:,.2f}")
 
     @admin.display(description="ยอดซื้อ/ขาย (ก่อน VAT)", ordering='total_sales_amount')
     def get_total(self, obj):
@@ -7030,11 +7064,11 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         cond = payout.purchase_condition
         if cond:
             condition = (f"{cond.get_type_display()} · {cond.get_period_display()} · {cond.get_method_display()} "
-                         f"{cond.value.normalize():f} · สกุล{cond.get_currency_display()}")
+                         f"{cost_str(cond.value)} · สกุล{cond.get_currency_display()}")
         elif payout.sales_condition:
             cond = payout.sales_condition
             condition = (f"{cond.get_type_display()} · {cond.get_period_display()} · {cond.get_method_display()} "
-                         f"{cond.value.normalize():f}")
+                         f"{cost_str(cond.value)}")
         else:
             condition = ''
         return TemplateResponse(request, 'admin/stocks/rebatepayout/detail.html', {
