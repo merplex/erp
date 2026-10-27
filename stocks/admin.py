@@ -4476,9 +4476,14 @@ class ProductCategoryAdmin(UnfoldModelAdmin):
 # ---------------------------------------------------------
 # Register ProductTag เพื่อให้เมนูโผล่ในหน้า Admin
 # ---------------------------------------------------------
-class _DashWidget(forms.Widget):
+class _TextWidget(forms.Widget):
+    """แสดงข้อความเฉยๆ แทนช่องกรอก (ช่องที่ disabled)"""
+    def __init__(self, text='—'):
+        super().__init__()
+        self.text = text
+
     def render(self, name, value, attrs=None, renderer=None):
-        return mark_safe('<span style="color:#9ca3af;">—</span>')
+        return format_html('<span>{}</span>', self.text)
 
 
 class ProductTagAddForm(forms.ModelForm):
@@ -4495,8 +4500,10 @@ class ProductTagAddForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         if self.instance.pk:  # แถวสินค้าที่มีแท็กอยู่แล้ว: แสดงชื่อ + ถังขยะเอาออก ไม่ต้องเลือกบาร์โค้ด
             # ยังต้องมีช่องในตาราง (HiddenInput ทำให้คอลัมน์เลื่อน ชื่อสินค้าไปอยู่ผิดช่อง)
+            # แท็กผูกกับสินค้า ไม่ได้ผูกบาร์โค้ด -> แสดงบาร์โค้ดทั้งหมดของสินค้านั้น
+            codes = ', '.join(b.code for b in self.instance.product.barcodes.all())
             self.fields['barcode'].disabled = True
-            self.fields['barcode'].widget = _DashWidget()
+            self.fields['barcode'].widget = _TextWidget(codes or '—')
         else:
             self.fields['barcode'].required = True
 
@@ -4539,7 +4546,8 @@ class ProductTagAddInline(UnfoldTabularInline):
     verbose_name_plural = "สินค้าในแท็กนี้ (เพิ่ม: เลือกบาร์โค้ดในแถวว่าง · เอาออก: กดถังขยะ)"
 
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related('product').order_by('product__name')
+        return (super().get_queryset(request).select_related('product').prefetch_related('product__barcodes')
+                .order_by('product__name'))
 
     @admin.display(description="#")
     def row_no(self, obj):
