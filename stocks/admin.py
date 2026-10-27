@@ -34,6 +34,7 @@ admin.ModelAdmin.show_full_result_count = False
 from django.contrib import messages
 
 from django.contrib.admin import helpers  # <--- helpers ต้องดึงมาจาก admin ครับ
+from django.contrib.admin.widgets import AutocompleteSelect
 from django.utils.html import format_html
 from django.core.exceptions import ValidationError, PermissionDenied
 from django.forms import TextInput
@@ -4475,12 +4476,67 @@ class ProductCategoryAdmin(UnfoldModelAdmin):
 # ---------------------------------------------------------
 # Register ProductTag เพื่อให้เมนูโผล่ในหน้า Admin
 # ---------------------------------------------------------
+class ProductTagAddForm(forms.ModelForm):
+    """W5 เพิ่มสินค้าเข้าแท็ก: เลือกบาร์โค้ด (ค้นหาได้) -> ผูกสินค้าของบาร์โค้ดนั้น"""
+    barcode = forms.ModelChoiceField(
+        queryset=ProductBarcode.objects.select_related('product'), label="บาร์โค้ด",
+        widget=AutocompleteSelect(CustomerProductContract._meta.get_field('barcode'), admin.site))
+
+    class Meta:
+        model = Product.tags.through
+        fields = ('barcode',)
+
+    def clean(self):
+        cleaned = super().clean()
+        barcode = cleaned.get('barcode')
+        if barcode:
+            self.instance.product = barcode.product
+        return cleaned
+
+
+class ProductTagAddFormSet(forms.BaseInlineFormSet):
+    def clean(self):
+        super().clean()
+        seen = set()
+        for form in self.forms:
+            barcode = form.cleaned_data.get('barcode') if form.cleaned_data else None
+            if not barcode or form.cleaned_data.get('DELETE'):
+                continue
+            # สินค้าเดียวกันซ้ำในตาราง / มีแท็กนี้อยู่แล้ว -> แจ้งที่ช่อง (ไม่ให้ชน unique แล้ว error 500)
+            if barcode.product_id in seen:
+                form.add_error('barcode', f"{barcode.product} ซ้ำกันในตารางนี้")
+            elif self.instance.pk and self.instance.products.filter(pk=barcode.product_id).exists():
+                form.add_error('barcode', f"{barcode.product} มีแท็กนี้อยู่แล้ว")
+            seen.add(barcode.product_id)
+
+
+class ProductTagAddInline(UnfoldTabularInline):
+    """เพิ่มสินค้าเข้าแท็กทีละหลายรายการ — แสดงเฉพาะแถวว่างสำหรับเพิ่ม (ไม่โหลดสินค้าเดิมทั้งหมด กันหน้าช้า)
+    ดู/เอาสินค้าออกจากแท็ก: ปุ่ม "ดูสินค้าที่ใช้แท็กนี้" """
+    model = Product.tags.through
+    form = ProductTagAddForm
+    formset = ProductTagAddFormSet
+    fields = ('barcode', 'product')
+    readonly_fields = ('product',)
+    extra = 5
+    can_delete = False
+    verbose_name = "สินค้าที่จะเพิ่ม"
+    verbose_name_plural = "➕ เพิ่มสินค้าเข้าแท็กนี้ (เลือกบาร์โค้ด)"
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).none()
+
+    class Media:
+        js = ('js/contract_barcode_autofill.js',)
+
+
 @admin.register(ProductTag)
 class ProductTagAdmin(UnfoldModelAdmin):
     # แสดงชื่อแท็กและตัวอย่างสีในหน้า List
     list_display = ('display_name_with_count', 'color')
     search_fields = ('name',)
     readonly_fields = ('products_link',)
+    inlines = [ProductTagAddInline]
 
     def get_queryset(self, request):
         # ใช้ annotate นับจำนวนสินค้าที่เชื่อมกับ Tag นี้
