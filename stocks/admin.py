@@ -6884,67 +6884,34 @@ class SalesContractAdmin(ExportToExcelMixin, UnfoldModelAdmin):
 class PurchaseContractConditionInline(UnfoldTabularInline):
     model = PurchaseContractCondition
     extra = 1
-    fields = ['period', 'min_amount', 'percent']
+    autocomplete_fields = ['product', 'product_tag_link']
+    fields = ['type', 'period', 'product', 'product_tag_link', 'method', 'value', 'currency']
 
 
 @admin.register(PurchaseContract)
 class PurchaseContractAdmin(ExportToExcelMixin, UnfoldModelAdmin):
-    list_display = ('contract_name', 'supplier', 'start_date', 'end_date', 'is_active', 'commission_total_display')
+    list_display = ('contract_name', 'supplier', 'start_date', 'end_date', 'is_active')
     list_filter = ('is_active',)
     search_fields = ('contract_name', 'supplier__company_name')
     autocomplete_fields = ['supplier']
     inlines = [PurchaseContractConditionInline]
-    fields = ('supplier', 'contract_name', 'start_date', 'end_date', 'is_active', 'exclude_vat', 'rate_basis',
-              'notes', 'commission_summary')
-    readonly_fields = ('commission_summary',)
-    actions = ['export_to_excel']
+    actions = ['calculate_commissions', 'export_to_excel']
 
-    @admin.display(description="ค่าคอมฯ รวม (บาท)")
-    def commission_total_display(self, obj):
-        return f"{obj.total_commission:,.2f}"
-
-    @admin.display(description="สรุปค่าคอมมิชชั่น")
-    def commission_summary(self, obj):
-        if not obj or not obj.pk:
-            return "บันทึกสัญญาก่อน จึงจะแสดงสรุปค่าคอมฯ"
-        payments = obj.product_payments()
-        skipped = (PurchasePaymentLog.objects
-                   .filter(purchase_order__supplier_id=obj.supplier_id, is_product=False,
-                           payment_date__gte=obj.start_date, payment_date__lte=obj.end_date)
-                   .exclude(purchase_order__status='Cancelled').count())
-        base_label = "ก่อน VAT" if obj.exclude_vat else "รวม VAT"
-        rate_label = "เรทใบสั่งซื้อ" if obj.rate_basis == 'ORDER' else "เรทตอนจ่าย"
-        parts = [format_html(
-            '<div style="margin-bottom:8px;color:#64748b;">ยอดจ่ายค่าสินค้า {} รายการ (ฐาน {}, บาทตาม{})'
-            ' — ไม่นับรายการจ่ายที่ไม่ได้ติ๊ก "สินค้า" {} รายการ</div>',
-            payments.count(), base_label, rate_label, skipped)]
-        grand = Decimal(0)
-        for cond, rows in obj.commission_rows():
-            body = format_html_join('', '<tr><td style="padding:2px 12px 2px 0;">{}</td>'
-                                        '<td style="text-align:right;padding:2px 12px;">{}</td>'
-                                        '<td style="text-align:right;padding:2px 12px;{}">{}</td></tr>',
-                                    ((r['label'], f"{r['base']:,.2f}",
-                                      '' if r['reached'] else 'color:#94a3b8;',
-                                      f"{r['commission']:,.2f}" if r['reached'] else "ไม่ถึงขั้นต่ำ")
-                                     for r in rows))
-            total = sum((r['commission'] for r in rows), Decimal(0))
-            grand += total
-            parts.append(format_html(
-                '<div style="margin-top:8px;font-weight:600;">{} {}% (ขั้นต่ำ {})</div>'
-                '<table><tr><th style="text-align:left;padding-right:12px;">รอบ</th>'
-                '<th style="text-align:right;padding:0 12px;">ยอดซื้อสินค้า</th>'
-                '<th style="text-align:right;padding:0 12px;">ค่าคอมฯ</th></tr>{}'
-                '<tr><td style="font-weight:600;">รวม</td><td></td>'
-                '<td style="text-align:right;padding:2px 12px;font-weight:600;">{}</td></tr></table>',
-                cond.get_period_display(), cond.percent, f"{cond.min_amount:,.2f}",
-                body or format_html('<tr><td colspan="3" style="color:#94a3b8;">ไม่มียอดซื้อในช่วงสัญญา</td></tr>'),
-                f"{total:,.2f}"))
-        if len(parts) == 1:
-            parts.append(format_html('<div style="color:#94a3b8;">ยังไม่มีเงื่อนไขค่าคอมฯ</div>'))
-        else:
-            parts.append(format_html('<div style="margin-top:10px;font-weight:700;">ค่าคอมฯ รวมทั้งสัญญา {} บาท</div>',
-                                     f"{grand:,.2f}"))
-        return format_html_join('', '{}', ((p,) for p in parts))
+    @admin.action(description="🔄 คำนวณค่าคอมฯ และสร้างใบสรุป (A6)")
+    def calculate_commissions(self, request, queryset):
+        created = added = skipped = 0
+        for contract in queryset:
+            if not contract.conditions.exists():
+                self.message_user(request, f"⚠️ สัญญา '{contract}' ไม่มีเงื่อนไข ข้ามไป", level='warning')
+                continue
+            c, a, k = create_purchase_commission_payouts(contract)
+            created, added, skipped = created + c, added + a, skipped + k
+        msg = f"✅ สร้างใบสรุปค่าคอมฯ ใหม่ {created} รายการ"
+        if added:
+            msg += f", เพิ่มยอดจ่ายใหม่เข้าใบเดิม (รอรับ) {added} รายการ"
+        if skipped:
+            msg += f" (ข้าม {skipped} รอบ: รับเงินไปแล้ว)"
+        self.message_user(request, msg)
 
 
 class RebatePayoutItemInline(UnfoldTabularInline):
@@ -6972,22 +6939,214 @@ class RebatePayoutItemInline(UnfoldTabularInline):
     get_rebate.short_description = "Rebate (บาท)"
 
 
+class PurchaseCommissionItemInline(UnfoldTabularInline):
+    model = PurchaseCommissionItem
+    extra = 0
+    fields = ('get_po', 'get_date', 'get_paid', 'base_amount', 'commission_amount')
+    readonly_fields = fields
+    verbose_name_plural = "รายการจ่ายเงินค่าสินค้าในรอบนี้"
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    @admin.display(description="ใบสั่งซื้อ")
+    def get_po(self, obj):
+        po = obj.payment.purchase_order
+        return format_html('<a href="{}" target="_blank">{}</a>',
+                           reverse('admin:stocks_financereport_change', args=[po.pk]), po.po_number)
+
+    @admin.display(description="วันที่จ่าย")
+    def get_date(self, obj):
+        return obj.payment.payment_date.strftime('%d/%m/%Y')
+
+    @admin.display(description="ยอดที่จ่าย (รวม VAT)")
+    def get_paid(self, obj):
+        p = obj.payment
+        return f"{p.amount:,.2f} {p.purchase_order.currency}"
+
+
+class RebatePayoutKindFilter(admin.SimpleListFilter):
+    title = "ประเภทสัญญา"
+    parameter_name = 'kind'
+
+    def lookups(self, request, model_admin):
+        return [('sale', "ขาย (จ่าย Rebate)"), ('purchase', "ซื้อ (รับค่าคอมฯ)")]
+
+    def queryset(self, request, queryset):
+        if self.value() == 'sale':
+            return queryset.filter(contract__isnull=False)
+        if self.value() == 'purchase':
+            return queryset.filter(purchase_contract__isnull=False)
+        return queryset
+
+
 @admin.register(RebatePayout)
 class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
-    list_display = ('contract', 'period_start', 'period_end', 'payout_date', 'total_sales_amount', 'rebate_amount', 'status', 'ref_invoice')
+    list_display = ('get_kind', 'get_contract', 'get_party', 'period_start', 'period_end', 'payout_date',
+                    'get_total', 'get_commission', 'status', 'ref_invoice')
     list_filter = (
+        RebatePayoutKindFilter,
         ('status', MultipleChoicesDropdownFilter),
         ('contract__customer', AutocompleteSelectMultipleFilter),
+        ('purchase_contract__supplier', AutocompleteSelectMultipleFilter),
     )
     list_filter_submit = True
-    search_fields = ('contract__contract_name', 'contract__customer__company_name', 'ref_invoice')
-    readonly_fields = ('contract', 'period_start', 'period_end', 'total_sales_amount', 'rebate_amount')
-    fields = ('contract', 'period_start', 'period_end', 'payout_date', 'total_sales_amount', 'rebate_amount',
-              'status', 'paid_date', 'bank_account', 'ref_invoice')
+    search_fields = ('contract__contract_name', 'contract__customer__company_name', 'ref_invoice',
+                     'purchase_contract__contract_name', 'purchase_contract__supplier__company_name')
     autocomplete_fields = ['bank_account']
-    list_display_links = ('contract',)
+    list_display_links = ('get_contract',)
     ordering = ('-payout_date',)
-    inlines = [RebatePayoutItemInline]
+    list_select_related = ('contract__customer', 'purchase_contract__supplier')
+
+    def get_fields(self, request, obj=None):
+        head = ['purchase_contract', 'purchase_order_link'] if obj and obj.is_purchase else ['contract']
+        tail = ['exchange_rate'] if obj and obj.is_purchase and obj.currency != 'THB' else []
+        return head + ['period_start', 'period_end', 'payout_date', 'total_sales_amount', 'rebate_amount',
+                       'currency', 'detail_link', 'status', 'paid_date', 'bank_account', *tail, 'ref_invoice']
+
+    def get_readonly_fields(self, request, obj=None):
+        return ('contract', 'purchase_contract', 'purchase_order_link', 'period_start', 'period_end',
+                'total_sales_amount', 'rebate_amount', 'currency', 'detail_link')
+
+    def get_inlines(self, request, obj):
+        if obj is None:
+            return []
+        return [PurchaseCommissionItemInline] if obj.is_purchase else [RebatePayoutItemInline]
+
+    def has_add_permission(self, request):
+        return False  # ใบสรุปสร้างจาก action ใน A7/A8 เท่านั้น
+
+    @admin.display(description="ประเภท")
+    def get_kind(self, obj):
+        if obj.is_purchase:
+            return format_html('<span style="color:{};font-weight:600;">{}</span>', '#16a34a', "ซื้อ")
+        return format_html('<span style="color:{};font-weight:600;">{}</span>', '#2563eb', "ขาย")
+
+    @admin.display(description="สัญญา")
+    def get_contract(self, obj):
+        c = obj.purchase_contract or obj.contract
+        return c.contract_name if c else '-'
+
+    @admin.display(description="ลูกค้า/ผู้จำหน่าย")
+    def get_party(self, obj):
+        if obj.is_purchase:
+            return obj.purchase_contract.supplier.company_name
+        return obj.contract.customer.company_name if obj.contract_id else '-'
+
+    def _detail_anchor(self, obj, value):
+        url = reverse('admin:stocks_rebatepayout_detail', args=[obj.pk])
+        label = '' if obj.currency == 'THB' else f" {obj.currency}"
+        return format_html('<a href="{}" target="_blank" title="ดูว่ามาจาก PO/IV ไหน" '
+                           'style="text-decoration:underline dotted;">{}</a>{}', url, f"{value:,.2f}", label)
+
+    @admin.display(description="ยอดซื้อ/ขาย (ก่อน VAT)", ordering='total_sales_amount')
+    def get_total(self, obj):
+        return self._detail_anchor(obj, obj.total_sales_amount)
+
+    @admin.display(description="ค่าคอมฯ/Rebate", ordering='rebate_amount')
+    def get_commission(self, obj):
+        return self._detail_anchor(obj, obj.rebate_amount)
+
+    @admin.display(description="ใบสั่งซื้อ")
+    def purchase_order_link(self, obj):
+        if not obj.purchase_order_id:
+            return '-'
+        return format_html('<a href="{}" target="_blank">{}</a>',
+                           reverse('admin:stocks_financereport_change', args=[obj.purchase_order_id]),
+                           obj.purchase_order.po_number)
+
+    @admin.display(description="รายละเอียด")
+    def detail_link(self, obj):
+        if not obj.pk:
+            return '-'
+        return format_html('<a href="{}" target="_blank">🧾 ดูว่ามาจาก {} ไหน ↗</a>',
+                           reverse('admin:stocks_rebatepayout_detail', args=[obj.pk]),
+                           'PO' if obj.is_purchase else 'IV')
+
+    def get_urls(self):
+        return [path('<int:pk>/detail/', self.admin_site.admin_view(self.detail_view),
+                     name='stocks_rebatepayout_detail')] + super().get_urls()
+
+    @staticmethod
+    def _purchase_docs(payout):
+        """ฝั่งซื้อ: 1 แถวต่อใบสั่งซื้อ (รวมทุกรายการจ่ายในรอบ) + รายสินค้าตามสัดส่วนยอดจ่าย"""
+        cond = payout.purchase_condition
+        docs = {}
+        for item in payout.purchase_items.select_related('payment__purchase_order__supplier'):
+            log = item.payment
+            po = log.purchase_order
+            doc = docs.setdefault(po.pk, {
+                'doc': po.po_number, 'url': reverse('admin:stocks_financereport_change', args=[po.pk]),
+                'dates': [], 'base': Decimal(0), 'commission': Decimal(0), 'products': {}})
+            doc['dates'].append(log.payment_date)
+            doc['base'] += item.base_amount
+            doc['commission'] += item.commission_amount
+            for line in (cond.payment_lines(log)[1] if cond else []):
+                row = doc['products'].setdefault(line['product'].pk, {
+                    'name': str(line['product']), 'qty': Decimal(0), 'base': Decimal(0), 'commission': Decimal(0)})
+                row['qty'] += line['qty']
+                row['base'] += line['base']
+                row['commission'] += line['commission']
+        return list(docs.values())
+
+    @staticmethod
+    def _sales_docs(payout):
+        """ฝั่งขาย: 1 แถวต่อใบ IV (รอบส่งของ) + รายสินค้า"""
+        receipts = {}
+        docs = {}
+        for item in payout.items.select_related('delivery__product', 'delivery__sales_order'):
+            d = item.delivery
+            day = _delivery_local_date(d.shipped_date)
+            key = (d.sales_order_id, day)
+            if key not in receipts:
+                receipts[key] = SalesReceipt.objects.filter(sales_order_id=d.sales_order_id, shipped_date=day,
+                                                            is_cancelled=False).first()
+            rc = receipts[key]
+            doc = docs.setdefault(key, {
+                'doc': rc.receipt_number if rc else d.sales_order.so_number,
+                'url': (reverse('admin:stocks_salesinvoice_change', args=[rc.pk]) if rc
+                        else reverse('admin:stocks_incomereport_change', args=[d.sales_order_id])),
+                'dates': [day], 'base': Decimal(0), 'commission': Decimal(0), 'products': {}})
+            doc['base'] += d.shipment_value or 0
+            doc['commission'] += d.rebate_amount or 0
+            name = str(d.product) + (" (ลดหนี้)" if d.credit_note_item_id else "")
+            row = doc['products'].setdefault((d.product_id, bool(d.credit_note_item_id)), {
+                'name': name, 'qty': Decimal(0), 'base': Decimal(0), 'commission': Decimal(0)})
+            row['qty'] += d.quantity_shipped
+            row['base'] += d.shipment_value or 0
+            row['commission'] += d.rebate_amount or 0
+        return sorted(docs.values(), key=lambda x: x['dates'][0])
+
+    def detail_view(self, request, pk):
+        from django.http import Http404
+        if not self.has_view_or_change_permission(request):
+            raise PermissionDenied
+        payout = (RebatePayout.objects.select_related('contract__customer', 'purchase_contract__supplier',
+                                                      'purchase_condition').filter(pk=pk).first())
+        if payout is None:
+            raise Http404("ไม่พบรายการ (อาจถูกลบไปแล้ว)")
+        docs = self._purchase_docs(payout) if payout.is_purchase else self._sales_docs(payout)
+        for doc in docs:
+            dates = sorted(set(doc['dates']))
+            doc['date_label'] = ', '.join(x.strftime('%d/%m/%Y') for x in dates)
+            doc['products'] = list(doc['products'].values())
+            for row in doc['products']:
+                row['percent'] = (row['commission'] / row['base'] * 100) if row['base'] else Decimal(0)
+            doc['percent'] = (doc['commission'] / doc['base'] * 100) if doc['base'] else Decimal(0)
+        contract = payout.purchase_contract or payout.contract
+        cond = payout.purchase_condition
+        return TemplateResponse(request, 'admin/stocks/rebatepayout/detail.html', {
+            **self.admin_site.each_context(request),
+            'title': ("ค่าคอมฯ ตามสัญญาซื้อ" if payout.is_purchase else "Rebate ตามสัญญาขาย") + f" — {contract}",
+            'opts': self.model._meta, 'payout': payout, 'docs': docs,
+            'doc_label': "ใบสั่งซื้อ (PO)" if payout.is_purchase else "ใบกำกับ (IV)",
+            'condition': (f"{cond.get_type_display()} · {cond.get_period_display()} · {cond.get_method_display()} "
+                          f"{cond.value.normalize():f} · สกุล{cond.get_currency_display()}") if cond else '',
+            'currency': '' if payout.currency == 'THB' else payout.currency,
+            'total_base': sum((d['base'] for d in docs), Decimal(0)),
+            'total_commission': sum((d['commission'] for d in docs), Decimal(0)),
+            'change_url': reverse('admin:stocks_rebatepayout_change', args=[payout.pk]),
+        })
 
 
 # ============================================================

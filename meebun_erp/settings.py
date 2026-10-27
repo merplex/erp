@@ -277,7 +277,7 @@ UNFOLD = {
                     {"title": "A3. สรุปรายจ่าย",             "icon": "summarize",       "link": "/admin/stocks/financereport/"},
                     {"title": "A4. สรุปรายรับ",              "icon": "payments",        "link": "/admin/stocks/incomereport/"},
                     {"title": "A5. การทำบัญชี DC/Rebate",    "icon": "account_balance", "link": "/admin/stocks/shipmentaccounting/"},
-                    {"title": "A6. สรุปสัญญา Rebate",        "icon": "handshake",       "link": "/admin/stocks/rebatepayout/"},
+                    {"title": "A6. รายการสัญญาซื้อ/ขาย",     "icon": "handshake",       "link": "/admin/stocks/rebatepayout/"},
                     {"title": "A7. สัญญาการขาย",             "icon": "description",     "link": "/admin/stocks/salescontract/"},
                     {"title": "A8. สัญญาการซื้อ",             "icon": "contract",        "link": "/admin/stocks/purchasecontract/"},
                     {"title": "A9. ใบลดหนี้",                "icon": "receipt_long",    "link": "/admin/stocks/creditnote/"},

@@ -1,0 +1,84 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<style>
+    .rp-table { width:100%; border-collapse:collapse; margin:16px 0; }
+    .rp-table th, .rp-table td { padding:8px; }
+    .rp-table thead tr { border-bottom:2px solid #dee2e6; }
+    .rp-doc { border-bottom:1px solid #eee; }
+    .rp-num { text-align:right; white-space:nowrap; }
+    .rp-toggle { width:24px; height:24px; border:1px solid #cbd5e1; border-radius:4px; font-weight:700; line-height:1; cursor:pointer; }
+    .rp-sub td { background:rgba(148,163,184,.08); font-size:13px; }
+    .rp-sub td:first-child { border-left:3px solid #94a3b8; }
+</style>
+<div style="padding:20px;max-width:1100px;">
+    <h2>🧾 {{ title }} ({{ docs|length }} {{ doc_label }})</h2>
+    <p style="color:#555;">
+        {% if payout.is_purchase %}ผู้จำหน่าย {{ payout.purchase_contract.supplier.company_name }}{% else %}ลูกค้า {{ payout.contract.customer.company_name }}{% endif %}
+        · รอบ {{ payout.period_start|date:"d/m/Y" }} – {{ payout.period_end|date:"d/m/Y" }}
+        · สถานะ {{ payout.get_status_display }}
+        · <a href="{{ change_url }}">เปิดใบสรุป ↗</a>
+    </p>
+    {% if condition %}<p style="color:#555;">เงื่อนไข: {{ condition }}</p>{% endif %}
+    {% if payout.is_purchase %}
+    <p style="color:#64748b;font-size:13px;">ยอดซื้อ = ยอดที่จ่ายเงินจริง (เฉพาะรายการที่ติ๊ก "สินค้า") ก่อน VAT — แตกเป็นรายสินค้าตามสัดส่วนมูลค่าในใบสั่งซื้อ</p>
+    {% endif %}
+
+    <table class="rp-table">
+        <thead><tr>
+            <th style="width:32px;"></th>
+            <th style="text-align:left;">{{ doc_label }}</th>
+            <th style="text-align:left;">{% if payout.is_purchase %}วันที่จ่าย{% else %}วันที่ส่ง{% endif %}</th>
+            <th class="rp-num">จำนวน</th>
+            <th class="rp-num">ยอดก่อน VAT{% if currency %} ({{ currency }}){% endif %}</th>
+            <th class="rp-num">% คอม</th>
+            <th class="rp-num">ยอดคอม{% if currency %} ({{ currency }}){% endif %}</th>
+        </tr></thead>
+        <tbody>
+        {% for d in docs %}
+            <tr class="rp-doc">
+                <td><button type="button" class="rp-toggle" data-target="rp-{{ forloop.counter }}" aria-expanded="false" title="ดูรายการสินค้า">+</button></td>
+                <td><a href="{{ d.url }}" target="_blank">{{ d.doc }} ↗</a></td>
+                <td>{{ d.date_label }}</td>
+                <td></td>
+                <td class="rp-num">{{ d.base|floatformat:"2g" }}</td>
+                <td class="rp-num">{{ d.percent|floatformat:"2" }}%</td>
+                <td class="rp-num">{{ d.commission|floatformat:"2g" }}</td>
+            </tr>
+            {% for p in d.products %}
+            <tr class="rp-sub rp-{{ forloop.parentloop.counter }}" hidden>
+                <td></td>
+                <td colspan="2">{{ p.name }}</td>
+                <td class="rp-num">{{ p.qty|floatformat:"-2g" }}</td>
+                <td class="rp-num">{{ p.base|floatformat:"2g" }}</td>
+                <td class="rp-num">{{ p.percent|floatformat:"2" }}%</td>
+                <td class="rp-num">{{ p.commission|floatformat:"2g" }}</td>
+            </tr>
+            {% empty %}
+            <tr class="rp-sub rp-{{ forloop.counter }}" hidden><td></td><td colspan="6">ไม่มีรายการสินค้า</td></tr>
+            {% endfor %}
+        {% empty %}
+            <tr><td colspan="7">ไม่พบรายการ</td></tr>
+        {% endfor %}
+        </tbody>
+        <tfoot><tr style="border-top:2px solid #dee2e6;font-weight:700;">
+            <td></td><td colspan="3">รวม</td>
+            <td class="rp-num">{{ total_base|floatformat:"2g" }}</td>
+            <td></td>
+            <td class="rp-num">{{ total_commission|floatformat:"2g" }}</td>
+        </tr></tfoot>
+    </table>
+    {% if total_commission != payout.rebate_amount %}
+    <p style="color:#b45309;">ยอดในใบสรุป {{ payout.rebate_amount|floatformat:"2g" }} ไม่เท่ายอดรวมรายการ (ปัดเศษ/ข้อมูลต้นทางถูกแก้ภายหลัง)</p>
+    {% endif %}
+</div>
+<script>
+document.querySelectorAll('.rp-toggle').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+        var open = btn.getAttribute('aria-expanded') !== 'true';
+        btn.setAttribute('aria-expanded', open);
+        btn.textContent = open ? '−' : '+';
+        document.querySelectorAll('.' + btn.dataset.target).forEach(function (tr) { tr.hidden = !open; });
+    });
+});
+</script>
+{% endblock %}
