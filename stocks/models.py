@@ -2637,6 +2637,10 @@ def recalc_payout_on_item_change(sender, instance, **kwargs):
 # A8. สัญญาการซื้อ (ค่าคอมมิชชั่นจากผู้จำหน่าย)
 # ============================================================
 class PurchaseContract(models.Model):
+    RATE_BASIS_CHOICES = [
+        ('PAYMENT', 'เรทตอนจ่ายเงิน (ExRate ในประวัติการจ่ายเงิน)'),
+        ('ORDER', 'เรทของใบสั่งซื้อ (ตอนซื้อสินค้า)'),
+    ]
     supplier = models.ForeignKey('Supplier', on_delete=models.CASCADE, verbose_name="ผู้จำหน่าย")
     contract_name = models.CharField(max_length=255, verbose_name="ชื่อสัญญา/เลขที่สัญญา")
     start_date = models.DateField(verbose_name="วันที่เริ่มสัญญา")
@@ -2644,6 +2648,9 @@ class PurchaseContract(models.Model):
     is_active = models.BooleanField(default=True, verbose_name="สถานะใช้งาน")
     exclude_vat = models.BooleanField(default=True, verbose_name="คำนวณจากยอดก่อน VAT",
                                       help_text="ติ๊กออก = คำนวณจากยอดจ่ายรวม VAT")
+    # สกุลต่างประเทศ: แปลงยอดจ่ายเป็นบาทด้วยเรทไหน (ใบบาท = เรท 1 ทั้งสองแบบ)
+    rate_basis = models.CharField(max_length=10, choices=RATE_BASIS_CHOICES, default='PAYMENT',
+                                  verbose_name="เรทแปลงเป็นบาท (สกุลต่างประเทศ)")
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
 
     def __str__(self):
@@ -2659,7 +2666,10 @@ class PurchaseContract(models.Model):
 
     def payment_base(self, log):
         """ยอดฐานคำนวณค่าคอมฯ ของรายการจ่าย 1 รายการ (บาท)"""
-        base = log.amount_thb
+        if self.rate_basis == 'ORDER':
+            base = (log.amount or 0) * (log.purchase_order.exchange_rate or 1)
+        else:
+            base = log.amount_thb
         if self.exclude_vat:
             vat = log.purchase_order.vat_percent or Decimal(0)
             base = base * Decimal(100) / (Decimal(100) + vat)

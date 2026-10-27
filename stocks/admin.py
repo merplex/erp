@@ -6894,8 +6894,8 @@ class PurchaseContractAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     search_fields = ('contract_name', 'supplier__company_name')
     autocomplete_fields = ['supplier']
     inlines = [PurchaseContractConditionInline]
-    fields = ('supplier', 'contract_name', 'start_date', 'end_date', 'is_active', 'exclude_vat', 'notes',
-              'commission_summary')
+    fields = ('supplier', 'contract_name', 'start_date', 'end_date', 'is_active', 'exclude_vat', 'rate_basis',
+              'notes', 'commission_summary')
     readonly_fields = ('commission_summary',)
     actions = ['export_to_excel']
 
@@ -6913,10 +6913,11 @@ class PurchaseContractAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                            payment_date__gte=obj.start_date, payment_date__lte=obj.end_date)
                    .exclude(purchase_order__status='Cancelled').count())
         base_label = "ก่อน VAT" if obj.exclude_vat else "รวม VAT"
+        rate_label = "เรทใบสั่งซื้อ" if obj.rate_basis == 'ORDER' else "เรทตอนจ่าย"
         parts = [format_html(
-            '<div style="margin-bottom:8px;color:#64748b;">ยอดจ่ายค่าสินค้า {} รายการ (ฐาน {}, บาท)'
+            '<div style="margin-bottom:8px;color:#64748b;">ยอดจ่ายค่าสินค้า {} รายการ (ฐาน {}, บาทตาม{})'
             ' — ไม่นับรายการจ่ายที่ไม่ได้ติ๊ก "สินค้า" {} รายการ</div>',
-            payments.count(), base_label, skipped)]
+            payments.count(), base_label, rate_label, skipped)]
         grand = Decimal(0)
         for cond, rows in obj.commission_rows():
             body = format_html_join('', '<tr><td style="padding:2px 12px 2px 0;">{}</td>'
