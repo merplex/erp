@@ -2535,6 +2535,7 @@ class ContractCondition(models.Model):
         ('PRODUCT_BASED', '2. คำนวณตามสินค้า/กลุ่มสินค้า'),
     ]
     PERIOD_CHOICES = [
+        ('PER_DELIVERY', 'ต่อใบส่งของ'),
         ('MONTHLY', 'รายเดือน'),
         ('QUARTERLY', 'รายไตรมาส'),
         ('YEARLY', 'รายปี'),
@@ -2582,7 +2583,10 @@ class RebatePayout(models.Model):
     # รอบ "ต่อคำสั่งซื้อ" = 1 ใบสั่งซื้อต่อ 1 ใบสรุป
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.SET_NULL, null=True, blank=True,
                                        related_name='+', editable=False, verbose_name="ใบสั่งซื้อ")
-    period_start = models.DateField(verbose_name="ยอดสะสมตั้งแต่วันที่")
+    # รอบ "ต่อใบส่งของ" (ฝั่งขาย) = 1 ใบ IV ต่อ 1 ใบสรุป
+    sales_receipt = models.ForeignKey('SalesReceipt', on_delete=models.SET_NULL, null=True, blank=True,
+                                      related_name='+', editable=False, verbose_name="ใบส่งของ")
+    period_start =models.DateField(verbose_name="ยอดสะสมตั้งแต่วันที่")
     period_end = models.DateField(verbose_name="ยอดสะสมถึงวันที่")
     payout_date = models.DateField(verbose_name="กำหนดวันที่ต้องจ่าย")
     
@@ -2833,6 +2837,19 @@ def _pending_payout(filters, period_start, period_end):
 FULLY_PAID = ('Paid', 'SETTLED')
 
 
+def _delivery_receipts(deliveries):
+    """{delivery_id: receipt_id} — รายการส่งของ -> ใบ IV ของรอบส่งของนั้น (SO + วันที่), แถวลดหนี้ -> IV ที่ใบลดหนี้อ้างอิง"""
+    so_ids = {d.sales_order_id for d in deliveries}
+    by_day = {(so, day): rid for rid, so, day in SalesReceipt.objects.filter(
+        sales_order_id__in=so_ids, is_cancelled=False).values_list('id', 'sales_order_id', 'shipped_date')}
+    cn_receipt = dict(SalesDeliveryLog.objects.filter(
+        pk__in=[d.pk for d in deliveries if d.credit_note_item_id]
+    ).values_list('pk', 'credit_note_item__credit_note__receipt_id'))
+    return {d.pk: cn_receipt.get(d.pk) if d.credit_note_item_id
+            else by_day.get((d.sales_order_id, _delivery_local_date(d.shipped_date)))
+            for d in deliveries}
+
+
 def create_sales_rebate_payouts(contract):
     """A7 -> ใบสรุป Rebate ใน A6 แยกตามเงื่อนไข/รอบ -> (สร้างใหม่, เพิ่มเข้าใบเดิม, ข้าม)
     นับรายการส่งของของใบสั่งขายที่รับเงินครบแล้ว ที่ยังไม่อยู่ในใบของเงื่อนไขเดียวกัน (เหมือนฝั่งซื้อ)
@@ -2861,20 +2878,37 @@ def create_sales_rebate_payouts(contract):
         so_ids = {d.sales_order_id for d in deliveries}
         paid_on = dict(SalesOrder.objects.filter(pk__in=so_ids).annotate(d=Max('payments__payment_date'))
                        .values_list('pk', 'd'))
+        receipt_of = _delivery_receipts(deliveries) if condition.period == 'PER_DELIVERY' else {}
         groups = {}
         for d in deliveries:
             day = paid_on.get(d.sales_order_id) or _delivery_local_date(d.shipped_date)
-            groups.setdefault(_contract_period(condition.period, day), []).append(d)
-        for (kind, period_start, period_end), items in groups.items():
+            if condition.period == 'PER_DELIVERY':
+                key = ('D', receipt_of.get(d.pk), day)
+            else:
+                key = _contract_period(condition.period, day)
+            groups.setdefault(key, []).append(d)
+        for (kind, a, b), items in groups.items():
+            receipt_id = a if kind == 'D' else None
+            if kind == 'D':  # ต่อใบส่งของ: ตั้งแต่วันที่ส่งของ ถึงวันที่รับเงินครบ
+                period_start = min(_delivery_local_date(d.shipped_date) for d in items)
+                period_end = max(b, period_start)
+            else:
+                period_start, period_end = a, b
             with transaction.atomic():
-                payout = _pending_payout({'sales_condition': condition}, period_start, period_end)
+                if kind == 'D':
+                    # ใบเดิมของ IV นี้ที่ยังรอจ่าย (เช่นลดหนี้ตามมาทีหลัง) = เพิ่มเข้าใบเดิม — จ่ายแล้วเปิดใบใหม่
+                    payout = (RebatePayout.objects.filter(sales_condition=condition, sales_receipt_id=receipt_id,
+                                                          status='PENDING').first() if receipt_id else None)
+                else:
+                    payout = _pending_payout({'sales_condition': condition}, period_start, period_end)
                 if payout == 'PAID':
                     skipped += 1
                     continue
                 if payout is None:
                     payout = RebatePayout.objects.create(
-                        contract=contract, sales_condition=condition, period_start=period_start, period_end=period_end,
-                        payout_date=_contract_payout_date(contract, period_end, kind == 'M'),
+                        contract=contract, sales_condition=condition, sales_receipt_id=receipt_id,
+                        period_start=period_start, period_end=period_end,
+                        payout_date=_contract_payout_date(contract, period_end, kind in ('D', 'M')),
                         total_sales_amount=0, rebate_amount=0)
                     created += 1
                 else:

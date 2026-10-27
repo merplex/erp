@@ -6933,14 +6933,14 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     list_select_related = ('contract__customer', 'purchase_contract__supplier')
 
     def get_fields(self, request, obj=None):
-        head = ['purchase_contract', 'purchase_order_link'] if obj and obj.is_purchase else ['contract']
+        head = ['purchase_contract', 'purchase_order_link'] if obj and obj.is_purchase else ['contract', 'sales_receipt_link']
         tail = ['exchange_rate'] if obj and obj.is_purchase and obj.currency != 'THB' else []
         # ยอดเงินในหน้าใบก็กดดูได้ว่ามาจาก PO/IV ไหน (เหมือนหน้ารายการ)
         return head + ['period_start', 'period_end', 'payout_date', 'get_total', 'get_commission',
                        'currency', 'status', 'paid_date', 'bank_account', *tail, 'ref_invoice']
 
     def get_readonly_fields(self, request, obj=None):
-        return ('contract', 'purchase_contract', 'purchase_order_link', 'period_start', 'period_end',
+        return ('contract', 'purchase_contract', 'purchase_order_link', 'sales_receipt_link', 'period_start', 'period_end',
                 'get_total', 'get_commission', 'currency')
 
     def get_inlines(self, request, obj):
@@ -6989,6 +6989,14 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         return format_html('<a href="{}" target="_blank">{}</a>',
                            reverse('admin:stocks_financereport_change', args=[obj.purchase_order_id]),
                            obj.purchase_order.po_number)
+
+    @admin.display(description="ใบส่งของ")
+    def sales_receipt_link(self, obj):
+        if not obj.sales_receipt_id:
+            return '-'
+        return format_html('<a href="{}" target="_blank">{}</a>',
+                           reverse('admin:stocks_salesreceipt_print', args=[obj.sales_receipt_id]),
+                           obj.sales_receipt.receipt_number)
 
     def get_urls(self):
         return [path('<int:pk>/detail/', self.admin_site.admin_view(self.detail_view),
