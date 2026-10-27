@@ -2850,29 +2850,56 @@ def _delivery_receipts(deliveries):
             for d in deliveries}
 
 
+def _uncounted_rebate_deliveries(contract, condition):
+    """รายการส่งของของใบสั่งขายที่รับเงินครบแล้ว ที่ยังไม่อยู่ในใบสรุปของเงื่อนไขนี้
+    — ใบเก่าก่อนแยกตามเงื่อนไข (ไม่มีเงื่อนไขผูก) นับว่าใช้ไปแล้วกับทุกเงื่อนไข"""
+    from django.db.models import Q
+    counted = RebatePayoutItem.objects.filter(
+        Q(payout__sales_condition=condition) | Q(payout__sales_condition__isnull=True)).values('delivery_id')
+    qs = SalesDeliveryLog.objects.filter(
+        sales_order__customer=contract.customer, sales_order__payment_status__in=FULLY_PAID,
+        shipped_date__date__gte=contract.start_date, shipped_date__date__lte=contract.end_date,
+    ).exclude(pk__in=counted)
+    if condition.type == 'PRODUCT_BASED':
+        if condition.product_id:
+            qs = qs.filter(product=condition.product)
+        elif condition.product_tag_link_id:
+            qs = qs.filter(product__tags=condition.product_tag_link)
+        else:
+            return []
+    return list(qs.select_related('sales_order'))
+
+
+def contract_unpaid_summary(contract):
+    """ยอดตามสัญญาที่ยังไม่ได้จ่าย (หน้า A7/A8 ดูคร่าวๆ ไม่ต้องกดคำนวณ) -> {'new': {สกุล: ยอด}, 'pending': {สกุล: ยอด}}
+    new = ยังไม่ได้สร้างใบสรุป | pending = มีใบใน A6 แล้วแต่ยังรอจ่าย"""
+    new = {}
+    if isinstance(contract, PurchaseContract):
+        for row in purchase_commission_candidates(contract):
+            new[row['currency']] = new.get(row['currency'], Decimal(0)) + row['commission']
+        payouts = RebatePayout.objects.filter(purchase_contract=contract)
+    else:
+        total = sum((cond.delivery_rebate(d) for cond in contract.conditions.all()
+                     for d in _uncounted_rebate_deliveries(contract, cond)), Decimal(0))
+        if total:
+            new['THB'] = total
+        payouts = RebatePayout.objects.filter(contract=contract)
+    pending = {}
+    for currency, amount in payouts.filter(status='PENDING').values_list('currency', 'rebate_amount'):
+        pending[currency] = pending.get(currency, Decimal(0)) + (amount or 0)
+    return {'new': new, 'pending': pending}
+
+
 def create_sales_rebate_payouts(contract):
     """A7 -> ใบสรุป Rebate ใน A6 แยกตามเงื่อนไข/รอบ -> (สร้างใหม่, เพิ่มเข้าใบเดิม, ข้าม)
     นับรายการส่งของของใบสั่งขายที่รับเงินครบแล้ว ที่ยังไม่อยู่ในใบของเงื่อนไขเดียวกัน (เหมือนฝั่งซื้อ)
     — ใบเก่าก่อนแยกตามเงื่อนไข (ไม่มีเงื่อนไขผูก) นับว่าใช้ไปแล้วกับทุกเงื่อนไข
     รอบที่มีใบ "รอจ่าย" อยู่ = เพิ่มเข้าใบเดิม"""
     from django.db import transaction
-    from django.db.models import Max, Q
+    from django.db.models import Max
     created = added = skipped = 0
     for condition in contract.conditions.all():
-        counted = RebatePayoutItem.objects.filter(
-            Q(payout__sales_condition=condition) | Q(payout__sales_condition__isnull=True)).values('delivery_id')
-        qs = SalesDeliveryLog.objects.filter(
-            sales_order__customer=contract.customer, sales_order__payment_status__in=FULLY_PAID,
-            shipped_date__date__gte=contract.start_date, shipped_date__date__lte=contract.end_date,
-        ).exclude(pk__in=counted)
-        if condition.type == 'PRODUCT_BASED':
-            if condition.product_id:
-                qs = qs.filter(product=condition.product)
-            elif condition.product_tag_link_id:
-                qs = qs.filter(product__tags=condition.product_tag_link)
-            else:
-                qs = qs.none()
-        deliveries = list(qs.select_related('sales_order'))
+        deliveries = _uncounted_rebate_deliveries(contract, condition)
         if not deliveries:
             continue
         so_ids = {d.sales_order_id for d in deliveries}
@@ -2920,18 +2947,61 @@ def create_sales_rebate_payouts(contract):
     return created, added, skipped
 
 
-def create_purchase_commission_payouts(contract):
+def _uncounted_commission_logs(contract, cond):
+    """รายการจ่ายค่าสินค้าของใบสั่งซื้อที่จ่ายครบแล้ว ที่ยังไม่อยู่ในใบสรุปของเงื่อนไขนี้"""
+    qs = (contract.product_payments(any_supplier=cond.type == 'PRODUCT_BASED')
+          .filter(purchase_order__payment_status__in=FULLY_PAID)
+          .exclude(commission_items__payout__purchase_condition=cond))
+    if cond.type == 'PRODUCT_BASED':
+        # นับผู้จำหน่ายทุกราย -> กรองเฉพาะใบที่มีสินค้าเข้าเงื่อนไขก่อน (ไม่ต้องแตกยอดทุกใบ)
+        if cond.product_id:
+            items = PurchaseItem.objects.filter(product_id=cond.product_id)
+        elif cond.product_tag_link_id:
+            items = PurchaseItem.objects.filter(product__tags=cond.product_tag_link_id)
+        else:
+            return []
+        qs = qs.filter(purchase_order_id__in=items.values('purchase_order_id'))
+    return list(qs.select_related('purchase_order__supplier').order_by('payment_date', 'id'))
+
+
+def purchase_commission_candidates(contract):
+    """ค่าคอมฯ ที่ยังไม่ได้สร้างใบสรุป (A8 ดูก่อนสร้าง) -> [{'cond', 'po', 'currency', 'logs', 'lines', 'base', 'commission'}]
+    1 แถว = 1 ใบสั่งซื้อต่อ 1 เงื่อนไข (ติ๊กเลือกจ่ายทีละแถว) — รายสินค้ารวมทุกรายการจ่ายของใบนั้น"""
+    rows = {}
+    for cond in contract.conditions.all():
+        for log in _uncounted_commission_logs(contract, cond):
+            currency, lines = cond.payment_lines(log)
+            if not lines:
+                continue
+            row = rows.setdefault((cond.pk, log.purchase_order_id, currency), {
+                'cond': cond, 'po': log.purchase_order, 'currency': currency, 'logs': [], 'lines': {},
+                'base': Decimal(0), 'commission': Decimal(0)})
+            row['logs'].append(log)
+            for l in lines:  # จ่ายหลายงวด = รวมยอดของสินค้าเดียวกัน
+                agg = row['lines'].setdefault(l['product'].pk, {**l, 'qty': Decimal(0), 'base': Decimal(0),
+                                                                 'commission': Decimal(0)})
+                for k in ('qty', 'base', 'commission'):
+                    agg[k] += l[k]
+                row['base'] += l['base']
+                row['commission'] += l['commission']
+    result = list(rows.values())
+    for row in result:
+        row['lines'] = list(row['lines'].values())
+        row['paid_date'] = max(log.payment_date for log in row['logs'])
+    return sorted(result, key=lambda r: (r['paid_date'], r['po'].po_number, r['cond'].pk))
+
+
+def create_purchase_commission_payouts(contract, picks=None):
     """A8 -> ใบสรุปค่าคอมฯ ใน A6 แยกตามเงื่อนไข/รอบ/สกุลเงิน -> (สร้างใหม่, เพิ่มเข้าใบเดิม, ข้าม)
     นับรายการจ่ายค่าสินค้าของใบสั่งซื้อที่จ่ายครบแล้ว ที่ยังไม่อยู่ในใบของเงื่อนไขเดียวกัน
-    ต่อคำสั่งซื้อ = 1 ใบสั่งซื้อต่อ 1 ใบสรุป"""
+    ต่อคำสั่งซื้อ = 1 ใบสั่งซื้อต่อ 1 ใบสรุป
+    picks: {(เงื่อนไข id, ใบสั่งซื้อ id)} ที่ติ๊กเลือกจ่าย — None = ทุกใบ"""
     from django.db import transaction
     from django.db.models import Max
     created = added = skipped = 0
     for cond in contract.conditions.all():
-        logs = list(contract.product_payments(any_supplier=cond.type == 'PRODUCT_BASED')
-                    .filter(purchase_order__payment_status__in=FULLY_PAID)
-                    .exclude(commission_items__payout__purchase_condition=cond)
-                    .order_by('payment_date', 'id'))
+        logs = [log for log in _uncounted_commission_logs(contract, cond)
+                if picks is None or (cond.pk, log.purchase_order_id) in picks]
         po_ids = {log.purchase_order_id for log in logs}
         paid_on = dict(PurchaseOrder.objects.filter(pk__in=po_ids).annotate(d=Max('payment_logs__payment_date'))
                        .values_list('pk', 'd'))

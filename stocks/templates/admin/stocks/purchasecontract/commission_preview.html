@@ -1,0 +1,133 @@
+{% extends "admin/base_site.html" %}
+{% load l10n %}
+{% block content %}
+<style>
+    .cp-wrap { padding:20px; max-width:1300px; }
+    .cp-summary { position:sticky; top:0; z-index:5; display:flex; flex-wrap:wrap; gap:6px 24px; align-items:center;
+                  padding:10px 16px; margin:12px 0 18px; background:#eff6ff; border:1px solid #bfdbfe; border-radius:6px; font-size:14px; }
+    .cp-summary b { font-size:16px; }
+    .cp-table { width:100%; border-collapse:collapse; margin:8px 0 24px; }
+    .cp-table th { padding:8px; text-align:left; border-bottom:2px solid #dee2e6; white-space:nowrap; }
+    .cp-table td { padding:6px 8px; }
+    .cp-table .num { text-align:right; white-space:nowrap; }
+    .cp-po td { border-top:1px solid #cbd5e1; background:#f8fafc; font-weight:600; }
+    .cp-line td { color:#475569; font-size:13px; }
+    .cp-line td:first-child { padding-left:40px; }
+    .cp-po.off td, .cp-line.off td { opacity:.45; }
+    .cp-cond { font-weight:normal; color:#64748b; font-size:12px; }
+</style>
+<div class="cp-wrap">
+    <h2>{{ title }}</h2>
+    <p>รายการจ่ายค่าสินค้าของใบสั่งซื้อที่จ่ายครบแล้ว ที่ยังไม่ได้สร้างใบสรุป — ติ๊กใบสั่งซื้อที่จะจ่ายค่าคอมฯ แล้วกดยืนยัน ระบบจะสร้างใบสรุปใน A6 (รายการสัญญาซื้อ/ขาย) ตามรอบของเงื่อนไข<br>
+    <span style="color:#64748b;">ยอดซื้อ = ยอดจ่ายก่อน VAT แบ่งตามสัดส่วนมูลค่าสินค้าในใบ · ใบที่ไม่ติ๊กยังค้างไว้ คำนวณใหม่ครั้งหน้าได้</span></p>
+
+    <form method="post" id="commission-form">{% csrf_token %}
+    {% if has_rows %}
+    <div class="cp-summary">
+        <span>เลือก <b id="cp-count">0</b> ใบสั่งซื้อ</span>
+        <span>ยอดซื้อ <b id="cp-base">0.00</b></span>
+        <span>ค่าคอมฯ ที่จะจ่าย <b id="cp-commission" style="color:#16a34a;">0.00</b></span>
+        <label style="margin-left:auto;cursor:pointer;"><input type="checkbox" id="cp-all" checked> เลือกทั้งหมด</label>
+    </div>
+    {% endif %}
+
+    {% for g in groups %}
+        <h3 style="margin-top:8px;">{{ g.contract.contract_name }} <span class="cp-cond">ผู้รับค่าคอมฯ: {{ g.contract.supplier.company_name }}</span></h3>
+        {% if g.no_condition %}
+            <p style="color:#b45309;">⚠️ สัญญานี้ไม่มีเงื่อนไข</p>
+        {% elif not g.rows %}
+            <p style="color:#64748b;">ไม่มีรายการใหม่ที่ต้องจ่าย (ใบสั่งซื้อที่เข้าเงื่อนไขยังไม่จ่ายครบ หรือสร้างใบสรุปไปแล้ว)</p>
+        {% else %}
+        <table class="cp-table">
+            <thead><tr>
+                <th style="width:30px;"></th>
+                <th>ใบสั่งซื้อ / สินค้า</th>
+                <th>ผู้จำหน่าย</th>
+                <th>จ่ายครบวันที่</th>
+                <th class="num">จำนวน</th>
+                <th class="num">มูลค่า (ก่อน VAT)</th>
+                <th class="num">อัตรา</th>
+                <th class="num">ค่าคอมฯ</th>
+            </tr></thead>
+            <tbody>
+            {% for r in g.rows %}
+                <tr class="cp-po" data-row="{{ r.pick }}">
+                    <td><input type="checkbox" name="pick" value="{{ r.pick }}" class="cp-pick" checked
+                               data-cur="{{ r.currency }}" data-base="{{ r.base|unlocalize }}" data-commission="{{ r.commission|unlocalize }}"></td>
+                    <td><a href="{{ r.po_url }}" target="_blank">{{ r.po.po_number }}</a>
+                        <div class="cp-cond">{{ r.cond.get_type_display }} · {{ r.cond.get_period_display }}{% if r.cond.product %} · {{ r.cond.product }}{% elif r.cond.product_tag_link %} · กลุ่ม {{ r.cond.product_tag_link }}{% endif %}</div></td>
+                    <td>{{ r.po.supplier.company_name }}</td>
+                    <td>{{ r.paid_date|date:"d/m/Y" }}</td>
+                    <td></td>
+                    <td class="num">{{ r.base|floatformat:"2g" }} {% if r.currency != "THB" %}{{ r.currency }}{% endif %}</td>
+                    <td></td>
+                    <td class="num">{{ r.commission|floatformat:"2g" }} {% if r.currency != "THB" %}{{ r.currency }}{% endif %}</td>
+                </tr>
+                {% for l in r.lines %}
+                <tr class="cp-line" data-row="{{ r.pick }}">
+                    <td></td>
+                    <td colspan="3">{{ l.product }}</td>
+                    <td class="num">{{ l.qty|floatformat:"-2g" }}</td>
+                    <td class="num">{{ l.base|floatformat:"2g" }}</td>
+                    <td class="num">{{ r.rate_label }}</td>
+                    <td class="num">{{ l.commission|floatformat:"2g" }}</td>
+                </tr>
+                {% endfor %}
+            {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    {% endfor %}
+
+    {% if has_rows %}
+        {% for pk in selected_ids %}<input type="hidden" name="{{ action_checkbox_name }}" value="{{ pk|unlocalize }}">{% endfor %}
+        <input type="hidden" name="action" value="{{ action_name }}">
+        <input type="hidden" name="apply" value="1">
+        <button type="submit" style="background:#2563eb;color:#fff;border:none;padding:10px 20px;border-radius:4px;cursor:pointer;">✅ สร้างใบสรุป (A6) เฉพาะที่ติ๊ก</button>
+        <a href="#" onclick="window.history.back();" style="margin-left:10px;color:#666;">ยกเลิก</a>
+    {% else %}
+        <p><a href="#" onclick="window.history.back();">← กลับ</a></p>
+    {% endif %}
+    </form>
+</div>
+{% if has_rows %}
+<script>
+(function () {
+    var picks = document.querySelectorAll('#commission-form .cp-pick');
+    var all = document.getElementById('cp-all');
+    function fmt(totals) {
+        // แยกตามสกุล — บาทอย่างเดียวแสดงตัวเลขเฉยๆ
+        var keys = Object.keys(totals);
+        if (!keys.length) return '0.00';
+        return keys.map(function (c) {
+            var n = totals[c].toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            return (keys.length === 1 && c === 'THB') ? n : n + ' ' + (c === 'THB' ? 'บาท' : c);
+        }).join(' + ');
+    }
+    function refresh() {
+        var count = 0, base = {}, commission = {};
+        picks.forEach(function (el) {
+            document.querySelectorAll('tr[data-row="' + el.value + '"]').forEach(function (tr) {
+                tr.classList.toggle('off', !el.checked);
+            });
+            if (!el.checked) return;
+            count++;
+            var c = el.dataset.cur;
+            base[c] = (base[c] || 0) + parseFloat(el.dataset.base);
+            commission[c] = (commission[c] || 0) + parseFloat(el.dataset.commission);
+        });
+        document.getElementById('cp-count').textContent = count;
+        document.getElementById('cp-base').textContent = fmt(base);
+        document.getElementById('cp-commission').textContent = fmt(commission);
+        all.checked = count === picks.length;
+    }
+    picks.forEach(function (el) { el.addEventListener('change', refresh); });
+    all.addEventListener('change', function () {
+        picks.forEach(function (el) { el.checked = all.checked; });
+        refresh();
+    });
+    refresh();
+})();
+</script>
+{% endif %}
+{% endblock %}

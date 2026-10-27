@@ -6756,9 +6756,52 @@ class ConditionInline(UnfoldTabularInline):
     extra = 1 # 🎯 ยิงบาร์โค้ดหาสินค้าได้เหมือนเดิม
     fields = ['type', 'period', 'product', 'product_tag_link', 'method', 'value']
 
+class ContractUnpaidColumnsMixin(ColumnTotalsMixin):
+    """A7/A8: ยอดตามสัญญาที่ยังไม่ได้จ่าย ดูคร่าวๆ ในหน้ารายการได้เลยไม่ต้องกดคำนวณ (contract_unpaid_summary)
+    ติ๊กเลือกสัญญา -> กล่องสรุปยอดด้านบน (js/admin_sum_selected.js) เหมือนเมนูอื่น"""
+    unpaid_columns = ('get_unpaid_new', 'get_unpaid_pending', 'get_unpaid_total')
+
+    class Media:
+        js = ('js/admin_sum_selected.js',)
+
+    @staticmethod
+    def _unpaid(obj):
+        if not hasattr(obj, '_unpaid_summary'):
+            obj._unpaid_summary = contract_unpaid_summary(obj)
+        return obj._unpaid_summary
+
+    @staticmethod
+    def _money_by_currency(totals):
+        # บาทอย่างเดียว = ตัวเลขเฉยๆ, สกุลอื่นมี data-cur ให้กล่องสรุปรวมแยกสกุล
+        totals = {c: v for c, v in totals.items() if v}
+        if not totals:
+            return '-'
+        if list(totals) == ['THB']:
+            return f"{totals['THB']:,.2f}"
+        return format_html_join(mark_safe('<br>'), '<span data-cur="{}" data-sum="{}">{} {}</span>',
+                                ((c, v, f"{v:,.2f}", c) for c, v in totals.items()))
+
+    @admin.display(description="ยังไม่สรุป")
+    def get_unpaid_new(self, obj):
+        return self._money_by_currency(self._unpaid(obj)['new'])
+
+    @admin.display(description="สรุปแล้ว รอจ่าย")
+    def get_unpaid_pending(self, obj):
+        return self._money_by_currency(self._unpaid(obj)['pending'])
+
+    @admin.display(description="ค้างจ่ายรวม")
+    def get_unpaid_total(self, obj):
+        summary = self._unpaid(obj)
+        total = dict(summary['new'])
+        for c, v in summary['pending'].items():
+            total[c] = total.get(c, Decimal(0)) + v
+        return format_html('<b>{}</b>', self._money_by_currency(total))
+
+
 @admin.register(SalesContract)
-class SalesContractAdmin(ExportToExcelMixin, UnfoldModelAdmin):
-    list_display = ('contract_name', 'customer', 'start_date', 'end_date', 'is_active')
+class SalesContractAdmin(ContractUnpaidColumnsMixin, ExportToExcelMixin, UnfoldModelAdmin):
+    list_display = ('contract_name', 'customer', 'start_date', 'end_date', 'is_active',
+                    *ContractUnpaidColumnsMixin.unpaid_columns)
     search_fields = ('contract_name', 'customer__company_name')
     autocomplete_fields = ['customer']
     inlines = [ConditionInline]
@@ -6815,8 +6858,9 @@ class PurchaseContractConditionInline(UnfoldTabularInline):
 
 
 @admin.register(PurchaseContract)
-class PurchaseContractAdmin(ExportToExcelMixin, UnfoldModelAdmin):
-    list_display = ('contract_name', 'supplier', 'start_date', 'end_date', 'is_active')
+class PurchaseContractAdmin(ContractUnpaidColumnsMixin, ExportToExcelMixin, UnfoldModelAdmin):
+    list_display = ('contract_name', 'supplier', 'start_date', 'end_date', 'is_active',
+                    *ContractUnpaidColumnsMixin.unpaid_columns)
     list_filter = ('is_active',)
     search_fields = ('contract_name', 'supplier__company_name')
     autocomplete_fields = ['supplier']
@@ -6825,14 +6869,44 @@ class PurchaseContractAdmin(ExportToExcelMixin, UnfoldModelAdmin):
 
     @admin.action(description="🔄 คำนวณสัญญาและสรุป")
     def calculate_commissions(self, request, queryset):
-        created = added = skipped = 0
-        for contract in queryset:
-            if not contract.conditions.exists():
-                self.message_user(request, f"⚠️ สัญญา '{contract}' ไม่มีเงื่อนไข ข้ามไป", level='warning')
-                continue
-            c, a, k = create_purchase_commission_payouts(contract)
-            created, added, skipped = created + c, added + a, skipped + k
-        self.message_user(request, _contract_payout_message("ค่าคอมฯ", created, added, skipped))
+        contracts = list(queryset.select_related('supplier'))
+        if 'apply' in request.POST:
+            # ติ๊กเลือกจ่ายทีละแถว (สัญญา:เงื่อนไข:ใบสั่งซื้อ) -> สร้างใบสรุปใน A6 เฉพาะที่ติ๊ก
+            picks = {}
+            for value in request.POST.getlist('pick'):
+                try:
+                    contract_id, cond_id, po_id = (int(x) for x in value.split(':'))
+                except ValueError:
+                    continue
+                picks.setdefault(contract_id, set()).add((cond_id, po_id))
+            if not picks:
+                self.message_user(request, "ไม่ได้ติ๊กเลือกรายการที่จะจ่าย", messages.WARNING)
+                return None
+            created = added = skipped = 0
+            for contract in contracts:
+                if contract.pk not in picks:
+                    continue
+                c, a, k = create_purchase_commission_payouts(contract, picks[contract.pk])
+                created, added, skipped = created + c, added + a, skipped + k
+            self.message_user(request, _contract_payout_message("ค่าคอมฯ", created, added, skipped))
+            return None
+        groups = []
+        for contract in contracts:
+            rows = purchase_commission_candidates(contract)
+            for r in rows:
+                r['pick'] = f"{contract.pk}:{r['cond'].pk}:{r['po'].pk}"
+                r['po_url'] = reverse('admin:stocks_financereport_change', args=[r['po'].pk])
+                cond = r['cond']
+                r['rate_label'] = (f"{_plain_decimal(cond.value)}%" if cond.method == 'PERCENT'
+                                   else f"{_plain_decimal(cond.value)} {r['currency']}/ชิ้น")
+            groups.append({'contract': contract, 'rows': rows, 'no_condition': not contract.conditions.exists()})
+        return TemplateResponse(request, 'admin/stocks/purchasecontract/commission_preview.html', {
+            **self.admin_site.each_context(request),
+            'title': "คำนวณสัญญาและสรุป", 'opts': self.model._meta, 'groups': groups,
+            'has_rows': any(g['rows'] for g in groups),
+            'selected_ids': [c.pk for c in contracts],
+            'action_name': 'calculate_commissions', 'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
+        })
 
 
 class RebatePayoutItemInline(UnfoldTabularInline):
@@ -6917,7 +6991,7 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     form = RebatePayoutForm
     actions = ['export_to_excel']
     list_display = ('get_kind', 'get_contract', 'get_party', 'period_start', 'period_end', 'payout_date',
-                    'get_total', 'get_commission', 'currency', 'status', 'ref_invoice')
+                    'get_total', 'get_commission', 'currency', 'status', 'ref_invoice', 'get_doc_link')
     list_filter = (
         RebatePayoutKindFilter,
         ('status', MultipleChoicesDropdownFilter),
@@ -6989,6 +7063,12 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         return format_html('<a href="{}" target="_blank">{}</a>',
                            reverse('admin:stocks_financereport_change', args=[obj.purchase_order_id]),
                            obj.purchase_order.po_number)
+
+    @admin.display(description="")
+    def get_doc_link(self, obj):
+        # ใบสรุป (ดูอย่างเดียว) ว่ามาจาก PO/IV ไหน — เปิดหน้าต่างใหม่ เหมือนลิงก์เอกสารใน M1
+        url = reverse('admin:stocks_rebatepayout_detail', args=[obj.pk])
+        return format_html('<a href="{}" target="_blank" title="ดูใบสรุป (ดูอย่างเดียว)">📄 ใบสรุป</a>', url)
 
     @admin.display(description="ใบส่งของ")
     def sales_receipt_link(self, obj):
