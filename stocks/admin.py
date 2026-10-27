@@ -4479,12 +4479,19 @@ class ProductCategoryAdmin(UnfoldModelAdmin):
 class ProductTagAddForm(forms.ModelForm):
     """W5 เพิ่มสินค้าเข้าแท็ก: เลือกบาร์โค้ด (ค้นหาได้) -> ผูกสินค้าของบาร์โค้ดนั้น"""
     barcode = forms.ModelChoiceField(
-        queryset=ProductBarcode.objects.select_related('product'), label="บาร์โค้ด",
+        queryset=ProductBarcode.objects.select_related('product'), label="บาร์โค้ด", required=False,
         widget=AutocompleteSelect(CustomerProductContract._meta.get_field('barcode'), admin.site))
 
     class Meta:
         model = Product.tags.through
         fields = ('barcode',)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance.pk:  # แถวสินค้าที่มีแท็กอยู่แล้ว: แสดงชื่อ + ถังขยะเอาออก ไม่ต้องเลือกบาร์โค้ด
+            self.fields['barcode'].widget = forms.HiddenInput()
+        else:
+            self.fields['barcode'].required = True
 
     def clean(self):
         cleaned = super().clean()
@@ -4511,20 +4518,20 @@ class ProductTagAddFormSet(forms.BaseInlineFormSet):
 
 
 class ProductTagAddInline(UnfoldTabularInline):
-    """เพิ่มสินค้าเข้าแท็กทีละหลายรายการ — แสดงเฉพาะแถวว่างสำหรับเพิ่ม (ไม่โหลดสินค้าเดิมทั้งหมด กันหน้าช้า)
-    ดู/เอาสินค้าออกจากแท็ก: ปุ่ม "ดูสินค้าที่ใช้แท็กนี้" """
+    """สินค้าในแท็ก: แถวเดิม = ชื่อสินค้า + ถังขยะเอาออกจากแท็ก, แถวว่าง = เลือกบาร์โค้ดเพิ่มทีละหลายรายการ
+    แถวเดิมไม่มีช่องกรอก (โหลดแค่ชื่อสินค้า) — แท็กที่มีสินค้าเยอะไม่ทำให้หน้าช้าแบบ inline สินค้าเต็มฟอร์ม"""
     model = Product.tags.through
     form = ProductTagAddForm
     formset = ProductTagAddFormSet
     fields = ('barcode', 'product')
     readonly_fields = ('product',)
     extra = 5
-    can_delete = False
-    verbose_name = "สินค้าที่จะเพิ่ม"
-    verbose_name_plural = "➕ เพิ่มสินค้าเข้าแท็กนี้ (เลือกบาร์โค้ด)"
+    can_delete = True
+    verbose_name = "สินค้า"
+    verbose_name_plural = "สินค้าในแท็กนี้ (เพิ่ม: เลือกบาร์โค้ดในแถวว่าง · เอาออก: กดถังขยะ)"
 
     def get_queryset(self, request):
-        return super().get_queryset(request).none()
+        return super().get_queryset(request).select_related('product').order_by('product__name')
 
     class Media:
         js = ('js/contract_barcode_autofill.js',)
