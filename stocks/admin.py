@@ -600,7 +600,8 @@ class PurchasePaymentInline(UnfoldTabularInline):
     verbose_name = "💰 บันทึกการจ่ายเงิน"
     verbose_name_plural = "💰 ประวัติการจ่ายเงิน (Payments)"
     # ExRate ต่อจากยอดที่จ่าย: ยอดเป็นสกุลของใบสั่งซื้อ, สมุดบัญชีลงบาท = ยอด x เรท (ค่าเริ่มต้น = เรทของใบ)
-    fields = ('amount', 'exchange_rate', 'bank_account', 'notes', 'payment_date', 'user')
+    # สินค้า: ติ๊กออกเมื่อเป็นค่าขนส่ง/ค่าอื่น — ไม่นับเป็นยอดซื้อตอนคำนวณค่าคอมมิชชั่น (A8)
+    fields = ('amount', 'exchange_rate', 'bank_account', 'is_product', 'notes', 'payment_date', 'user')
     autocomplete_fields = ['bank_account']
     readonly_fields = ('user',)
 
@@ -1134,7 +1135,7 @@ class SalesDeliveryLogInline(UnfoldTabularInline):
     }
 
     def get_queryset(self, request):
-        # แถวรับคืนจากใบลดหนี้ไม่ใช่การส่งของ — จัดการที่เมนู A8 เท่านั้น
+        # แถวรับคืนจากใบลดหนี้ไม่ใช่การส่งของ — จัดการที่เมนู A9 เท่านั้น
         return (super().get_queryset(request).filter(credit_note_item__isnull=True)
                 .select_related('barcode_obj', 'user'))
 
@@ -3259,7 +3260,7 @@ class SalesReceiptAdmin(ColumnTotalsMixin, TaxReportActionsMixin, UnfoldModelAdm
     def get_search_results(self, request, queryset, search_term):
         queryset, may_have_duplicates = super().get_search_results(request, queryset, search_term)
         if request.GET.get('model_name') == 'creditnote':
-            # ช่องเลือกใบกำกับในใบลดหนี้ (A8) — ไม่ให้เลือกใบที่ยกเลิกแล้ว
+            # ช่องเลือกใบกำกับในใบลดหนี้ (A9) — ไม่ให้เลือกใบที่ยกเลิกแล้ว
             return queryset.filter(is_cancelled=False), may_have_duplicates
         term = (search_term or '').strip()
         if term:
@@ -6880,6 +6881,71 @@ class SalesContractAdmin(ExportToExcelMixin, UnfoldModelAdmin):
             msg += f" (ข้าม {skipped_count} รายการ: ซ้ำหรือไม่มีข้อมูล)"
         self.message_user(request, msg)
 
+class PurchaseContractConditionInline(UnfoldTabularInline):
+    model = PurchaseContractCondition
+    extra = 1
+    fields = ['period', 'min_amount', 'percent']
+
+
+@admin.register(PurchaseContract)
+class PurchaseContractAdmin(ExportToExcelMixin, UnfoldModelAdmin):
+    list_display = ('contract_name', 'supplier', 'start_date', 'end_date', 'is_active', 'commission_total_display')
+    list_filter = ('is_active',)
+    search_fields = ('contract_name', 'supplier__company_name')
+    autocomplete_fields = ['supplier']
+    inlines = [PurchaseContractConditionInline]
+    fields = ('supplier', 'contract_name', 'start_date', 'end_date', 'is_active', 'exclude_vat', 'notes',
+              'commission_summary')
+    readonly_fields = ('commission_summary',)
+    actions = ['export_to_excel']
+
+    @admin.display(description="ค่าคอมฯ รวม (บาท)")
+    def commission_total_display(self, obj):
+        return f"{obj.total_commission:,.2f}"
+
+    @admin.display(description="สรุปค่าคอมมิชชั่น")
+    def commission_summary(self, obj):
+        if not obj or not obj.pk:
+            return "บันทึกสัญญาก่อน จึงจะแสดงสรุปค่าคอมฯ"
+        payments = obj.product_payments()
+        skipped = (PurchasePaymentLog.objects
+                   .filter(purchase_order__supplier_id=obj.supplier_id, is_product=False,
+                           payment_date__gte=obj.start_date, payment_date__lte=obj.end_date)
+                   .exclude(purchase_order__status='Cancelled').count())
+        base_label = "ก่อน VAT" if obj.exclude_vat else "รวม VAT"
+        parts = [format_html(
+            '<div style="margin-bottom:8px;color:#64748b;">ยอดจ่ายค่าสินค้า {} รายการ (ฐาน {}, บาท)'
+            ' — ไม่นับรายการจ่ายที่ไม่ได้ติ๊ก "สินค้า" {} รายการ</div>',
+            payments.count(), base_label, skipped)]
+        grand = Decimal(0)
+        for cond, rows in obj.commission_rows():
+            body = format_html_join('', '<tr><td style="padding:2px 12px 2px 0;">{}</td>'
+                                        '<td style="text-align:right;padding:2px 12px;">{}</td>'
+                                        '<td style="text-align:right;padding:2px 12px;{}">{}</td></tr>',
+                                    ((r['label'], f"{r['base']:,.2f}",
+                                      '' if r['reached'] else 'color:#94a3b8;',
+                                      f"{r['commission']:,.2f}" if r['reached'] else "ไม่ถึงขั้นต่ำ")
+                                     for r in rows))
+            total = sum((r['commission'] for r in rows), Decimal(0))
+            grand += total
+            parts.append(format_html(
+                '<div style="margin-top:8px;font-weight:600;">{} {}% (ขั้นต่ำ {})</div>'
+                '<table><tr><th style="text-align:left;padding-right:12px;">รอบ</th>'
+                '<th style="text-align:right;padding:0 12px;">ยอดซื้อสินค้า</th>'
+                '<th style="text-align:right;padding:0 12px;">ค่าคอมฯ</th></tr>{}'
+                '<tr><td style="font-weight:600;">รวม</td><td></td>'
+                '<td style="text-align:right;padding:2px 12px;font-weight:600;">{}</td></tr></table>',
+                cond.get_period_display(), cond.percent, f"{cond.min_amount:,.2f}",
+                body or format_html('<tr><td colspan="3" style="color:#94a3b8;">ไม่มียอดซื้อในช่วงสัญญา</td></tr>'),
+                f"{total:,.2f}"))
+        if len(parts) == 1:
+            parts.append(format_html('<div style="color:#94a3b8;">ยังไม่มีเงื่อนไขค่าคอมฯ</div>'))
+        else:
+            parts.append(format_html('<div style="margin-top:10px;font-weight:700;">ค่าคอมฯ รวมทั้งสัญญา {} บาท</div>',
+                                     f"{grand:,.2f}"))
+        return format_html_join('', '{}', ((p,) for p in parts))
+
+
 class RebatePayoutItemInline(UnfoldTabularInline):
     model = RebatePayoutItem
     extra = 0
@@ -7070,7 +7136,7 @@ class SalesQuotationAdmin(UnfoldModelAdmin):
     actions = ['export_to_excel']
 
 
-# ── A8. ใบลดหนี้ (Credit Note) ────────────────────────────────────────────────
+# ── A9. ใบลดหนี้ (Credit Note) ────────────────────────────────────────────────
 # เลือกใบกำกับภาษี/ใบส่งของ (IV) -> ตารางรายการด้านล่างโหลดสินค้าในใบนั้นให้ทันที (หน้าเดียว)
 # พิมพ์ชื่อ/บาร์โค้ดเลือกสินค้า กรอกจำนวนที่ลดหนี้ -> บันทึก
 # ระบบสร้างแถวรับคืน (SalesDeliveryLog ติดลบ) ให้ — สต็อก/DC/Rebate/ยอดสัญญาปรับตามเอง

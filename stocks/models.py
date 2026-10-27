@@ -1013,6 +1013,8 @@ class PurchasePaymentLog(models.Model):
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="ผู้บันทึก")
     bank_account = models.ForeignKey('BankAccount', on_delete=models.PROTECT, null=True, blank=True,
                                      related_name='+', verbose_name="สมุดบัญชี")
+    # ติ๊กออก = จ่ายค่าอื่นที่ไม่ใช่ค่าสินค้า (ค่าขนส่ง ฯลฯ) — ไม่นับเป็นยอดซื้อตอนคำนวณค่าคอมมิชชั่นฝั่งซื้อ (A8)
+    is_product = models.BooleanField(default=True, verbose_name="สินค้า")
     # ชำระครบหลายใบพร้อมกัน (action A3/A4) = เงินก้อนเดียว — สมุดบัญชีรวมเป็น 1 รายการ (rebuild_payment_batch)
     batch_ref = models.CharField(max_length=32, blank=True, default='', db_index=True, editable=False)
 
@@ -1769,7 +1771,7 @@ class CreditNote(models.Model):
 
     class Meta:
         verbose_name = "ใบลดหนี้"
-        verbose_name_plural = "A8. ใบลดหนี้ (Credit Note)"
+        verbose_name_plural = "A9. ใบลดหนี้ (Credit Note)"
         ordering = ('-doc_date', '-id')
 
     def __str__(self):
@@ -2629,6 +2631,99 @@ def recalc_payout_on_item_change(sender, instance, **kwargs):
         instance.payout.recalculate_totals()
     except RebatePayout.DoesNotExist:
         pass
+
+
+# ============================================================
+# A8. สัญญาการซื้อ (ค่าคอมมิชชั่นจากผู้จำหน่าย)
+# ============================================================
+class PurchaseContract(models.Model):
+    supplier = models.ForeignKey('Supplier', on_delete=models.CASCADE, verbose_name="ผู้จำหน่าย")
+    contract_name = models.CharField(max_length=255, verbose_name="ชื่อสัญญา/เลขที่สัญญา")
+    start_date = models.DateField(verbose_name="วันที่เริ่มสัญญา")
+    end_date = models.DateField(verbose_name="วันที่สิ้นสุดสัญญา")
+    is_active = models.BooleanField(default=True, verbose_name="สถานะใช้งาน")
+    exclude_vat = models.BooleanField(default=True, verbose_name="คำนวณจากยอดก่อน VAT",
+                                      help_text="ติ๊กออก = คำนวณจากยอดจ่ายรวม VAT")
+    notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
+
+    def __str__(self):
+        return f"{self.contract_name} - {self.supplier.company_name}"
+
+    def product_payments(self):
+        """รายการจ่ายค่าสินค้า (ติ๊ก 'สินค้า') ของผู้จำหน่ายนี้ในช่วงสัญญา — ไม่นับใบสั่งซื้อที่ยกเลิก"""
+        return (PurchasePaymentLog.objects
+                .filter(purchase_order__supplier_id=self.supplier_id, is_product=True,
+                        payment_date__gte=self.start_date, payment_date__lte=self.end_date)
+                .exclude(purchase_order__status='Cancelled')
+                .select_related('purchase_order'))
+
+    def payment_base(self, log):
+        """ยอดฐานคำนวณค่าคอมฯ ของรายการจ่าย 1 รายการ (บาท)"""
+        base = log.amount_thb
+        if self.exclude_vat:
+            vat = log.purchase_order.vat_percent or Decimal(0)
+            base = base * Decimal(100) / (Decimal(100) + vat)
+        return round_money(base)
+
+    def commission_rows(self):
+        """[(condition, [{'label', 'start', 'end', 'base', 'commission'}])] — แต่ละเงื่อนไขคิดแยกแล้วรวมกัน"""
+        import calendar
+        logs = [(log.payment_date, self.payment_base(log)) for log in self.product_payments()]
+        result = []
+        for cond in self.conditions.all():
+            groups = {}
+            for d, base in logs:
+                if cond.period == 'MONTHLY':
+                    start = datetime.date(d.year, d.month, 1)
+                    end = datetime.date(d.year, d.month, calendar.monthrange(d.year, d.month)[1])
+                    label = f"{d.month:02d}/{d.year}"
+                elif cond.period == 'QUARTERLY':
+                    q = (d.month - 1) // 3 + 1
+                    start = datetime.date(d.year, (q - 1) * 3 + 1, 1)
+                    end = datetime.date(d.year, q * 3, calendar.monthrange(d.year, q * 3)[1])
+                    label = f"Q{q}/{d.year}"
+                elif cond.period == 'YEARLY':
+                    start, end, label = datetime.date(d.year, 1, 1), datetime.date(d.year, 12, 31), str(d.year)
+                else:  # ตลอดสัญญา
+                    start, end, label = self.start_date, self.end_date, "ตลอดสัญญา"
+                g = groups.setdefault(start, {'label': label, 'start': max(start, self.start_date),
+                                              'end': min(end, self.end_date), 'base': Decimal(0)})
+                g['base'] += base
+            rows = []
+            for start in sorted(groups):
+                g = groups[start]
+                reached = g['base'] >= (cond.min_amount or 0)
+                g['commission'] = round_money(g['base'] * cond.percent / Decimal(100)) if reached else Decimal(0)
+                g['reached'] = reached
+                rows.append(g)
+            result.append((cond, rows))
+        return result
+
+    @property
+    def total_commission(self):
+        return sum((r['commission'] for _, rows in self.commission_rows() for r in rows), Decimal(0))
+
+    class Meta:
+        verbose_name = "A8. สัญญาการซื้อ"
+        verbose_name_plural = "A8. สัญญาการซื้อ"
+
+
+class PurchaseContractCondition(models.Model):
+    PERIOD_CHOICES = [
+        ('MONTHLY', 'รายเดือน'),
+        ('QUARTERLY', 'รายไตรมาส'),
+        ('YEARLY', 'รายปี'),
+        ('WHOLE', 'ตลอดสัญญา'),
+    ]
+    contract = models.ForeignKey(PurchaseContract, on_delete=models.CASCADE, related_name='conditions')
+    period = models.CharField(max_length=20, choices=PERIOD_CHOICES, default='MONTHLY', verbose_name="รอบการคำนวณ")
+    min_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0, verbose_name="ยอดซื้อขั้นต่ำต่อรอบ (บาท)",
+                                     help_text="ยอดค่าสินค้าในรอบต่ำกว่านี้ = ไม่ได้ค่าคอมฯ")
+    percent = models.DecimalField(max_digits=6, decimal_places=3, verbose_name="ค่าคอมมิชชั่น (%)")
+
+    class Meta:
+        verbose_name = "เงื่อนไขค่าคอมมิชชั่น"
+        verbose_name_plural = "เงื่อนไขค่าคอมมิชชั่น (คิดจากยอดจ่ายค่าสินค้า — ติ๊ก 'สินค้า' ใน A3)"
 
 
 # ============================================================
