@@ -1,0 +1,10 @@
+/* W5 สินค้าในแท็ก: เลขลำดับหน้าช่องบาร์โค้ด — นับเฉพาะแถวที่เห็น (แถว template ของ formset ซ่อนอยู่ ไม่ถูกนับ) */
+table:has(td.field-row_no) { counter-reset: tag-row; }
+tbody.form-group:not(.empty-form) td.field-row_no::before {
+    counter-increment: tag-row;
+    content: counter(tag-row);
+    color: #6b7280;
+    font-variant-numeric: tabular-nums;
+}
+td.field-row_no { width: 40px; text-align: center; }
+.tag-dup-warning { color: #dc2626; font-size: 12px; margin-top: 4px; }

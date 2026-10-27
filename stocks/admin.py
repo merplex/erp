@@ -4476,6 +4476,11 @@ class ProductCategoryAdmin(UnfoldModelAdmin):
 # ---------------------------------------------------------
 # Register ProductTag เพื่อให้เมนูโผล่ในหน้า Admin
 # ---------------------------------------------------------
+class _DashWidget(forms.Widget):
+    def render(self, name, value, attrs=None, renderer=None):
+        return mark_safe('<span style="color:#9ca3af;">—</span>')
+
+
 class ProductTagAddForm(forms.ModelForm):
     """W5 เพิ่มสินค้าเข้าแท็ก: เลือกบาร์โค้ด (ค้นหาได้) -> ผูกสินค้าของบาร์โค้ดนั้น"""
     barcode = forms.ModelChoiceField(
@@ -4489,7 +4494,9 @@ class ProductTagAddForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if self.instance.pk:  # แถวสินค้าที่มีแท็กอยู่แล้ว: แสดงชื่อ + ถังขยะเอาออก ไม่ต้องเลือกบาร์โค้ด
-            self.fields['barcode'].widget = forms.HiddenInput()
+            # ยังต้องมีช่องในตาราง (HiddenInput ทำให้คอลัมน์เลื่อน ชื่อสินค้าไปอยู่ผิดช่อง)
+            self.fields['barcode'].disabled = True
+            self.fields['barcode'].widget = _DashWidget()
         else:
             self.fields['barcode'].required = True
 
@@ -4523,8 +4530,9 @@ class ProductTagAddInline(UnfoldTabularInline):
     model = Product.tags.through
     form = ProductTagAddForm
     formset = ProductTagAddFormSet
-    fields = ('barcode', 'product')
-    readonly_fields = ('product',)
+    fields = ('row_no', 'barcode', 'get_product')
+    readonly_fields = ('row_no', 'get_product')
+    hide_title = True
     extra = 5
     can_delete = True
     verbose_name = "สินค้า"
@@ -4533,8 +4541,20 @@ class ProductTagAddInline(UnfoldTabularInline):
     def get_queryset(self, request):
         return super().get_queryset(request).select_related('product').order_by('product__name')
 
+    @admin.display(description="#")
+    def row_no(self, obj):
+        return ''  # เลขลำดับเติมด้วย CSS counter (นับเฉพาะแถวที่เห็น รวมแถวที่กดเพิ่ม)
+
+    @admin.display(description="สินค้า")
+    def get_product(self, obj):
+        # data-product-id ให้ JS เช็คสินค้าซ้ำ (บาร์โค้ดต่างกันแต่สินค้าเดียวกัน) — แถวใหม่ JS เติมเองตอนเลือกบาร์โค้ด
+        if obj and obj.product_id:
+            return format_html('<span class="tag-product" data-product-id="{}">{}</span>', obj.product_id, obj.product)
+        return mark_safe('<span class="tag-product"></span>')
+
     class Media:
-        js = ('js/contract_barcode_autofill.js',)
+        css = {'all': ('css/product_tag_inline.css',)}
+        js = ('js/product_tag_inline.js',)
 
 
 @admin.register(ProductTag)
