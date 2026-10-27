@@ -2867,7 +2867,7 @@ def _uncounted_rebate_deliveries(contract, condition):
             qs = qs.filter(product__tags=condition.product_tag_link)
         else:
             return []
-    return list(qs.select_related('sales_order'))
+    return list(qs.select_related('sales_order', 'product'))
 
 
 def contract_unpaid_summary(contract):
@@ -2890,16 +2890,52 @@ def contract_unpaid_summary(contract):
     return {'new': new, 'pending': pending}
 
 
-def create_sales_rebate_payouts(contract):
+def sales_rebate_candidates(contract):
+    """Rebate ที่ยังไม่ได้สร้างใบสรุป (A7 ดูก่อนสร้าง) -> [{'cond', 'receipt', 'receipt_id', 'so', 'lines', 'base', 'rebate', ...}]
+    1 แถว = 1 ใบส่งของ (IV) ต่อ 1 เงื่อนไข (ติ๊กเลือกจ่ายทีละแถว) — แถวลดหนี้ที่อ้าง IV นั้นติดลบอยู่ใต้ IV เดียวกัน"""
+    from django.db.models import Max
+    rows = {}
+    for cond in contract.conditions.all():
+        deliveries = _uncounted_rebate_deliveries(contract, cond)
+        if not deliveries:
+            continue
+        receipt_of = _delivery_receipts(deliveries)
+        receipts = SalesReceipt.objects.in_bulk({rid for rid in receipt_of.values() if rid})
+        paid_on = dict(SalesOrder.objects.filter(pk__in={d.sales_order_id for d in deliveries})
+                       .annotate(d=Max('payments__payment_date')).values_list('pk', 'd'))
+        for d in deliveries:
+            rid = receipt_of.get(d.pk) or 0  # 0 = หา IV ไม่เจอ (รวมไว้แถวเดียวต่อ SO)
+            row = rows.setdefault((cond.pk, rid, d.sales_order_id if not rid else 0), {
+                'cond': cond, 'receipt': receipts.get(rid), 'receipt_id': rid, 'so': d.sales_order,
+                'paid_date': paid_on.get(d.sales_order_id), 'lines': [], 'base': Decimal(0), 'rebate': Decimal(0)})
+            base, rebate = d.shipment_value or Decimal(0), cond.delivery_rebate(d)
+            row['lines'].append({'delivery': d, 'product': d.product, 'qty': d.quantity_shipped, 'base': base,
+                                 'rebate': rebate, 'is_cn': bool(d.credit_note_item_id),
+                                 'date': _delivery_local_date(d.shipped_date)})
+            row['base'] += base
+            row['rebate'] += rebate
+    result = list(rows.values())
+    for row in result:
+        row['lines'].sort(key=lambda l: (l['is_cn'], l['date'], l['delivery'].pk))
+        row['shipped_date'] = min(l['date'] for l in row['lines'])
+    return sorted(result, key=lambda r: (r['shipped_date'], r['receipt'].receipt_number if r['receipt'] else '',
+                                         r['cond'].pk))
+
+
+def create_sales_rebate_payouts(contract, picks=None):
     """A7 -> ใบสรุป Rebate ใน A6 แยกตามเงื่อนไข/รอบ -> (สร้างใหม่, เพิ่มเข้าใบเดิม, ข้าม)
     นับรายการส่งของของใบสั่งขายที่รับเงินครบแล้ว ที่ยังไม่อยู่ในใบของเงื่อนไขเดียวกัน (เหมือนฝั่งซื้อ)
     — ใบเก่าก่อนแยกตามเงื่อนไข (ไม่มีเงื่อนไขผูก) นับว่าใช้ไปแล้วกับทุกเงื่อนไข
-    รอบที่มีใบ "รอจ่าย" อยู่ = เพิ่มเข้าใบเดิม"""
+    รอบที่มีใบ "รอจ่าย" อยู่ = เพิ่มเข้าใบเดิม
+    picks: {(เงื่อนไข id, IV id)} ที่ติ๊กเลือกจ่าย (IV id 0 = รายการที่หา IV ไม่เจอ) — None = ทุกรายการ"""
     from django.db import transaction
     from django.db.models import Max
     created = added = skipped = 0
     for condition in contract.conditions.all():
         deliveries = _uncounted_rebate_deliveries(contract, condition)
+        if picks is not None and deliveries:
+            receipt_of = _delivery_receipts(deliveries)
+            deliveries = [d for d in deliveries if (condition.pk, receipt_of.get(d.pk) or 0) in picks]
         if not deliveries:
             continue
         so_ids = {d.sales_order_id for d in deliveries}

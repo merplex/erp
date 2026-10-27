@@ -6808,17 +6808,48 @@ class SalesContractAdmin(ContractUnpaidColumnsMixin, ExportToExcelMixin, UnfoldM
 
     actions = ['calculate_pending_rebates', 'export_to_excel']
 
-    @admin.action(description="🔄 คำนวณยอดเงินคืนและสร้างใบสำคัญจ่าย")
+    @admin.action(description="🔄 คำนวณสัญญาและสรุป")
     def calculate_pending_rebates(self, request, queryset):
-        # นับเฉพาะใบสั่งขายที่รับเงินครบแล้ว — รอบตามวันที่รับเงินครบ (create_sales_rebate_payouts)
-        created = added = skipped = 0
-        for contract in queryset:
-            if not contract.conditions.exists():
-                self.message_user(request, f"⚠️ สัญญา '{contract}' ไม่มีเงื่อนไข ข้ามไป", level='warning')
-                continue
-            c, a, k = create_sales_rebate_payouts(contract)
-            created, added, skipped = created + c, added + a, skipped + k
-        self.message_user(request, _contract_payout_message("Rebate", created, added, skipped))
+        # นับเฉพาะใบสั่งขายที่รับเงินครบแล้ว — หน้าดูก่อนสร้าง ติ๊กเลือกทีละใบส่งของ (IV) เหมือน A8
+        contracts = list(queryset.select_related('customer'))
+        if 'apply' in request.POST:
+            picks = {}
+            for value in request.POST.getlist('pick'):
+                try:
+                    contract_id, cond_id, receipt_id = (int(x) for x in value.split(':'))
+                except ValueError:
+                    continue
+                picks.setdefault(contract_id, set()).add((cond_id, receipt_id))
+            if not picks:
+                self.message_user(request, "ไม่ได้ติ๊กเลือกรายการที่จะจ่าย", messages.WARNING)
+                return None
+            created = added = skipped = 0
+            for contract in contracts:
+                if contract.pk not in picks:
+                    continue
+                c, a, k = create_sales_rebate_payouts(contract, picks[contract.pk])
+                created, added, skipped = created + c, added + a, skipped + k
+            self.message_user(request, _contract_payout_message("Rebate", created, added, skipped))
+            return None
+        groups = []
+        for contract in contracts:
+            rows = sales_rebate_candidates(contract)
+            for r in rows:
+                cond = r['cond']
+                r['pick'] = f"{contract.pk}:{cond.pk}:{r['receipt_id']}"
+                r['so_url'] = reverse('admin:stocks_incomereport_change', args=[r['so'].pk])
+                r['iv_url'] = (reverse('admin:stocks_salesreceipt_print', args=[r['receipt'].pk])
+                               if r['receipt'] else '')
+                r['rate_label'] = (f"{_plain_decimal(cond.value)}%" if cond.method == 'PERCENT_SALES'
+                                   else f"{_plain_decimal(cond.value)} บาท/ชิ้น")
+            groups.append({'contract': contract, 'rows': rows, 'no_condition': not contract.conditions.exists()})
+        return TemplateResponse(request, 'admin/stocks/salescontract/rebate_preview.html', {
+            **self.admin_site.each_context(request),
+            'title': "คำนวณสัญญาและสรุป", 'opts': self.model._meta, 'groups': groups,
+            'has_rows': any(g['rows'] for g in groups),
+            'selected_ids': [c.pk for c in contracts],
+            'action_name': 'calculate_pending_rebates', 'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
+        })
 
 
 def _contract_payout_message(label, created, added, skipped):
