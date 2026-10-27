@@ -6766,120 +6766,25 @@ class SalesContractAdmin(ExportToExcelMixin, UnfoldModelAdmin):
 
     @admin.action(description="🔄 คำนวณยอดเงินคืนและสร้างใบสำคัญจ่าย")
     def calculate_pending_rebates(self, request, queryset):
-        import calendar
-        from decimal import Decimal
-
-        created_count = 0
-        skipped_count = 0
-
+        # นับเฉพาะใบสั่งขายที่รับเงินครบแล้ว — รอบตามวันที่รับเงินครบ (create_sales_rebate_payouts)
+        created = added = skipped = 0
         for contract in queryset:
-            conditions = contract.conditions.all()
-            if not conditions.exists():
+            if not contract.conditions.exists():
                 self.message_user(request, f"⚠️ สัญญา '{contract}' ไม่มีเงื่อนไข ข้ามไป", level='warning')
                 continue
+            c, a, k = create_sales_rebate_payouts(contract)
+            created, added, skipped = created + c, added + a, skipped + k
+        self.message_user(request, _contract_payout_message("Rebate", created, added, skipped))
 
-            for condition in conditions:
-                # --- 1. กรอง deliveries ตามลูกค้า + ช่วงสัญญา + ยังไม่ถูกนับ ---
-                deliveries_qs = SalesDeliveryLog.objects.filter(
-                    sales_order__customer=contract.customer,
-                    shipped_date__date__gte=contract.start_date,
-                    shipped_date__date__lte=contract.end_date,
-                    payout_items__isnull=True,
-                )
 
-                if condition.type == 'PRODUCT_BASED':
-                    if condition.product:
-                        deliveries_qs = deliveries_qs.filter(product=condition.product)
-                    elif condition.product_tag_link:
-                        deliveries_qs = deliveries_qs.filter(product__tags=condition.product_tag_link)
-                    else:
-                        deliveries_qs = deliveries_qs.none()
+def _contract_payout_message(label, created, added, skipped):
+    msg = f"✅ สร้างใบสรุป {label} ใหม่ {created} รายการ (A6)"
+    if added:
+        msg += f", เพิ่มรายการใหม่เข้าใบเดิม (รอจ่าย) {added} รายการ"
+    if skipped:
+        msg += f" (ข้าม {skipped} รอบ: จ่ายไปแล้ว)"
+    return msg
 
-                deliveries = list(deliveries_qs.select_related('product'))
-                if not deliveries:
-                    skipped_count += 1
-                    continue
-
-                # --- 2. จัดกลุ่มตาม period ---
-                groups = {}
-                for d in deliveries:
-                    dt = d.shipped_date
-                    if condition.period == 'MONTHLY':
-                        key = ('M', dt.year, dt.month)
-                    elif condition.period == 'QUARTERLY':
-                        key = ('Q', dt.year, (dt.month - 1) // 3 + 1)
-                    else:  # YEARLY / YTD
-                        key = ('Y', dt.year, 0)
-                    groups.setdefault(key, []).append(d)
-
-                # --- 3. สร้าง payout ต่อกลุ่ม ---
-                for key, items in groups.items():
-                    period_type, year, sub = key
-
-                    if period_type == 'M':
-                        month = sub
-                        period_start = datetime.date(year, month, 1)
-                        period_end = datetime.date(year, month, calendar.monthrange(year, month)[1])
-                        if contract.payout_trigger == 'END_OF_CONTRACT':
-                            payout_date = contract.end_date
-                        elif contract.payout_delay == 'NEXT_PERIOD':
-                            nm = month % 12 + 1
-                            ny = year + (month // 12)
-                            payout_date = datetime.date(ny, nm, min(contract.payout_day, calendar.monthrange(ny, nm)[1]))
-                        else:
-                            payout_date = datetime.date(year, month, min(contract.payout_day, calendar.monthrange(year, month)[1]))
-
-                    elif period_type == 'Q':
-                        q = sub
-                        sm = (q - 1) * 3 + 1
-                        em = q * 3
-                        period_start = datetime.date(year, sm, 1)
-                        period_end = datetime.date(year, em, calendar.monthrange(year, em)[1])
-                        payout_date = contract.end_date
-
-                    else:  # YEARLY / YTD
-                        period_start = datetime.date(year, 1, 1)
-                        period_end = datetime.date(year, 12, 31)
-                        payout_date = contract.end_date
-
-                    # ตรวจซ้ำ
-                    if RebatePayout.objects.filter(
-                        contract=contract,
-                        period_start=period_start,
-                        period_end=period_end,
-                    ).exists():
-                        skipped_count += 1
-                        continue
-
-                    # --- 4. คำนวณยอด ---
-                    total_sales = sum(i.shipment_value for i in items)
-                    if condition.method == 'PERCENT_SALES':
-                        rebate = total_sales * (condition.value / Decimal('100'))
-                    else:  # AMOUNT_PER_QTY
-                        total_qty = sum(i.quantity_shipped for i in items)
-                        rebate = Decimal(str(total_qty)) * condition.value
-
-                    # --- 5. สร้าง RebatePayout + Items ---
-                    payout = RebatePayout.objects.create(
-                        contract=contract,
-                        period_start=period_start,
-                        period_end=period_end,
-                        payout_date=payout_date,
-                        total_sales_amount=total_sales,
-                        rebate_amount=rebate,
-                    )
-                    for delivery in items:
-                        RebatePayoutItem.objects.create(
-                            payout=payout,
-                            delivery=delivery,
-                            shipped_date=delivery.shipped_date,
-                        )
-                    created_count += 1
-
-        msg = f"✅ สร้างใบสรุป Rebate ใหม่ {created_count} รายการ"
-        if skipped_count:
-            msg += f" (ข้าม {skipped_count} รายการ: ซ้ำหรือไม่มีข้อมูล)"
-        self.message_user(request, msg)
 
 class PurchaseContractConditionInline(UnfoldTabularInline):
     model = PurchaseContractCondition
@@ -6906,12 +6811,7 @@ class PurchaseContractAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                 continue
             c, a, k = create_purchase_commission_payouts(contract)
             created, added, skipped = created + c, added + a, skipped + k
-        msg = f"✅ สร้างใบสรุปค่าคอมฯ ใหม่ {created} รายการ"
-        if added:
-            msg += f", เพิ่มยอดจ่ายใหม่เข้าใบเดิม (รอรับ) {added} รายการ"
-        if skipped:
-            msg += f" (ข้าม {skipped} รอบ: รับเงินไปแล้ว)"
-        self.message_user(request, msg)
+        self.message_user(request, _contract_payout_message("ค่าคอมฯ", created, added, skipped))
 
 
 class RebatePayoutItemInline(UnfoldTabularInline):
@@ -6970,7 +6870,7 @@ class RebatePayoutKindFilter(admin.SimpleListFilter):
     parameter_name = 'kind'
 
     def lookups(self, request, model_admin):
-        return [('sale', "ขาย (จ่าย Rebate)"), ('purchase', "ซื้อ (รับค่าคอมฯ)")]
+        return [('sale', "ขาย (Rebate)"), ('purchase', "ซื้อ (ค่าคอมฯ)")]
 
     def queryset(self, request, queryset):
         if self.value() == 'sale':

@@ -2562,8 +2562,8 @@ class ContractCondition(models.Model):
         verbose_name_plural = "เงื่อนไขสัญญา"
 
 class RebatePayout(models.Model):
-    """A6. รายการสัญญาซื้อ/ขาย — 1 ใบ = ยอดตามสัญญา 1 รอบ
-    ขาย (contract): Rebate ที่เราจ่ายคืนลูกค้า -> เงินออก | ซื้อ (purchase_contract): ค่าคอมฯ ที่ได้จากผู้จำหน่าย -> เงินเข้า"""
+    """A6. รายการสัญญาซื้อ/ขาย — 1 ใบ = ยอดที่ต้องจ่ายตามสัญญา 1 รอบ (เงินออกทั้งสองฝั่ง เป็นรายการจ่ายแยก ไม่หัก/เพิ่มใน SO/PO)
+    ขาย (contract): Rebate ตามสัญญาขาย | ซื้อ (purchase_contract): ค่าคอมฯ ตามสัญญาซื้อ"""
     contract = models.ForeignKey(SalesContract, on_delete=models.CASCADE, null=True, blank=True,
                                  verbose_name="สัญญาการขาย")
     purchase_contract = models.ForeignKey('PurchaseContract', on_delete=models.CASCADE, null=True, blank=True,
@@ -2575,21 +2575,21 @@ class RebatePayout(models.Model):
                                        related_name='+', editable=False, verbose_name="ใบสั่งซื้อ")
     period_start = models.DateField(verbose_name="ยอดสะสมตั้งแต่วันที่")
     period_end = models.DateField(verbose_name="ยอดสะสมถึงวันที่")
-    payout_date = models.DateField(verbose_name="กำหนดวันที่จ่าย/รับ")
+    payout_date = models.DateField(verbose_name="กำหนดวันที่ต้องจ่าย")
     
     total_sales_amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="ยอดซื้อ/ขายในรอบ (ก่อน VAT)")
     rebate_amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="ค่าคอมฯ/Rebate")
     # ฝั่งซื้อเลือกได้ว่าคิดค่าคอมฯ เป็นบาท หรือสกุลของใบสั่งซื้อ — ฝั่งขายเป็นบาทเสมอ
     currency = models.CharField(max_length=3, choices=CURRENCY_CHOICES, default='THB', verbose_name="สกุลเงิน")
     exchange_rate = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True,
-                                        validators=[MinValueValidator(Decimal('0.0001'))], verbose_name="ExRate ตอนรับเงิน",
+                                        validators=[MinValueValidator(Decimal('0.0001'))], verbose_name="ExRate ตอนจ่าย",
                                         help_text="สกุลต่างประเทศ: บาทต่อ 1 หน่วยเงิน — สมุดบัญชีลงบาท = ค่าคอมฯ x เรทนี้")
     
-    status = models.CharField(max_length=20, choices=[('PENDING', 'รอจ่าย/รอรับ'), ('PAID', 'จ่าย/รับแล้ว')], default='PENDING')
-    ref_invoice = models.CharField(max_length=100, blank=True, verbose_name="เลขที่ใบลดหนี้/ใบจ่าย-รับเงิน")
-    paid_date = models.DateField(null=True, blank=True, verbose_name="วันที่จ่าย/รับจริง")
+    status = models.CharField(max_length=20, choices=[('PENDING', 'รอจ่าย'), ('PAID', 'จ่ายแล้ว')], default='PENDING')
+    ref_invoice = models.CharField(max_length=100, blank=True, verbose_name="เลขที่ใบลดหนี้/ใบจ่ายเงิน")
+    paid_date = models.DateField(null=True, blank=True, verbose_name="วันที่จ่ายจริง")
     bank_account = models.ForeignKey('BankAccount', on_delete=models.PROTECT, null=True, blank=True,
-                                     related_name='+', verbose_name="สมุดบัญชี")
+                                     related_name='+', verbose_name="จ่ายจากสมุดบัญชี")
 
     @property
     def is_purchase(self):
@@ -2603,7 +2603,7 @@ class RebatePayout(models.Model):
 
     def clean(self):
         if self.status == 'PAID' and self.currency != 'THB' and not self.exchange_rate:
-            raise ValidationError({'exchange_rate': f"กรอก ExRate ตอนรับเงิน ({self.currency})"})
+            raise ValidationError({'exchange_rate': f"กรอก ExRate ตอนจ่าย ({self.currency})"})
 
     def recalculate_totals(self):
         """คำนวณยอดรวมใหม่จากรายการในใบ (ขาย: รายการส่งของ | ซื้อ: รายการจ่ายเงินค่าสินค้า)"""
@@ -2666,8 +2666,8 @@ def recalc_payout_on_item_change(sender, instance, **kwargs):
 
 
 # ============================================================
-# A8. สัญญาการซื้อ (ค่าคอมมิชชั่นจากผู้จำหน่าย) — โครงเดียวกับ A7
-# คิดจากยอดที่จ่ายเงินจริง (ประวัติการจ่ายเงินใน A3) เฉพาะรายการที่ติ๊ก "สินค้า" — ยอดก่อน VAT
+# A8. สัญญาการซื้อ (ค่าคอมมิชชั่นฝั่งซื้อ — เราเป็นผู้จ่าย) — โครงเดียวกับ A7
+# คิดจากยอดที่จ่ายเงินจริง (ประวัติการจ่ายเงินใน A3) เฉพาะรายการที่ติ๊ก "สินค้า" — ยอดก่อน VAT — เมื่อใบสั่งซื้อจ่ายครบแล้ว
 # action "คำนวณค่าคอมฯ" -> สร้างใบสรุปใน A6 (รายการสัญญาซื้อ/ขาย) แยกตามรอบ
 # ============================================================
 class PurchaseContract(models.Model):
@@ -2678,10 +2678,10 @@ class PurchaseContract(models.Model):
     is_active = models.BooleanField(default=True, verbose_name="สถานะใช้งาน")
 
     payout_trigger = models.CharField(max_length=30, choices=SalesContract.PAYOUT_TRIGGER, default='PERIODIC',
-                                      verbose_name="เงื่อนไขการตัดรับ")
+                                      verbose_name="เงื่อนไขการตัดจ่าย")
     payout_delay = models.CharField(max_length=30, choices=SalesContract.PAYOUT_DELAY, default='NEXT_PERIOD',
-                                    verbose_name="จังหวะการรับเงิน")
-    payout_day = models.PositiveSmallIntegerField(default=5, verbose_name="รับวันที่ (ระบุตัวเลข 1-31)")
+                                    verbose_name="จังหวะการโอนเงิน")
+    payout_day = models.PositiveSmallIntegerField(default=5, verbose_name="จ่ายวันที่ (ระบุตัวเลข 1-31)")
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
 
     def __str__(self):
@@ -2790,7 +2790,7 @@ class PurchaseCommissionItem(models.Model):
 
 
 def _contract_payout_date(contract, period_end, monthly):
-    """วันนัดจ่าย/รับของรอบที่จบวันที่ period_end — ตรรกะเดียวกับ A7 (รายเดือน/ต่อคำสั่งซื้อ ตามจังหวะ, รอบยาวกว่านั้น = วันสิ้นสุดสัญญา)"""
+    """วันนัดจ่ายของรอบที่จบวันที่ period_end — รายเดือน/ต่อคำสั่งซื้อ ตามจังหวะการโอน, รอบยาวกว่านั้น = วันสิ้นสุดสัญญา"""
     import calendar
     if contract.payout_trigger == 'END_OF_CONTRACT' or not monthly:
         return contract.end_date
@@ -2800,56 +2800,118 @@ def _contract_payout_date(contract, period_end, monthly):
     return datetime.date(y, m, min(contract.payout_day, calendar.monthrange(y, m)[1]))
 
 
+def _contract_period(period, d):
+    """รอบของวันที่ d -> (ชนิด, วันเริ่ม, วันสิ้นสุด) — รายเดือน/ไตรมาส/ปี (YTD นับเป็นรายปี)"""
+    import calendar
+    if period == 'MONTHLY':
+        return 'M', datetime.date(d.year, d.month, 1), datetime.date(d.year, d.month, calendar.monthrange(d.year, d.month)[1])
+    if period == 'QUARTERLY':
+        q = (d.month - 1) // 3 + 1
+        return 'Q', datetime.date(d.year, (q - 1) * 3 + 1, 1), datetime.date(d.year, q * 3, calendar.monthrange(d.year, q * 3)[1])
+    return 'Y', datetime.date(d.year, 1, 1), datetime.date(d.year, 12, 31)
+
+
+def _pending_payout(filters, period_start, period_end):
+    """ใบของรอบนี้ที่ยังรอจ่าย (เพิ่มรายการเข้าใบเดิม) / 'PAID' ถ้ารอบนี้จ่ายไปแล้ว / None = ยังไม่มีใบ"""
+    existing = RebatePayout.objects.filter(period_start=period_start, period_end=period_end, **filters)
+    if existing.filter(status='PAID').exists():
+        return 'PAID'
+    return existing.first()
+
+
+# สัญญาซื้อ/ขาย: คิดค่าคอมฯ เมื่อใบสั่งซื้อจ่ายครบ / ใบสั่งขายรับเงินครบแล้วเท่านั้น
+# รอบของใบ = วันที่จ่าย/รับเงินครบ (วันที่ของรายการเงินล่าสุด) — ใบสรุปเป็นรายการจ่ายเงินแยก ไม่หัก/เพิ่มใน SO/PO
+FULLY_PAID = ('Paid', 'SETTLED')
+
+
+def create_sales_rebate_payouts(contract):
+    """A7 -> ใบสรุป Rebate ใน A6 -> (สร้างใหม่, เพิ่มเข้าใบเดิม, ข้าม)
+    นับรายการส่งของที่ยังไม่อยู่ในใบไหน ของใบสั่งขายที่รับเงินครบแล้ว — รอบที่มีใบ "รอจ่าย" อยู่ = เพิ่มเข้าใบเดิม"""
+    from django.db import transaction
+    from django.db.models import Max
+    created = added = skipped = 0
+    for condition in contract.conditions.all():
+        qs = SalesDeliveryLog.objects.filter(
+            sales_order__customer=contract.customer, sales_order__payment_status__in=FULLY_PAID,
+            shipped_date__date__gte=contract.start_date, shipped_date__date__lte=contract.end_date,
+            payout_items__isnull=True)
+        if condition.type == 'PRODUCT_BASED':
+            if condition.product_id:
+                qs = qs.filter(product=condition.product)
+            elif condition.product_tag_link_id:
+                qs = qs.filter(product__tags=condition.product_tag_link)
+            else:
+                qs = qs.none()
+        deliveries = list(qs.select_related('sales_order'))
+        if not deliveries:
+            continue
+        so_ids = {d.sales_order_id for d in deliveries}
+        paid_on = dict(SalesOrder.objects.filter(pk__in=so_ids).annotate(d=Max('payments__payment_date'))
+                       .values_list('pk', 'd'))
+        groups = {}
+        for d in deliveries:
+            day = paid_on.get(d.sales_order_id) or _delivery_local_date(d.shipped_date)
+            groups.setdefault(_contract_period(condition.period, day), []).append(d)
+        for (kind, period_start, period_end), items in groups.items():
+            with transaction.atomic():
+                payout = _pending_payout({'contract': contract}, period_start, period_end)
+                if payout == 'PAID':
+                    skipped += 1
+                    continue
+                if payout is None:
+                    payout = RebatePayout.objects.create(
+                        contract=contract, period_start=period_start, period_end=period_end,
+                        payout_date=_contract_payout_date(contract, period_end, kind == 'M'),
+                        total_sales_amount=0, rebate_amount=0)
+                    created += 1
+                else:
+                    added += 1
+                for d in items:  # ยอดใบ = ผลรวม Rebate ของรายการส่งของ (recalculate_totals)
+                    RebatePayoutItem.objects.create(payout=payout, delivery=d, shipped_date=d.shipped_date)
+    return created, added, skipped
+
+
 def create_purchase_commission_payouts(contract):
     """A8 -> ใบสรุปค่าคอมฯ ใน A6 แยกตามเงื่อนไข/รอบ/สกุลเงิน -> (สร้างใหม่, เพิ่มเข้าใบเดิม, ข้าม)
-    นับเฉพาะรายการจ่ายที่ยังไม่อยู่ในใบของเงื่อนไขเดียวกัน — จ่ายเพิ่มในรอบที่มีใบ "รอรับ" อยู่แล้ว = เพิ่มเข้าใบเดิม
-    ต่อคำสั่งซื้อ: นับเมื่อใบสั่งซื้อจ่ายครบแล้วเท่านั้น (1 ใบสั่งซื้อ = 1 ใบสรุป)"""
-    import calendar
+    นับรายการจ่ายค่าสินค้าของใบสั่งซื้อที่จ่ายครบแล้ว ที่ยังไม่อยู่ในใบของเงื่อนไขเดียวกัน
+    ต่อคำสั่งซื้อ = 1 ใบสั่งซื้อต่อ 1 ใบสรุป"""
     from django.db import transaction
+    from django.db.models import Max
     created = added = skipped = 0
     for cond in contract.conditions.all():
-        logs = contract.product_payments().exclude(commission_items__payout__purchase_condition=cond)
-        if cond.period == 'PER_ORDER':
-            logs = logs.filter(purchase_order__payment_status__in=['Paid', 'SETTLED'])
+        logs = list(contract.product_payments()
+                    .filter(purchase_order__payment_status__in=FULLY_PAID)
+                    .exclude(commission_items__payout__purchase_condition=cond)
+                    .order_by('payment_date', 'id'))
+        po_ids = {log.purchase_order_id for log in logs}
+        paid_on = dict(PurchaseOrder.objects.filter(pk__in=po_ids).annotate(d=Max('payment_logs__payment_date'))
+                       .values_list('pk', 'd'))
         groups = {}
-        for log in logs.order_by('payment_date', 'id'):
+        for log in logs:
             currency, lines = cond.payment_lines(log)
             if not lines:
                 continue
-            d = log.payment_date
+            day = paid_on[log.purchase_order_id]
             if cond.period == 'PER_ORDER':
-                key = ('O', log.purchase_order_id, 0)
-            elif cond.period == 'MONTHLY':
-                key = ('M', d.year, d.month)
-            elif cond.period == 'QUARTERLY':
-                key = ('Q', d.year, (d.month - 1) // 3 + 1)
-            else:  # YEARLY / YTD
-                key = ('Y', d.year, 0)
+                key = ('O', log.purchase_order_id, None)
+            else:
+                key = _contract_period(cond.period, day)
             groups.setdefault((key, currency), []).append(
                 (log, sum(l['base'] for l in lines), sum(l['commission'] for l in lines)))
 
         for ((kind, a, b), currency), rows in groups.items():
-            po_id = None
+            po_id = a if kind == 'O' else None
             if kind == 'O':
-                po_id = a
-                period_start, period_end = rows[0][0].payment_date, rows[-1][0].payment_date
-            elif kind == 'M':
-                period_start = datetime.date(a, b, 1)
-                period_end = datetime.date(a, b, calendar.monthrange(a, b)[1])
-            elif kind == 'Q':
-                period_start = datetime.date(a, (b - 1) * 3 + 1, 1)
-                period_end = datetime.date(a, b * 3, calendar.monthrange(a, b * 3)[1])
+                period_start, period_end = rows[0][0].payment_date, paid_on[po_id]
             else:
-                period_start, period_end = datetime.date(a, 1, 1), datetime.date(a, 12, 31)
+                period_start, period_end = a, b
             with transaction.atomic():
                 payout = None
                 if kind != 'O':
-                    existing = RebatePayout.objects.filter(purchase_condition=cond, currency=currency,
-                                                           period_start=period_start, period_end=period_end)
-                    if existing.filter(status='PAID').exists():
-                        skipped += 1  # รอบนี้รับเงินไปแล้ว — ไม่แก้ยอดย้อนหลัง
+                    payout = _pending_payout({'purchase_condition': cond, 'currency': currency}, period_start, period_end)
+                    if payout == 'PAID':
+                        skipped += 1  # รอบนี้จ่ายไปแล้ว — ไม่แก้ยอดย้อนหลัง
                         continue
-                    payout = existing.first()
                 if payout is None:
                     payout = RebatePayout.objects.create(
                         purchase_contract=contract, purchase_condition=cond, purchase_order_id=po_id,
@@ -3141,7 +3203,7 @@ class BankTransaction(models.Model):
         ('DC_REBATE', 'หัก DC/Rebate (A5)'),
         ('PURCHASE_PAYMENT', 'จ่ายเงินซื้อ (A3)'),
         ('REBATE_PAYOUT', 'จ่าย Rebate ตามสัญญา (A6)'),
-        ('PURCHASE_COMMISSION', 'รับค่าคอมฯ ตามสัญญาซื้อ (A6)'),
+        ('PURCHASE_COMMISSION', 'จ่ายค่าคอมฯ ตามสัญญาซื้อ (A6)'),
         ('LOAN_DISBURSE', 'รับเงินกู้ (M3)'),
         ('LOAN_PAYMENT', 'ผ่อนชำระเงินกู้ (M3)'),
         ('FACTORING', 'แฟคตอริ่ง: ดอกเบี้ย/โอนเข้าบัญชีที่ผูก'),
@@ -3448,11 +3510,11 @@ def sync_rebate_payout_ledger(payout):
         BankTransaction.objects.filter(rebate_payout=payout).delete()
         return
     period = f"({payout.period_start:%d/%m/%Y}–{payout.period_end:%d/%m/%Y})"
-    if payout.purchase_contract_id:  # ค่าคอมฯ จากผู้จำหน่าย = เงินเข้า
+    if payout.purchase_contract_id:  # ค่าคอมฯ ตามสัญญาซื้อ = เงินออก (สกุลต่างประเทศ x ExRate ตอนจ่าย)
         contract = payout.purchase_contract
-        values = {'amount': payout.amount_thb, 'source_type': 'PURCHASE_COMMISSION',
+        values = {'amount': -payout.amount_thb, 'source_type': 'PURCHASE_COMMISSION',
                   'party': contract.supplier.company_name,
-                  'description': f"รับค่าคอมฯ {contract.contract_name} {period}"[:255]}
+                  'description': f"จ่ายค่าคอมฯ {contract.contract_name} {period}"[:255]}
     else:
         contract = payout.contract
         values = {'amount': -round_money(payout.rebate_amount), 'source_type': 'REBATE_PAYOUT',
