@@ -6823,7 +6823,7 @@ class PurchaseContractAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     inlines = [PurchaseContractConditionInline]
     actions = ['calculate_commissions', 'export_to_excel']
 
-    @admin.action(description="🔄 คำนวณค่าคอมฯ และสร้างใบสรุป (A6)")
+    @admin.action(description="🔄 คำนวณสัญญาและสรุป")
     def calculate_commissions(self, request, queryset):
         created = added = skipped = 0
         for contract in queryset:

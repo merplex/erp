@@ -2694,13 +2694,15 @@ class PurchaseContract(models.Model):
     def __str__(self):
         return f"{self.contract_name} - {self.supplier.company_name}"
 
-    def product_payments(self):
-        """รายการจ่ายค่าสินค้า (ติ๊ก 'สินค้า') ของผู้จำหน่ายนี้ในช่วงสัญญา — ไม่นับใบสั่งซื้อที่ยกเลิก"""
-        return (PurchasePaymentLog.objects
-                .filter(purchase_order__supplier_id=self.supplier_id, is_product=True,
-                        payment_date__gte=self.start_date, payment_date__lte=self.end_date)
-                .exclude(purchase_order__status='Cancelled')
-                .select_related('purchase_order'))
+    def product_payments(self, any_supplier=False):
+        """รายการจ่ายค่าสินค้า (ติ๊ก 'สินค้า') ในช่วงสัญญา — ไม่นับใบสั่งซื้อที่ยกเลิก
+        any_supplier: เงื่อนไขตามสินค้า/กลุ่มสินค้า นับใบสั่งซื้อของผู้จำหน่ายทุกราย
+        (ผู้จำหน่ายในสัญญาอาจเป็นนายหน้าที่รับค่าคอมฯ ไม่ใช่ผู้ขายของ) — ยอดซื้อรวมนับเฉพาะผู้จำหน่ายในสัญญา"""
+        qs = PurchasePaymentLog.objects.filter(is_product=True, payment_date__gte=self.start_date,
+                                               payment_date__lte=self.end_date)
+        if not any_supplier:
+            qs = qs.filter(purchase_order__supplier_id=self.supplier_id)
+        return qs.exclude(purchase_order__status='Cancelled').select_related('purchase_order')
 
     class Meta:
         verbose_name = "A8. สัญญาการซื้อ"
@@ -2892,7 +2894,7 @@ def create_purchase_commission_payouts(contract):
     from django.db.models import Max
     created = added = skipped = 0
     for cond in contract.conditions.all():
-        logs = list(contract.product_payments()
+        logs = list(contract.product_payments(any_supplier=cond.type == 'PRODUCT_BASED')
                     .filter(purchase_order__payment_status__in=FULLY_PAID)
                     .exclude(commission_items__payout__purchase_condition=cond)
                     .order_by('payment_date', 'id'))
