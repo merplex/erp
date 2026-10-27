@@ -3513,17 +3513,17 @@ def sync_rebate_payout_ledger(payout):
     if payout.purchase_contract_id:  # ค่าคอมฯ ตามสัญญาซื้อ = เงินออก (สกุลต่างประเทศ x ExRate ตอนจ่าย)
         contract = payout.purchase_contract
         values = {'amount': -payout.amount_thb, 'source_type': 'PURCHASE_COMMISSION',
-                  'party': contract.supplier.company_name,
-                  'description': f"จ่ายค่าคอมฯ {contract.contract_name} {period}"[:255]}
+                  'party': contract.supplier.company_name}
     else:
         contract = payout.contract
         values = {'amount': -round_money(payout.rebate_amount), 'source_type': 'REBATE_PAYOUT',
-                  'party': contract.customer.company_name,
-                  'description': f"จ่าย Rebate {contract.contract_name} {period}"[:255]}
+                  'party': contract.customer.company_name}
     BankTransaction.objects.update_or_create(rebate_payout=payout, defaults={
         'bank_account_id': payout.bank_account_id,
         'txn_date': payout.paid_date or payout.payout_date,
         'reference': (payout.ref_invoice or contract.contract_name)[:100],
+        # คำอธิบาย = ชื่อสัญญา ลูกค้า/ผู้จำหน่าย (ช่วงวันที่)
+        'description': f"{contract.contract_name} {values['party']} {period}"[:255],
         **values,
     })
 

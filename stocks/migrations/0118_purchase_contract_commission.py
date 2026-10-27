@@ -6,6 +6,20 @@ from decimal import Decimal
 from django.db import migrations, models
 
 
+def rebate_ledger_description(apps, schema_editor):
+    """รายการเดินบัญชีของ Rebate ที่จ่ายแล้ว: คำอธิบาย = ชื่อสัญญา ลูกค้า (ช่วงวันที่) — แบบเดียวกับ sync_rebate_payout_ledger"""
+    BankTransaction = apps.get_model('stocks', 'BankTransaction')
+    for txn in BankTransaction.objects.filter(rebate_payout__isnull=False).select_related(
+            'rebate_payout__contract__customer'):
+        payout = txn.rebate_payout
+        contract = payout.contract
+        if contract is None:
+            continue
+        txn.description = (f"{contract.contract_name} {contract.customer.company_name} "
+                           f"({payout.period_start:%d/%m/%Y}–{payout.period_end:%d/%m/%Y})")[:255]
+        txn.save(update_fields=['description'])
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -376,4 +390,5 @@ class Migration(migrations.Migration):
                 to="stocks.purchasecontractcondition",
             ),
         ),
+        migrations.RunPython(rebate_ledger_description, migrations.RunPython.noop),
     ]
