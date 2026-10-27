@@ -6,10 +6,16 @@
     // ไม่ได้เขียนการเพิ่มแถวเอง แค่สั่งคลิกปุ่มเดิมของ Unfold ซ้ำ (n-1) ครั้ง แต่ละแถวใหม่จึงได้ event
     // formset:added ตามปกติ (script อื่นอย่าง autocomplete/เลขลำดับแถวทำงานเหมือนกดเองทีละครั้ง)
 
-    var PREFIX = 'items'; // related_name ของ SalesItem → SalesOrder (ดู models.py)
+    // prefix ของ inline ที่ใช้ช่องนี้: items = SalesItem ในใบสั่งขาย, Product_tags = W5 เพิ่มสินค้าเข้าแท็ก
+    // (หน้าไหนไม่มี inline นั้นก็ข้ามไปเอง)
+    var PREFIXES = ['items', 'Product_tags'];
     var MAX_PER_CLICK = 100;
 
     document.addEventListener('DOMContentLoaded', function () {
+        PREFIXES.forEach(setup);
+    });
+
+    function setup(PREFIX) {
         var group = document.getElementById(PREFIX + '-group'); // กล่อง inline ทั้งก้อน (Django ตั้ง id = <prefix>-group)
         var addBtn = group && group.querySelector('.form-actions .add-row');
         if (!addBtn) return; // SO ล็อคแล้ว (ไม่มีสิทธิ์เพิ่มแถว) หรือโครงสร้างหน้าไม่ตรง
@@ -76,5 +82,5 @@
             e.preventDefault();
             addBtn.click();
         });
-    });
+    }
 }());

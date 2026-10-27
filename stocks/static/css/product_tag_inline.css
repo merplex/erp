@@ -8,3 +8,18 @@ tbody.form-group:not(.empty-form) td.field-row_no::before {
 }
 td.field-row_no { width: 40px; text-align: center; }
 .tag-dup-warning { color: #dc2626; font-size: 12px; margin-top: 4px; }
+
+/* ตารางสินค้าที่มีแท็กอยู่แล้ว (HTML ธรรมดา ไม่ใช่ formset) */
+.tag-existing-search { width: 100%; max-width: 420px; padding: 6px 10px; margin-bottom: 8px;
+    border: 1px solid #d1d5db; border-radius: 6px; background: transparent; color: inherit; }
+.tag-existing-scroll { max-height: 480px; overflow: auto; border: 1px solid #e5e7eb; border-radius: 6px; }
+.tag-existing-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tag-existing-table th { position: sticky; top: 0; background: #f3f4f6; text-align: left; padding: 6px 10px; }
+.tag-existing-table td { padding: 5px 10px; border-top: 1px solid #f3f4f6; }
+.tag-existing-table td.tag-no { width: 50px; color: #6b7280; font-variant-numeric: tabular-nums; }
+.tag-existing-table td.tag-remove { width: 80px; white-space: nowrap; }
+.tag-existing-table tr.tag-removing td { text-decoration: line-through; color: #dc2626; }
+.tag-existing-table tr.tag-removing td.tag-remove { text-decoration: none; }
+.tag-existing-hint { font-size: 12px; color: #6b7280; margin-top: 6px; }
+.dark .tag-existing-table th { background: #1f2937; }
+.dark .tag-existing-table td, .dark .tag-existing-scroll { border-color: #374151; }

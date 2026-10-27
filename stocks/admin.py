@@ -4476,36 +4476,15 @@ class ProductCategoryAdmin(UnfoldModelAdmin):
 # ---------------------------------------------------------
 # Register ProductTag เพื่อให้เมนูโผล่ในหน้า Admin
 # ---------------------------------------------------------
-class _TextWidget(forms.Widget):
-    """แสดงข้อความเฉยๆ แทนช่องกรอก (ช่องที่ disabled)"""
-    def __init__(self, text='—'):
-        super().__init__()
-        self.text = text
-
-    def render(self, name, value, attrs=None, renderer=None):
-        return format_html('<span>{}</span>', self.text)
-
-
 class ProductTagAddForm(forms.ModelForm):
     """W5 เพิ่มสินค้าเข้าแท็ก: เลือกบาร์โค้ด (ค้นหาได้) -> ผูกสินค้าของบาร์โค้ดนั้น"""
     barcode = forms.ModelChoiceField(
-        queryset=ProductBarcode.objects.select_related('product'), label="บาร์โค้ด", required=False,
+        queryset=ProductBarcode.objects.select_related('product'), label="บาร์โค้ด",
         widget=AutocompleteSelect(CustomerProductContract._meta.get_field('barcode'), admin.site))
 
     class Meta:
         model = Product.tags.through
         fields = ('barcode',)
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        if self.instance.pk:  # แถวสินค้าที่มีแท็กอยู่แล้ว: แสดงชื่อ + ถังขยะเอาออก ไม่ต้องเลือกบาร์โค้ด
-            # ยังต้องมีช่องในตาราง (HiddenInput ทำให้คอลัมน์เลื่อน ชื่อสินค้าไปอยู่ผิดช่อง)
-            # แท็กผูกกับสินค้า ไม่ได้ผูกบาร์โค้ด -> แสดงบาร์โค้ดทั้งหมดของสินค้านั้น
-            codes = ', '.join(b.code for b in self.instance.product.barcodes.all())
-            self.fields['barcode'].disabled = True
-            self.fields['barcode'].widget = _TextWidget(codes or '—')
-        else:
-            self.fields['barcode'].required = True
 
     def clean(self):
         cleaned = super().clean()
@@ -4532,8 +4511,9 @@ class ProductTagAddFormSet(forms.BaseInlineFormSet):
 
 
 class ProductTagAddInline(UnfoldTabularInline):
-    """สินค้าในแท็ก: แถวเดิม = ชื่อสินค้า + ถังขยะเอาออกจากแท็ก, แถวว่าง = เลือกบาร์โค้ดเพิ่มทีละหลายรายการ
-    แถวเดิมไม่มีช่องกรอก (โหลดแค่ชื่อสินค้า) — แท็กที่มีสินค้าเยอะไม่ทำให้หน้าช้าแบบ inline สินค้าเต็มฟอร์ม"""
+    """เพิ่มสินค้าเข้าแท็ก: มีแต่แถวว่างให้เลือกบาร์โค้ด (เหมือนแถวสินค้าในใบสั่งขาย)
+    สินค้าที่มีแท็กอยู่แล้วไม่ใส่ใน formset (แท็กละพันสินค้า = พันฟอร์ม หน้าโหลด/บันทึกช้ามาก)
+    -> แสดงเป็นตารางธรรมดาใน ProductTagAdmin.tag_products_table แทน"""
     model = Product.tags.through
     form = ProductTagAddForm
     formset = ProductTagAddFormSet
@@ -4541,13 +4521,12 @@ class ProductTagAddInline(UnfoldTabularInline):
     readonly_fields = ('row_no', 'get_product')
     hide_title = True
     extra = 5
-    can_delete = True
+    can_delete = False
     verbose_name = "สินค้า"
-    verbose_name_plural = "สินค้าในแท็กนี้ (เพิ่ม: เลือกบาร์โค้ดในแถวว่าง · เอาออก: กดถังขยะ)"
+    verbose_name_plural = "เพิ่มสินค้าเข้าแท็กนี้ (เลือกบาร์โค้ดในแถวว่าง)"
 
     def get_queryset(self, request):
-        return (super().get_queryset(request).select_related('product').prefetch_related('product__barcodes')
-                .order_by('product__name'))
+        return super().get_queryset(request).none()
 
     @admin.display(description="#")
     def row_no(self, obj):
@@ -4555,14 +4534,12 @@ class ProductTagAddInline(UnfoldTabularInline):
 
     @admin.display(description="สินค้า")
     def get_product(self, obj):
-        # data-product-id ให้ JS เช็คสินค้าซ้ำ (บาร์โค้ดต่างกันแต่สินค้าเดียวกัน) — แถวใหม่ JS เติมเองตอนเลือกบาร์โค้ด
-        if obj and obj.product_id:
-            return format_html('<span class="tag-product" data-product-id="{}">{}</span>', obj.product_id, obj.product)
+        # JS เติมชื่อ + data-product-id ตอนเลือกบาร์โค้ด (ใช้เช็คสินค้าซ้ำ)
         return mark_safe('<span class="tag-product"></span>')
 
     class Media:
         css = {'all': ('css/product_tag_inline.css',)}
-        js = ('js/product_tag_inline.js',)
+        js = ('js/product_tag_inline.js', 'js/sales_item_add_count.js')  # ช่อง "จำนวนบรรทัด" ข้างปุ่มเพิ่มแถว เหมือนใบ SO
 
 
 @admin.register(ProductTag)
@@ -4570,7 +4547,8 @@ class ProductTagAdmin(UnfoldModelAdmin):
     # แสดงชื่อแท็กและตัวอย่างสีในหน้า List
     list_display = ('display_name_with_count', 'color')
     search_fields = ('name',)
-    readonly_fields = ('products_link',)
+    fields = ('name', 'color', 'tag_products_table')
+    readonly_fields = ('tag_products_table',)
     inlines = [ProductTagAddInline]
 
     def get_queryset(self, request):
@@ -4583,31 +4561,37 @@ class ProductTagAdmin(UnfoldModelAdmin):
         return f"{obj.name} ({obj.product_count})"
     display_name_with_count.short_description = "ชื่อแท็ก (จำนวนสินค้า)"
 
-    def products_link(self, obj):
-        # ✅ ลิงก์ไปหน้ารายการสินค้าที่ filter ตาม tag แทนการฝัง inline ทั้งหมด
-        # (แท็กที่มีสินค้าเยอะๆ ทำให้หน้า change ช้ามาก ทั้งตอนโหลดและตอน save เหมือนที่แก้ไปแล้ว
-        # ใน ProductCategoryAdmin เพราะ Django ต้อง build/validate formset ของทุกแถวเสมอ)
+    @admin.display(description="สินค้าในแท็กนี้")
+    def tag_products_table(self, obj):
+        # ตาราง HTML ธรรมดา 2 query (ไม่ใช่ฟอร์ม) — แท็กที่มีสินค้าเป็นพันก็ยังเร็ว
+        # ติ๊ก "เอาออก" แล้วบันทึก = ลบเฉพาะการผูกกับแท็กนี้ (แท็กอื่นของสินค้าไม่เกี่ยว) ดู save_related
         if not obj or not obj.pk:
-            return "-"
-        count = getattr(obj, 'product_count', None)
-        if count is None:
-            count = obj.products.count()
-        url = f"/admin/stocks/product/?tags__id__exact={obj.pk}"
-        return format_html('<a class="button" href="{}">📦 ดูสินค้าที่ใช้แท็กนี้ ({} รายการ)</a>', url, count)
-    products_link.short_description = "สินค้าที่ใช้แท็กนี้"
-
-    def color_display(self, obj):
-        # แสดงเป็นกล่องสีสวยๆ ให้เห็นในหน้า Admin เลยครับ
+            return "บันทึกแท็กก่อน แล้วค่อยเพิ่มสินค้า"
+        products = list(obj.products.order_by('name').values_list('id', 'name'))
+        if not products:
+            return "ยังไม่มีสินค้าในแท็กนี้"
+        codes = {}
+        for pid, code in ProductBarcode.objects.filter(product_id__in=[p[0] for p in products]).values_list('product_id', 'code'):
+            codes.setdefault(pid, []).append(code)
+        rows = format_html_join('', (
+            '<tr class="tag-existing" data-product-id="{}"><td class="tag-no">{}</td><td>{}</td><td>{}</td>'
+            '<td class="tag-remove"><label><input type="checkbox" name="remove_tag_product" value="{}"> 🗑️</label></td></tr>'),
+            ((pid, i, ', '.join(codes.get(pid, [])) or '—', name, pid) for i, (pid, name) in enumerate(products, 1)))
         return format_html(
-            '<span style="background: {}; color: white; padding: 3px 10px; border-radius: 12px; font-weight: bold;">{}</span>',
-            obj.color, obj.name
-        )
-    color_display.short_description = "ตัวอย่างสี"
+            '<div class="tag-existing-wrap">'
+            '<input type="search" class="tag-existing-search" placeholder="🔍 ค้นหาบาร์โค้ด / ชื่อสินค้า ({} รายการ)">'
+            '<div class="tag-existing-scroll"><table class="tag-existing-table">'
+            '<thead><tr><th>#</th><th>บาร์โค้ด</th><th>สินค้า</th><th>เอาออก</th></tr></thead>'
+            '<tbody>{}</tbody></table></div>'
+            '<div class="tag-existing-hint">ติ๊ก 🗑️ แล้วกดบันทึก = เอาสินค้าออกจากแท็กนี้เท่านั้น (แท็กอื่นของสินค้ายังอยู่)</div></div>',
+            len(products), rows)
 
-    # ✅ แถม: เพิ่มฟังก์ชันนับจำนวนสินค้าในหน้า List ให้ดูง่ายๆ ค่ะ
-    def get_product_count(self, obj):
-        return obj.product_set.count()
-    get_product_count.short_description = "จำนวนสินค้าที่ใช้"
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        remove_ids = [int(x) for x in request.POST.getlist('remove_tag_product') if x.isdigit()]
+        if remove_ids:
+            # ลบแถวในตารางเชื่อมเฉพาะ (แท็กนี้, สินค้า) — สินค้ายังมีแท็กอื่นครบ
+            form.instance.products.remove(*remove_ids)
 
 class PaymentDateForm(forms.Form):
     """A3 ชำระเงิน: ช่องแบบกล่องเหมือนหน้ารับเงิน A1/A2 (วันที่ = date input มีปุ่มปฏิทิน)"""

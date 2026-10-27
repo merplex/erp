@@ -2,7 +2,8 @@
     'use strict';
 
     // W5 สินค้าในแท็ก: เลือกบาร์โค้ด -> ขึ้นชื่อสินค้าทันที (AJAX) + เตือนถ้าสินค้าซ้ำกับแถวอื่น
-    // (บาร์โค้ดต่างกันแต่เป็นสินค้าเดียวกัน) — server เช็คซ้ำอีกชั้นตอนบันทึก
+    // หรือมีแท็กนี้อยู่แล้ว (บาร์โค้ดต่างกันแต่เป็นสินค้าเดียวกัน) — server เช็คซ้ำอีกชั้นตอนบันทึก
+    // + ตารางสินค้าเดิม: ช่องค้นหา (กรองฝั่ง browser) และขีดฆ่าแถวที่ติ๊กเอาออก
     document.addEventListener('DOMContentLoaded', function () {
         var $ = window.django ? django.jQuery : window.jQuery;
         if (!$) return;
@@ -16,17 +17,23 @@
         }
 
         function checkDuplicates() {
+            var existing = {};
+            $('tr.tag-existing').each(function () {
+                if (!$(this).find('input[name="remove_tag_product"]').prop('checked')) {
+                    existing[$(this).attr('data-product-id')] = true;
+                }
+            });
             var seen = {};
             $('tbody.form-group:not(.empty-form) .tag-product').each(function () {
                 var $row = rowOf(this);
                 $row.find('.tag-dup-warning').remove();
                 var id = $(this).attr('data-product-id');
                 if (!id || isDeleted($row)) return;
-                if (seen[id]) {
-                    var msg = $('<div class="tag-dup-warning"></div>')
-                        .text('⚠️ สินค้าซ้ำกับแถวที่ ' + seen[id].no + ' (' + seen[id].name + ')');
+                var text = existing[id] ? '⚠️ ' + $(this).text() + ' มีแท็กนี้อยู่แล้ว'
+                    : seen[id] ? '⚠️ สินค้าซ้ำกับแถวที่ ' + seen[id].no + ' (' + seen[id].name + ')' : '';
+                if (text) {
                     var $cell = $row.find('td.field-barcode');
-                    ($cell.length ? $cell : $row.find('td').last()).append(msg);
+                    ($cell.length ? $cell : $row.find('td').last()).append($('<div class="tag-dup-warning"></div>').text(text));
                 } else {
                     seen[id] = {no: $row.find('td.field-row_no').length ? rowNumber($row) : '', name: $(this).text()};
                 }
@@ -54,5 +61,22 @@
                 });
         });
         $(document).on('change', 'input[name^="Product_tags-"][name$="-DELETE"]', checkDuplicates);
+        $(document).on('change', 'input[name="remove_tag_product"]', function () {
+            $(this).closest('tr').toggleClass('tag-removing', this.checked);
+            checkDuplicates();
+        });
+
+        var timer;
+        $(document).on('input', '.tag-existing-search', function () {
+            var q = this.value.trim().toLowerCase();
+            clearTimeout(timer);
+            timer = setTimeout(function () {
+                $('tr.tag-existing').each(function () {
+                    this.style.display = !q || this.textContent.toLowerCase().indexOf(q) !== -1 ? '' : 'none';
+                });
+            }, 150);
+        });
+        // Enter ในช่องค้นหาอย่าไป submit ฟอร์ม
+        $(document).on('keydown', '.tag-existing-search', function (e) { if (e.key === 'Enter') e.preventDefault(); });
     });
 }());
