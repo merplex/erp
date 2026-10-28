@@ -1,4 +1,5 @@
-{# แถวต่อใบสั่งซื้อ + รายสินค้า — waiting = ใบสั่งซื้อยังจ่ายไม่ครบ: แสดงเหมือนกันแต่ไม่มีช่องติ๊ก #}
+{# แถวต่อใบสั่งซื้อ + รายสินค้า — waiting = ใบสั่งซื้อยังจ่ายไม่ครบ: แสดงเหมือนกันแต่ไม่มีช่องติ๊ก
+   merged = เงื่อนไขระบุสินค้า + รายการเดียว: จำนวน/อัตรา อยู่บรรทัดใบเลย (กลุ่ม/ยอดรวม แยกรายสินค้าเสมอ) #}
 {% load l10n %}
 {% for r in rows %}
     <tr class="cp-po"{% if not waiting %} data-row="{{ r.pick }}"{% endif %}>
@@ -8,12 +9,12 @@
             <div class="cp-cond">{{ r.cond.get_type_display }} · {{ r.cond.get_period_display }}{% if r.cond.product %} · {{ r.cond.product }}{% elif r.cond.product_tag_link %} · กลุ่ม {{ r.cond.product_tag_link }}{% endif %}</div></td>
         <td>{{ r.po.supplier.company_name }}</td>
         <td>{% if waiting %}<span style="font-weight:normal;">{{ r.po.get_payment_status_display }} · จ่ายล่าสุด {{ r.paid_date|date:"d/m/Y" }}</span>{% else %}{{ r.paid_date|date:"d/m/Y" }}{% endif %}</td>
-        <td></td>
+        <td class="num">{% if r.merged %}{{ r.lines.0.qty|floatformat:"-2g" }}{% endif %}</td>
         <td class="num">{{ r.base|floatformat:"2g" }} {% if r.currency != "THB" %}{{ r.currency }}{% endif %}</td>
-        <td></td>
+        <td class="num">{% if r.merged %}{{ r.rate_label }}{% endif %}</td>
         <td class="num">{{ r.commission|floatformat:"2g" }} {% if r.currency != "THB" %}{{ r.currency }}{% endif %}</td>
     </tr>
-    {% for l in r.lines %}
+    {% if not r.merged %}{% for l in r.lines %}
     <tr class="cp-line"{% if not waiting %} data-row="{{ r.pick }}"{% endif %}>
         <td></td>
         <td colspan="3">{{ l.product }}</td>
@@ -22,5 +23,5 @@
         <td class="num">{{ r.rate_label }}</td>
         <td class="num">{{ l.commission|floatformat:"2g" }}</td>
     </tr>
-    {% endfor %}
+    {% endfor %}{% endif %}
 {% endfor %}

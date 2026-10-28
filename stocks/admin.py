@@ -6961,6 +6961,9 @@ class SalesContractAdmin(ContractUnpaidColumnsMixin, ExportToExcelMixin, UnfoldM
                                if r['receipt'] else '')
                 r['rate_label'] = (f"{_plain_decimal(cond.value)}%" if cond.method == 'PERCENT_SALES'
                                    else f"{_plain_decimal(cond.value)} บาท/ชิ้น")
+                # เงื่อนไขระบุสินค้า + ใบมีรายการเดียว = รวมบรรทัดเดียว (ชื่อสินค้าอยู่ในบรรทัดเงื่อนไขแล้ว)
+                # กลุ่ม/ยอดรวม ไม่มีชื่อสินค้า -> แยกรายสินค้าเป็นบรรทัดย่อยเสมอ
+                r['merged'] = bool(cond.product_id) and len(r['lines']) == 1
             return rows
 
         groups = []
@@ -7067,6 +7070,7 @@ class PurchaseContractAdmin(ContractUnpaidColumnsMixin, ExportToExcelMixin, Unfo
                 cond = r['cond']
                 r['rate_label'] = (f"{_plain_decimal(cond.value)}%" if cond.method == 'PERCENT'
                                    else f"{_plain_decimal(cond.value)} {r['currency']}/ชิ้น")
+                r['merged'] = bool(cond.product_id) and len(r['lines']) == 1  # เหมือน A7
             return rows
 
         groups = []
