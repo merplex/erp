@@ -4558,7 +4558,8 @@ class ProductTagAddInline(UnfoldTabularInline):
 
     class Media:
         css = {'all': ('css/product_tag_inline.css',)}
-        js = ('js/product_tag_inline.js', 'js/sales_item_add_count.js')  # ช่อง "จำนวนบรรทัด" ข้างปุ่มเพิ่มแถว เหมือนใบ SO
+        # บาร์โค้ด <-> สินค้า เติมกันเอง + ช่อง "จำนวนบรรทัด" ข้างปุ่มเพิ่มแถว — ตัวเดียวกับใบ SO
+        js = ('js/product_tag_inline.js', 'js/product_barcode_sync.js', 'js/sales_item_add_count.js')
 
 
 @admin.register(ProductTag)

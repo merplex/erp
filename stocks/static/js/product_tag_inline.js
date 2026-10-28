@@ -1,14 +1,13 @@
 (function () {
     'use strict';
 
-    // W5 สินค้าในแท็ก — แถวเพิ่มสินค้า: เลือกบาร์โค้ด -> เติมช่องสินค้าให้ (เหมือนใบ SO) หรือค้นหาสินค้าจากชื่อเอง
+    // W5 สินค้าในแท็ก — แถวเพิ่มสินค้า: บาร์โค้ด <-> สินค้า เติมกันเองด้วย product_barcode_sync.js (ตัวเดียวกับใบ SO)
     // เลือกสินค้าแล้ว -> ขึ้นบริษัท/ราคา (AJAX) + เตือนถ้าสินค้าซ้ำกับแถวอื่นหรือมีแท็กนี้อยู่แล้ว
     // (บาร์โค้ดต่างกันแต่เป็นสินค้าเดียวกันก็จับได้) — server เช็คซ้ำอีกชั้นตอนบันทึก
     // + ตารางสินค้าเดิม: ช่องค้นหา (กรองฝั่ง browser) และขีดฆ่าแถวที่ติ๊กเอาออก
     document.addEventListener('DOMContentLoaded', function () {
         var $ = window.django ? django.jQuery : window.jQuery;
         if (!$) return;
-        var BARCODE = 'select[name^="Product_tags-"][name$="-barcode"]';
         var PRODUCT = 'select[name^="Product_tags-"][name$="-product"]';
 
         function rowOf(el) { return $(el).closest('tbody.form-group'); }
@@ -59,17 +58,6 @@
                 });
             });
         }
-
-        // เลือกบาร์โค้ด -> ตั้งช่องสินค้าให้ตรง (ช่องสินค้า change ต่อเอง)
-        $(document).on('change', BARCODE, function () {
-            if (!this.value) return;
-            var $product = rowOf(this).find(PRODUCT);
-            $.get('/api/barcode-info/', {barcode_id: this.value}).done(function (data) {
-                if (!data || !data.product_id || String($product.val()) === String(data.product_id)) return;
-                $product.find('option[value="' + data.product_id + '"]').remove();
-                $product.append(new Option(data.product_name, data.product_id, true, true)).trigger('change');
-            });
-        });
 
         $(document).on('change', PRODUCT, function () {
             fillSuppliers(rowOf(this), this.value);
