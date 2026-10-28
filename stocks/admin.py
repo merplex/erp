@@ -6866,7 +6866,7 @@ class ConditionInline(UnfoldTabularInline):
 class ContractUnpaidColumnsMixin(ColumnTotalsMixin):
     """A7/A8: ยอดตามสัญญาที่ยังไม่ได้จ่าย ดูคร่าวๆ ในหน้ารายการได้เลยไม่ต้องกดคำนวณ (contract_unpaid_summary)
     ติ๊กเลือกสัญญา -> กล่องสรุปยอดด้านบน (js/admin_sum_selected.js) เหมือนเมนูอื่น"""
-    unpaid_columns = ('get_unpaid_new', 'get_unpaid_pending', 'get_unpaid_total')
+    unpaid_columns = ('get_unpaid_not_due', 'get_unpaid_new', 'get_unpaid_pending', 'get_unpaid_total')
 
     class Media:
         js = ('js/admin_sum_selected.js',)
@@ -6887,6 +6887,12 @@ class ContractUnpaidColumnsMixin(ColumnTotalsMixin):
             return f"{totals['THB']:,.2f}"
         return format_html_join(mark_safe('<br>'), '<span data-cur="{}" data-sum="{}">{} {}</span>',
                                 ((c, v, f"{v:,.2f}", c) for c, v in totals.items()))
+
+    # ส่งของแล้ว (ขาย) / จ่ายบางงวดแล้ว (ซื้อ) แต่ใบสั่งขาย/ซื้อยังรับ/จ่ายเงินไม่ครบ = ยังสร้างใบสรุปไม่ได้
+    # ไม่รวมใน "ค้างจ่ายรวม" (ยังไม่ถึงรอบ)
+    @admin.display(description="ยังไม่ถึงกำหนด")
+    def get_unpaid_not_due(self, obj):
+        return self._money_by_currency(self._unpaid(obj)['not_due'])
 
     @admin.display(description="ยังไม่สรุป")
     def get_unpaid_new(self, obj):
@@ -6949,7 +6955,12 @@ class SalesContractAdmin(ContractUnpaidColumnsMixin, ExportToExcelMixin, UnfoldM
                                if r['receipt'] else '')
                 r['rate_label'] = (f"{_plain_decimal(cond.value)}%" if cond.method == 'PERCENT_SALES'
                                    else f"{_plain_decimal(cond.value)} บาท/ชิ้น")
-            groups.append({'contract': contract, 'rows': rows, 'no_condition': not contract.conditions.exists()})
+            waiting = sales_rebate_waiting(contract)
+            for w in waiting:
+                for u in w['unpaid']:
+                    u['so_url'] = reverse('admin:stocks_incomereport_change', args=[u['sales_order_id']])
+            groups.append({'contract': contract, 'rows': rows, 'waiting': waiting,
+                           'no_condition': not contract.conditions.exists()})
         return TemplateResponse(request, 'admin/stocks/salescontract/rebate_preview.html', {
             **self.admin_site.each_context(request),
             'title': "คำนวณสัญญาและสรุป", 'opts': self.model._meta, 'groups': groups,
@@ -7037,7 +7048,12 @@ class PurchaseContractAdmin(ContractUnpaidColumnsMixin, ExportToExcelMixin, Unfo
                 cond = r['cond']
                 r['rate_label'] = (f"{_plain_decimal(cond.value)}%" if cond.method == 'PERCENT'
                                    else f"{_plain_decimal(cond.value)} {r['currency']}/ชิ้น")
-            groups.append({'contract': contract, 'rows': rows, 'no_condition': not contract.conditions.exists()})
+            waiting = sales_rebate_waiting(contract)
+            for w in waiting:
+                for u in w['unpaid']:
+                    u['so_url'] = reverse('admin:stocks_incomereport_change', args=[u['sales_order_id']])
+            groups.append({'contract': contract, 'rows': rows, 'waiting': waiting,
+                           'no_condition': not contract.conditions.exists()})
         return TemplateResponse(request, 'admin/stocks/purchasecontract/commission_preview.html', {
             **self.admin_site.each_context(request),
             'title': "คำนวณสัญญาและสรุป", 'opts': self.model._meta, 'groups': groups,

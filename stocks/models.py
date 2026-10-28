@@ -2506,43 +2506,18 @@ class SalesContract(models.Model):
     end_date = models.DateField(verbose_name="วันที่สิ้นสุดสัญญา")
     is_active = models.BooleanField(default=True, verbose_name="สถานะใช้งาน")
 
-    PAYOUT_TRIGGER = [
-        ('END_OF_CONTRACT', 'จ่ายครั้งเดียวเมื่อครบสัญญา'),
-        ('ANNIVERSARY', 'จ่ายทุกวันครบรอบที่ระบุ (เช่น ทุกวันที่ 5 ของปี)'),
-        ('PERIODIC', 'จ่ายตามรอบเงื่อนไข (เดือน/ไตรมาส/ปี)'),
-    ]
-    
+    # วันครบกำหนดจ่ายของใบสรุป A6 = "จ่ายวันที่" ของเดือนที่รอบการคำนวณ (ในเงื่อนไข) จบ หรือเดือนถัดไป
+    # — ไม่มีผลกับยอดเงิน (ยอด/ช่วงของใบ ตามรอบการคำนวณของแต่ละเงื่อนไข) ดู _contract_payout_date
     PAYOUT_DELAY = [
-        ('SAME_PERIOD', 'จ่ายภายในเดือน/รอบที่เกิดยอดเลย'),
-        ('NEXT_PERIOD', 'จ่ายในเดือน/รอบถัดไป'),
-        ('SPECIFIC_DAY', 'จ่ายในวันที่ระบุของรอบถัดไป'),
+        ('SAME_PERIOD', 'เดือนเดียวกับที่จบรอบ'),
+        ('NEXT_PERIOD', 'เดือนถัดไป'),
     ]
 
-    payout_trigger = models.CharField(max_length=30, choices=PAYOUT_TRIGGER, default='PERIODIC', verbose_name="เงื่อนไขการตัดจ่าย")
-    payout_delay = models.CharField(max_length=30, choices=PAYOUT_DELAY, default='NEXT_PERIOD', verbose_name="จังหวะการโอนเงิน")
-    payout_day = models.PositiveSmallIntegerField(default=5, verbose_name="จ่ายวันที่ (ระบุตัวเลข 1-31)")
-    
-    next_payout_date = models.DateField(null=True, blank=True, verbose_name="วันนัดจ่ายรอบถัดไป (ระบบคำนวณให้)")
-
-    def save(self, *args, **kwargs):
-        # 🤖 คำนวณวันนัดจ่ายรอบถัดไปอัตโนมัติ
-        if not self.next_payout_date:
-            today = timezone.now().date()
-
-            if self.payout_trigger == 'END_OF_CONTRACT':
-                target_date = self.end_date
-            else:
-                base_date = max(self.start_date, today)
-                target_date = base_date.replace(day=min(self.payout_day, 28))
-
-            if self.payout_delay == 'NEXT_PERIOD':
-                next_month = target_date.month % 12 + 1
-                year = target_date.year + (target_date.month // 12)
-                target_date = target_date.replace(year=year, month=next_month)
-
-            self.next_payout_date = target_date
-
-        super().save(*args, **kwargs)
+    payout_delay = models.CharField(max_length=30, choices=PAYOUT_DELAY, default='NEXT_PERIOD', verbose_name="จ่ายเดือน",
+                                    help_text="นับจากเดือนที่รอบการคำนวณของเงื่อนไขจบ (ต่อใบส่งของ = เดือนที่รับเงินครบ)")
+    payout_day = models.PositiveSmallIntegerField(default=5, validators=[MinValueValidator(1), MaxValueValidator(31)],
+                                                  verbose_name="จ่ายวันที่ (1-31)",
+                                                  help_text="เดือนที่มีไม่ถึงวันนี้ = วันสุดท้ายของเดือน")
 
     def __str__(self):
         return f"{self.contract_name} - {self.customer.company_name}"
@@ -2569,16 +2544,23 @@ class ContractCondition(models.Model):
     ]
 
     contract = models.ForeignKey(SalesContract, on_delete=models.CASCADE, related_name='conditions')
-    type = models.CharField(max_length=20, choices=TYPE_CHOICES, verbose_name="ประเภทเงื่อนไข")
-    period = models.CharField(max_length=20, choices=PERIOD_CHOICES, verbose_name="รอบการคำนวณ")
+    # มี default = ตัวเลือกแรก (dropdown ไม่มีช่องว่าง browser เลือกตัวแรกให้) — ไม่งั้นแถวว่างที่ admin เพิ่มให้
+    # ถูกนับว่า "กรอกแล้ว" แล้วติด required ที่ช่องค่า บันทึกสัญญาไม่ได้จนกว่าจะลบแถว (A8 ตั้ง default ไว้แล้ว)
+    type = models.CharField(max_length=20, choices=TYPE_CHOICES, default='TOTAL_SALES', verbose_name="ประเภทเงื่อนไข")
+    period = models.CharField(max_length=20, choices=PERIOD_CHOICES, default='PER_DELIVERY', verbose_name="รอบการคำนวณ")
     
     # เจาะจงสินค้า (ใช้สำหรับแบบที่ 2)
     product = models.ForeignKey('Product', on_delete=models.SET_NULL, null=True, blank=True, verbose_name="สินค้าเฉพาะเจาะจง")
     product_tag_link = models.ForeignKey(ProductTag, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="กลุ่มสินค้า (Tag)")
     
     # วิธีคำนวณและค่าที่ได้
-    method = models.CharField(max_length=20, choices=CALC_METHOD, verbose_name="วิธีคำนวณ")
+    method = models.CharField(max_length=20, choices=CALC_METHOD, default='PERCENT_SALES', verbose_name="วิธีคำนวณ")
     value = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="ค่าที่ระบุ (% หรือ บาท)")
+
+    def clean(self):
+        # ตามสินค้า/กลุ่ม แต่ไม่ได้เลือกทั้งคู่ = ไม่มีวันมียอด -> เตือนตอนบันทึก
+        if self.type == 'PRODUCT_BASED' and not self.product_id and not self.product_tag_link_id:
+            raise ValidationError("เงื่อนไขตามสินค้า/กลุ่มสินค้า ต้องเลือกสินค้าหรือกลุ่มสินค้า (Tag)")
 
     def delivery_rebate(self, delivery):
         """Rebate ของรายการส่งของ 1 แถวตามเงื่อนไขนี้ (แถวลดหนี้ติดลบ = ลดยอด)"""
@@ -2710,11 +2692,12 @@ class PurchaseContract(models.Model):
     end_date = models.DateField(verbose_name="วันที่สิ้นสุดสัญญา")
     is_active = models.BooleanField(default=True, verbose_name="สถานะใช้งาน")
 
-    payout_trigger = models.CharField(max_length=30, choices=SalesContract.PAYOUT_TRIGGER, default='PERIODIC',
-                                      verbose_name="เงื่อนไขการตัดจ่าย")
     payout_delay = models.CharField(max_length=30, choices=SalesContract.PAYOUT_DELAY, default='NEXT_PERIOD',
-                                    verbose_name="จังหวะการโอนเงิน")
-    payout_day = models.PositiveSmallIntegerField(default=5, verbose_name="จ่ายวันที่ (ระบุตัวเลข 1-31)")
+                                    verbose_name="จ่ายเดือน",
+                                    help_text="นับจากเดือนที่รอบการคำนวณของเงื่อนไขจบ (ต่อคำสั่งซื้อ = เดือนที่จ่ายเงินครบ)")
+    payout_day = models.PositiveSmallIntegerField(default=5, validators=[MinValueValidator(1), MaxValueValidator(31)],
+                                                  verbose_name="จ่ายวันที่ (1-31)",
+                                                  help_text="เดือนที่มีไม่ถึงวันนี้ = วันสุดท้ายของเดือน")
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
 
     def __str__(self):
@@ -2766,6 +2749,10 @@ class PurchaseContractCondition(models.Model):
     value = models.DecimalField(max_digits=10, decimal_places=4, verbose_name="ค่าที่ระบุ (% หรือ ต่อชิ้น)")
     # บาท = แปลงยอดจ่ายเป็นบาทด้วย ExRate ตอนจ่าย | ตามใบสั่งซื้อ = คิดเป็นสกุลของใบสั่งซื้อ (ค่าคอมฯ ได้เป็นสกุลนั้น)
     currency = models.CharField(max_length=5, choices=CURRENCY_BASIS, default='THB', verbose_name="สกุลเงิน")
+
+    def clean(self):
+        if self.type == 'PRODUCT_BASED' and not self.product_id and not self.product_tag_link_id:
+            raise ValidationError("เงื่อนไขตามสินค้า/กลุ่มสินค้า ต้องเลือกสินค้าหรือกลุ่มสินค้า (Tag)")
 
     class Meta:
         verbose_name = "เงื่อนไขสัญญา"
@@ -2824,11 +2811,10 @@ class PurchaseCommissionItem(models.Model):
         verbose_name = "รายการจ่ายเงินในรอบค่าคอมฯ"
 
 
-def _contract_payout_date(contract, period_end, monthly):
-    """วันนัดจ่ายของรอบที่จบวันที่ period_end — รายเดือน/ต่อคำสั่งซื้อ ตามจังหวะการโอน, รอบยาวกว่านั้น = วันสิ้นสุดสัญญา"""
+def _contract_payout_date(contract, period_end):
+    """วันครบกำหนดจ่ายของรอบที่จบวันที่ period_end (ทุกรอบการคำนวณ: ต่อใบ/เดือน/ไตรมาส/ปี)
+    = "จ่ายวันที่" ของเดือนที่จบรอบ หรือเดือนถัดไป ตามที่ตั้งในสัญญา"""
     import calendar
-    if contract.payout_trigger == 'END_OF_CONTRACT' or not monthly:
-        return contract.end_date
     y, m = period_end.year, period_end.month
     if contract.payout_delay == 'NEXT_PERIOD':
         y, m = y + m // 12, m % 12 + 1
@@ -2872,44 +2858,80 @@ def _delivery_receipts(deliveries):
             for d in deliveries}
 
 
-def _uncounted_rebate_deliveries(contract, condition):
-    """รายการส่งของของใบสั่งขายที่รับเงินครบแล้ว ที่ยังไม่อยู่ในใบสรุปของเงื่อนไขนี้
-    — ใบเก่าก่อนแยกตามเงื่อนไข (ไม่มีเงื่อนไขผูก) นับว่าใช้ไปแล้วกับทุกเงื่อนไข"""
+def _condition_deliveries(contract, condition):
+    """รายการส่งของของลูกค้าในสัญญา ที่ตรงสินค้า/กลุ่มของเงื่อนไข และยังไม่อยู่ในใบสรุปของเงื่อนไขนี้
+    (ยังไม่กรองช่วงสัญญา/สถานะรับเงิน) — ใบเก่าก่อนแยกตามเงื่อนไข (ไม่มีเงื่อนไขผูก) นับว่าใช้ไปแล้วกับทุกเงื่อนไข"""
     from django.db.models import Q
     counted = RebatePayoutItem.objects.filter(
         Q(payout__sales_condition=condition) | Q(payout__sales_condition__isnull=True)).values('delivery_id')
-    qs = SalesDeliveryLog.objects.filter(
-        sales_order__customer=contract.customer, sales_order__payment_status__in=FULLY_PAID,
-        shipped_date__date__gte=contract.start_date, shipped_date__date__lte=contract.end_date,
-    ).exclude(pk__in=counted)
+    qs = SalesDeliveryLog.objects.filter(sales_order__customer=contract.customer).exclude(pk__in=counted)
     if condition.type == 'PRODUCT_BASED':
         if condition.product_id:
             qs = qs.filter(product=condition.product)
         elif condition.product_tag_link_id:
             qs = qs.filter(product__tags=condition.product_tag_link)
         else:
-            return []
+            return qs.none()
+    return qs
+
+
+def _uncounted_rebate_deliveries(contract, condition, fully_paid=True):
+    """รายการส่งของในช่วงสัญญา ของใบสั่งขายที่รับเงินครบแล้ว ที่ยังไม่อยู่ในใบสรุปของเงื่อนไขนี้
+    fully_paid=False: กลับกัน = ใบสั่งขายที่ยังรับเงินไม่ครบ (ยังไม่ถึงกำหนด)"""
+    qs = _condition_deliveries(contract, condition).filter(
+        shipped_date__date__gte=contract.start_date, shipped_date__date__lte=contract.end_date)
+    qs = (qs.filter if fully_paid else qs.exclude)(sales_order__payment_status__in=FULLY_PAID)
     return list(qs.select_related('sales_order', 'product'))
 
 
+def sales_rebate_waiting(contract):
+    """A7 ดูก่อนสร้าง: รายการที่ตรงเงื่อนไขแต่ยังไม่นับ พร้อมเหตุผล -> [{'cond', 'unpaid': [...], 'outside': n, 'no_target'}]
+    unpaid = ส่งในช่วงสัญญาแล้ว แต่ใบสั่งขายยังรับเงินไม่ครบ (รวมขายแฟคตอริ่งแล้วที่ยังไม่ถึงวันรับส่วนที่เหลือ)
+    outside = ส่งนอกช่วงวันที่ของสัญญา"""
+    from django.db.models import Count, Min, Sum
+    result = []
+    for cond in contract.conditions.select_related('product', 'product_tag_link'):
+        no_target = cond.type == 'PRODUCT_BASED' and not cond.product_id and not cond.product_tag_link_id
+        qs = _condition_deliveries(contract, cond)
+        in_range = qs.filter(shipped_date__date__gte=contract.start_date, shipped_date__date__lte=contract.end_date)
+        unpaid = list(in_range.exclude(sales_order__payment_status__in=FULLY_PAID)
+                      .values('sales_order_id', 'sales_order__so_number', 'sales_order__payment_status')
+                      .annotate(n=Count('id'), value=Sum('shipment_value'), first=Min('shipped_date'))
+                      .order_by('first'))
+        status_label = dict(SalesOrder._meta.get_field('payment_status').choices)
+        for u in unpaid:
+            u['status'] = status_label.get(u['sales_order__payment_status'], u['sales_order__payment_status'])
+        outside = qs.count() - in_range.count()
+        if unpaid or outside or no_target:
+            result.append({'cond': cond, 'unpaid': unpaid, 'outside': outside, 'no_target': no_target})
+    return result
+
+
 def contract_unpaid_summary(contract):
-    """ยอดตามสัญญาที่ยังไม่ได้จ่าย (หน้า A7/A8 ดูคร่าวๆ ไม่ต้องกดคำนวณ) -> {'new': {สกุล: ยอด}, 'pending': {สกุล: ยอด}}
-    new = ยังไม่ได้สร้างใบสรุป | pending = มีใบใน A6 แล้วแต่ยังรอจ่าย"""
-    new = {}
+    """ยอดตามสัญญาที่ยังไม่ได้จ่าย (หน้า A7/A8 ดูคร่าวๆ ไม่ต้องกดคำนวณ) -> {'not_due'/'new'/'pending': {สกุล: ยอด}}
+    not_due = ส่งของ/จ่ายบางงวดแล้ว แต่ใบสั่งขาย/ซื้อยังรับ/จ่ายเงินไม่ครบ (ยังไม่ถึงรอบ ยังสร้างใบสรุปไม่ได้)
+    new = ถึงกำหนดแล้ว ยังไม่ได้สร้างใบสรุป | pending = มีใบใน A6 แล้วแต่ยังรอจ่าย"""
+    new, not_due = {}, {}
     if isinstance(contract, PurchaseContract):
         for row in purchase_commission_candidates(contract):
             new[row['currency']] = new.get(row['currency'], Decimal(0)) + row['commission']
+        for cond in contract.conditions.all():
+            for log in _uncounted_commission_logs(contract, cond, fully_paid=False):
+                currency, lines = cond.payment_lines(log)
+                for l in lines:
+                    not_due[currency] = not_due.get(currency, Decimal(0)) + l['commission']
         payouts = RebatePayout.objects.filter(purchase_contract=contract)
     else:
-        total = sum((cond.delivery_rebate(d) for cond in contract.conditions.all()
-                     for d in _uncounted_rebate_deliveries(contract, cond)), Decimal(0))
-        if total:
-            new['THB'] = total
+        for fully_paid, bucket in ((True, new), (False, not_due)):
+            total = sum((cond.delivery_rebate(d) for cond in contract.conditions.all()
+                         for d in _uncounted_rebate_deliveries(contract, cond, fully_paid)), Decimal(0))
+            if total:
+                bucket['THB'] = total
         payouts = RebatePayout.objects.filter(contract=contract)
     pending = {}
     for currency, amount in payouts.filter(status='PENDING').values_list('currency', 'rebate_amount'):
         pending[currency] = pending.get(currency, Decimal(0)) + (amount or 0)
-    return {'new': new, 'pending': pending}
+    return {'not_due': not_due, 'new': new, 'pending': pending}
 
 
 def sales_rebate_candidates(contract):
@@ -2993,7 +3015,7 @@ def create_sales_rebate_payouts(contract, picks=None):
                     payout = RebatePayout.objects.create(
                         contract=contract, sales_condition=condition, sales_receipt_id=receipt_id,
                         period_start=period_start, period_end=period_end,
-                        payout_date=_contract_payout_date(contract, period_end, kind in ('D', 'M')),
+                        payout_date=_contract_payout_date(contract, period_end),
                         total_sales_amount=0, rebate_amount=0)
                     created += 1
                 else:
@@ -3005,11 +3027,12 @@ def create_sales_rebate_payouts(contract, picks=None):
     return created, added, skipped
 
 
-def _uncounted_commission_logs(contract, cond):
-    """รายการจ่ายค่าสินค้าของใบสั่งซื้อที่จ่ายครบแล้ว ที่ยังไม่อยู่ในใบสรุปของเงื่อนไขนี้"""
-    qs = (contract.product_payments(any_supplier=cond.type == 'PRODUCT_BASED')
-          .filter(purchase_order__payment_status__in=FULLY_PAID)
-          .exclude(commission_items__payout__purchase_condition=cond))
+def _uncounted_commission_logs(contract, cond, fully_paid=True):
+    """รายการจ่ายค่าสินค้าของใบสั่งซื้อที่จ่ายครบแล้ว ที่ยังไม่อยู่ในใบสรุปของเงื่อนไขนี้
+    fully_paid=False: กลับกัน = ใบสั่งซื้อที่ยังจ่ายไม่ครบ (ยังไม่ถึงกำหนด)"""
+    qs = contract.product_payments(any_supplier=cond.type == 'PRODUCT_BASED')
+    qs = (qs.filter if fully_paid else qs.exclude)(purchase_order__payment_status__in=FULLY_PAID)
+    qs = qs.exclude(commission_items__payout__purchase_condition=cond)
     if cond.type == 'PRODUCT_BASED':
         # นับผู้จำหน่ายทุกราย -> กรองเฉพาะใบที่มีสินค้าเข้าเงื่อนไขก่อน (ไม่ต้องแตกยอดทุกใบ)
         if cond.product_id:
@@ -3093,7 +3116,7 @@ def create_purchase_commission_payouts(contract, picks=None):
                     payout = RebatePayout.objects.create(
                         purchase_contract=contract, purchase_condition=cond, purchase_order_id=po_id,
                         currency=currency, period_start=period_start, period_end=period_end,
-                        payout_date=_contract_payout_date(contract, period_end, kind in ('O', 'M')),
+                        payout_date=_contract_payout_date(contract, period_end),
                         total_sales_amount=0, rebate_amount=0)
                     created += 1
                 else:
