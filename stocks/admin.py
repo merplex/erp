@@ -6919,7 +6919,7 @@ class SalesContractAdmin(ContractUnpaidColumnsMixin, ExportToExcelMixin, UnfoldM
     autocomplete_fields = ['customer']
     inlines = [ConditionInline]
 
-    actions = ['calculate_pending_rebates', 'export_to_excel']
+    actions = ['calculate_pending_rebates', 'preview_not_due_rebates', 'export_to_excel']
 
     @admin.action(description="🔄 คำนวณสัญญาและสรุป")
     def calculate_pending_rebates(self, request, queryset):
@@ -6944,9 +6944,15 @@ class SalesContractAdmin(ContractUnpaidColumnsMixin, ExportToExcelMixin, UnfoldM
                 created, added, skipped = created + c, added + a, skipped + k
             self.message_user(request, _contract_payout_message("Rebate", created, added, skipped))
             return None
-        groups = []
-        for contract in contracts:
-            rows = sales_rebate_candidates(contract)
+        return self._rebate_preview(request, contracts, waiting_mode=False)
+
+    @admin.action(description="⏳ คำนวณสัญญาที่ยังไม่ถึงกำหนด")
+    def preview_not_due_rebates(self, request, queryset):
+        # ส่งของแล้วแต่ใบสั่งขายยังรับเงินไม่ครบ (รวมขายแฟคตอริ่งแล้ว) — ดูอย่างเดียว แยกจากหน้าสร้างใบสรุปไม่ให้รก
+        return self._rebate_preview(request, list(queryset.select_related('customer')), waiting_mode=True)
+
+    def _rebate_preview(self, request, contracts, waiting_mode):
+        def decorate(contract, rows):
             for r in rows:
                 cond = r['cond']
                 r['pick'] = f"{contract.pk}:{cond.pk}:{r['receipt_id']}"
@@ -6955,15 +6961,22 @@ class SalesContractAdmin(ContractUnpaidColumnsMixin, ExportToExcelMixin, UnfoldM
                                if r['receipt'] else '')
                 r['rate_label'] = (f"{_plain_decimal(cond.value)}%" if cond.method == 'PERCENT_SALES'
                                    else f"{_plain_decimal(cond.value)} บาท/ชิ้น")
-            waiting = sales_rebate_waiting(contract)
-            for w in waiting:
-                for u in w['unpaid']:
-                    u['so_url'] = reverse('admin:stocks_incomereport_change', args=[u['sales_order_id']])
-            groups.append({'contract': contract, 'rows': rows, 'waiting': waiting,
-                           'no_condition': not contract.conditions.exists()})
+            return rows
+
+        groups = []
+        for contract in contracts:
+            group = {'contract': contract, 'rows': [], 'no_condition': not contract.conditions.exists()}
+            if waiting_mode:
+                waiting = decorate(contract, sales_rebate_candidates(contract, fully_paid=False))
+                group.update(waiting=waiting, waiting_total=sum((r['rebate'] for r in waiting), Decimal(0)),
+                             notes=sales_rebate_notes(contract))
+            else:
+                group['rows'] = decorate(contract, sales_rebate_candidates(contract))
+            groups.append(group)
         return TemplateResponse(request, 'admin/stocks/salescontract/rebate_preview.html', {
             **self.admin_site.each_context(request),
-            'title': "คำนวณสัญญาและสรุป", 'opts': self.model._meta, 'groups': groups,
+            'title': "คำนวณสัญญาที่ยังไม่ถึงกำหนด" if waiting_mode else "คำนวณสัญญาและสรุป",
+            'opts': self.model._meta, 'groups': groups, 'waiting_mode': waiting_mode,
             'has_rows': any(g['rows'] for g in groups),
             'selected_ids': [c.pk for c in contracts],
             'action_name': 'calculate_pending_rebates', 'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
@@ -7014,7 +7027,7 @@ class PurchaseContractAdmin(ContractUnpaidColumnsMixin, ExportToExcelMixin, Unfo
     search_fields = ('contract_name', 'supplier__company_name')
     autocomplete_fields = ['supplier']
     inlines = [PurchaseContractConditionInline]
-    actions = ['calculate_commissions', 'export_to_excel']
+    actions = ['calculate_commissions', 'preview_not_due_commissions', 'export_to_excel']
 
     @admin.action(description="🔄 คำนวณสัญญาและสรุป")
     def calculate_commissions(self, request, queryset):
@@ -7039,24 +7052,39 @@ class PurchaseContractAdmin(ContractUnpaidColumnsMixin, ExportToExcelMixin, Unfo
                 created, added, skipped = created + c, added + a, skipped + k
             self.message_user(request, _contract_payout_message("ค่าคอมฯ", created, added, skipped))
             return None
-        groups = []
-        for contract in contracts:
-            rows = purchase_commission_candidates(contract)
+        return self._commission_preview(request, contracts, waiting_mode=False)
+
+    @admin.action(description="⏳ คำนวณสัญญาที่ยังไม่ถึงกำหนด")
+    def preview_not_due_commissions(self, request, queryset):
+        # จ่ายบางงวดแล้วแต่ใบสั่งซื้อยังจ่ายไม่ครบ — ดูอย่างเดียว แยกจากหน้าสร้างใบสรุปไม่ให้รก
+        return self._commission_preview(request, list(queryset.select_related('supplier')), waiting_mode=True)
+
+    def _commission_preview(self, request, contracts, waiting_mode):
+        def decorate(contract, rows):
             for r in rows:
                 r['pick'] = f"{contract.pk}:{r['cond'].pk}:{r['po'].pk}"
                 r['po_url'] = reverse('admin:stocks_financereport_change', args=[r['po'].pk])
                 cond = r['cond']
                 r['rate_label'] = (f"{_plain_decimal(cond.value)}%" if cond.method == 'PERCENT'
                                    else f"{_plain_decimal(cond.value)} {r['currency']}/ชิ้น")
-            waiting = sales_rebate_waiting(contract)
-            for w in waiting:
-                for u in w['unpaid']:
-                    u['so_url'] = reverse('admin:stocks_incomereport_change', args=[u['sales_order_id']])
-            groups.append({'contract': contract, 'rows': rows, 'waiting': waiting,
-                           'no_condition': not contract.conditions.exists()})
+            return rows
+
+        groups = []
+        for contract in contracts:
+            group = {'contract': contract, 'rows': [], 'no_condition': not contract.conditions.exists()}
+            if waiting_mode:
+                waiting = decorate(contract, purchase_commission_candidates(contract, fully_paid=False))
+                waiting_total = {}
+                for r in waiting:
+                    waiting_total[r['currency']] = waiting_total.get(r['currency'], Decimal(0)) + r['commission']
+                group.update(waiting=waiting, waiting_total=waiting_total)
+            else:
+                group['rows'] = decorate(contract, purchase_commission_candidates(contract))
+            groups.append(group)
         return TemplateResponse(request, 'admin/stocks/purchasecontract/commission_preview.html', {
             **self.admin_site.each_context(request),
-            'title': "คำนวณสัญญาและสรุป", 'opts': self.model._meta, 'groups': groups,
+            'title': "คำนวณสัญญาที่ยังไม่ถึงกำหนด" if waiting_mode else "คำนวณสัญญาและสรุป",
+            'opts': self.model._meta, 'groups': groups, 'waiting_mode': waiting_mode,
             'has_rows': any(g['rows'] for g in groups),
             'selected_ids': [c.pk for c in contracts],
             'action_name': 'calculate_commissions', 'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,

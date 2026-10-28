@@ -1,0 +1,29 @@
+{# แถวต่อใบส่งของ (IV) + รายสินค้า — waiting = ใบสั่งขายยังรับเงินไม่ครบ: แสดงเหมือนกันแต่ไม่มีช่องติ๊ก #}
+{% load l10n %}
+{% for r in rows %}
+    <tr class="cp-po"{% if not waiting %} data-row="{{ r.pick }}"{% endif %}>
+        <td>{% if waiting %}⏳{% else %}<input type="checkbox" name="pick" value="{{ r.pick }}" class="cp-pick" checked
+                   data-base="{{ r.base|unlocalize }}" data-rebate="{{ r.rebate|unlocalize }}">{% endif %}</td>
+        <td>{% if r.receipt %}<a href="{{ r.iv_url }}" target="_blank">{{ r.receipt.receipt_number }}</a>{% else %}<span style="color:#b45309;">ไม่พบใบส่งของ</span>{% endif %}
+            <div class="cp-cond">{{ r.cond.get_type_display }} · {{ r.cond.get_period_display }}{% if r.cond.product %} · {{ r.cond.product }}{% elif r.cond.product_tag_link %} · กลุ่ม {{ r.cond.product_tag_link }}{% endif %}</div></td>
+        <td><a href="{{ r.so_url }}" target="_blank">{{ r.so.so_number }}</a></td>
+        <td>{{ r.shipped_date|date:"d/m/Y" }}</td>
+        <td>{% if waiting %}<span style="font-weight:normal;">{{ r.so.get_payment_status_display }}</span>{% else %}{{ r.paid_date|date:"d/m/Y"|default:"-" }}{% endif %}</td>
+        <td></td>
+        <td class="num">{{ r.base|floatformat:"2g" }}</td>
+        <td></td>
+        <td class="num">{{ r.rebate|floatformat:"2g" }}</td>
+    </tr>
+    {% for l in r.lines %}
+    <tr class="cp-line{% if l.is_cn %} cn{% endif %}"{% if not waiting %} data-row="{{ r.pick }}"{% endif %}>
+        <td></td>
+        <td colspan="2">{% if l.is_cn %}ลดหนี้ · {% endif %}{{ l.product|default:"-" }}</td>
+        <td>{{ l.date|date:"d/m/Y" }}</td>
+        <td></td>
+        <td class="num">{{ l.qty|floatformat:"0g" }}</td>
+        <td class="num">{{ l.base|floatformat:"2g" }}</td>
+        <td class="num">{{ r.rate_label }}</td>
+        <td class="num">{{ l.rebate|floatformat:"2g" }}</td>
+    </tr>
+    {% endfor %}
+{% endfor %}

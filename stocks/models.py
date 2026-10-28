@@ -2884,26 +2884,18 @@ def _uncounted_rebate_deliveries(contract, condition, fully_paid=True):
     return list(qs.select_related('sales_order', 'product'))
 
 
-def sales_rebate_waiting(contract):
-    """A7 ดูก่อนสร้าง: รายการที่ตรงเงื่อนไขแต่ยังไม่นับ พร้อมเหตุผล -> [{'cond', 'unpaid': [...], 'outside': n, 'no_target'}]
-    unpaid = ส่งในช่วงสัญญาแล้ว แต่ใบสั่งขายยังรับเงินไม่ครบ (รวมขายแฟคตอริ่งแล้วที่ยังไม่ถึงวันรับส่วนที่เหลือ)
-    outside = ส่งนอกช่วงวันที่ของสัญญา"""
-    from django.db.models import Count, Min, Sum
+def sales_rebate_notes(contract):
+    """A7 ดูก่อนสร้าง: เงื่อนไขที่มีรายการไม่นับเลย -> [{'cond', 'outside': n, 'no_target'}]
+    outside = ส่งนอกช่วงวันที่ของสัญญา | no_target = ตามสินค้า/กลุ่ม แต่ไม่ได้เลือกสินค้าหรือกลุ่ม
+    (ใบที่ยังรับเงินไม่ครบ แสดงละเอียดแยกส่วน "ยังไม่ถึงกำหนด" ด้วย sales_rebate_candidates(fully_paid=False))"""
     result = []
     for cond in contract.conditions.select_related('product', 'product_tag_link'):
         no_target = cond.type == 'PRODUCT_BASED' and not cond.product_id and not cond.product_tag_link_id
         qs = _condition_deliveries(contract, cond)
-        in_range = qs.filter(shipped_date__date__gte=contract.start_date, shipped_date__date__lte=contract.end_date)
-        unpaid = list(in_range.exclude(sales_order__payment_status__in=FULLY_PAID)
-                      .values('sales_order_id', 'sales_order__so_number', 'sales_order__payment_status')
-                      .annotate(n=Count('id'), value=Sum('shipment_value'), first=Min('shipped_date'))
-                      .order_by('first'))
-        status_label = dict(SalesOrder._meta.get_field('payment_status').choices)
-        for u in unpaid:
-            u['status'] = status_label.get(u['sales_order__payment_status'], u['sales_order__payment_status'])
-        outside = qs.count() - in_range.count()
-        if unpaid or outside or no_target:
-            result.append({'cond': cond, 'unpaid': unpaid, 'outside': outside, 'no_target': no_target})
+        outside = qs.exclude(shipped_date__date__gte=contract.start_date,
+                             shipped_date__date__lte=contract.end_date).count()
+        if outside or no_target:
+            result.append({'cond': cond, 'outside': outside, 'no_target': no_target})
     return result
 
 
@@ -2915,11 +2907,8 @@ def contract_unpaid_summary(contract):
     if isinstance(contract, PurchaseContract):
         for row in purchase_commission_candidates(contract):
             new[row['currency']] = new.get(row['currency'], Decimal(0)) + row['commission']
-        for cond in contract.conditions.all():
-            for log in _uncounted_commission_logs(contract, cond, fully_paid=False):
-                currency, lines = cond.payment_lines(log)
-                for l in lines:
-                    not_due[currency] = not_due.get(currency, Decimal(0)) + l['commission']
+        for row in purchase_commission_candidates(contract, fully_paid=False):
+            not_due[row['currency']] = not_due.get(row['currency'], Decimal(0)) + row['commission']
         payouts = RebatePayout.objects.filter(purchase_contract=contract)
     else:
         for fully_paid, bucket in ((True, new), (False, not_due)):
@@ -2934,13 +2923,14 @@ def contract_unpaid_summary(contract):
     return {'not_due': not_due, 'new': new, 'pending': pending}
 
 
-def sales_rebate_candidates(contract):
+def sales_rebate_candidates(contract, fully_paid=True):
     """Rebate ที่ยังไม่ได้สร้างใบสรุป (A7 ดูก่อนสร้าง) -> [{'cond', 'receipt', 'receipt_id', 'so', 'lines', 'base', 'rebate', ...}]
-    1 แถว = 1 ใบส่งของ (IV) ต่อ 1 เงื่อนไข (ติ๊กเลือกจ่ายทีละแถว) — แถวลดหนี้ที่อ้าง IV นั้นติดลบอยู่ใต้ IV เดียวกัน"""
+    1 แถว = 1 ใบส่งของ (IV) ต่อ 1 เงื่อนไข (ติ๊กเลือกจ่ายทีละแถว) — แถวลดหนี้ที่อ้าง IV นั้นติดลบอยู่ใต้ IV เดียวกัน
+    fully_paid=False: ใบสั่งขายที่ยังรับเงินไม่ครบ (ยังไม่ถึงกำหนด — แสดงอย่างเดียว ยังสร้างใบสรุปไม่ได้)"""
     from django.db.models import Max
     rows = {}
     for cond in contract.conditions.all():
-        deliveries = _uncounted_rebate_deliveries(contract, cond)
+        deliveries = _uncounted_rebate_deliveries(contract, cond, fully_paid)
         if not deliveries:
             continue
         receipt_of = _delivery_receipts(deliveries)
@@ -3045,12 +3035,13 @@ def _uncounted_commission_logs(contract, cond, fully_paid=True):
     return list(qs.select_related('purchase_order__supplier').order_by('payment_date', 'id'))
 
 
-def purchase_commission_candidates(contract):
+def purchase_commission_candidates(contract, fully_paid=True):
     """ค่าคอมฯ ที่ยังไม่ได้สร้างใบสรุป (A8 ดูก่อนสร้าง) -> [{'cond', 'po', 'currency', 'logs', 'lines', 'base', 'commission'}]
-    1 แถว = 1 ใบสั่งซื้อต่อ 1 เงื่อนไข (ติ๊กเลือกจ่ายทีละแถว) — รายสินค้ารวมทุกรายการจ่ายของใบนั้น"""
+    1 แถว = 1 ใบสั่งซื้อต่อ 1 เงื่อนไข (ติ๊กเลือกจ่ายทีละแถว) — รายสินค้ารวมทุกรายการจ่ายของใบนั้น
+    fully_paid=False: ใบสั่งซื้อที่ยังจ่ายไม่ครบ (ยังไม่ถึงกำหนด — แสดงอย่างเดียว ยังสร้างใบสรุปไม่ได้)"""
     rows = {}
     for cond in contract.conditions.all():
-        for log in _uncounted_commission_logs(contract, cond):
+        for log in _uncounted_commission_logs(contract, cond, fully_paid):
             currency, lines = cond.payment_lines(log)
             if not lines:
                 continue

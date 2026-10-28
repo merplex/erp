@@ -15,11 +15,18 @@
     .cp-line td:first-child { padding-left:40px; }
     .cp-po.off td, .cp-line.off td { opacity:.45; }
     .cp-cond { font-weight:normal; color:#64748b; font-size:12px; }
+    .cp-wait-head { margin:4px 0 0; padding:8px 12px; background:#fffbeb; border:1px solid #fde68a; border-radius:6px 6px 0 0; font-size:14px; color:#92400e; }
+    .cp-waiting .cp-po td { background:#fffbeb; }
 </style>
 <div class="cp-wrap">
     <h2>{{ title }}</h2>
+    {% if waiting_mode %}
+    <p>รายการจ่ายค่าสินค้าของใบสั่งซื้อที่ยังจ่ายไม่ครบ — ดูอย่างเดียว
+    เมื่อใบสั่งซื้อจ่ายครบ จะไปอยู่ใน action "คำนวณสัญญาและสรุป" ให้สร้างใบสรุปได้</p>
+    {% else %}
     <p>รายการจ่ายค่าสินค้าของใบสั่งซื้อที่จ่ายครบแล้ว ที่ยังไม่ได้สร้างใบสรุป — ติ๊กใบสั่งซื้อที่จะจ่ายค่าคอมฯ แล้วกดยืนยัน ระบบจะสร้างใบสรุปใน A6 (รายการสัญญาซื้อ/ขาย) ตามรอบของเงื่อนไข<br>
     <span style="color:#64748b;">ยอดซื้อ = ยอดจ่ายก่อน VAT แบ่งตามสัดส่วนมูลค่าสินค้าในใบ · ใบที่ไม่ติ๊กยังค้างไว้ คำนวณใหม่ครั้งหน้าได้</span></p>
+    {% endif %}
 
     <form method="post" id="commission-form">{% csrf_token %}
     {% if has_rows %}
@@ -35,8 +42,28 @@
         <h3 style="margin-top:8px;">{{ g.contract.contract_name }} <span class="cp-cond">ผู้รับค่าคอมฯ: {{ g.contract.supplier.company_name }}</span></h3>
         {% if g.no_condition %}
             <p style="color:#b45309;">⚠️ สัญญานี้ไม่มีเงื่อนไข</p>
+        {% elif waiting_mode %}
+            {% if g.waiting %}
+            <div class="cp-wait-head">⏳ จ่ายค่าสินค้าบางงวดแล้ว แต่ใบสั่งซื้อยังจ่ายไม่ครบ · ค่าคอมฯ รวม
+                {% for cur, amt in g.waiting_total.items %}<b>{{ amt|floatformat:"2g" }}{% if cur != "THB" %} {{ cur }}{% endif %}</b>{% if not forloop.last %} + {% endif %}{% endfor %}</div>
+            <table class="cp-table cp-waiting">
+                <thead><tr>
+                <th style="width:30px;"></th>
+                <th>ใบสั่งซื้อ / สินค้า</th>
+                <th>ผู้จำหน่าย</th>
+                <th>สถานะการจ่าย</th>
+                <th class="num">จำนวน</th>
+                <th class="num">มูลค่า (ก่อน VAT)</th>
+                <th class="num">อัตรา</th>
+                <th class="num">ค่าคอมฯ</th>
+                </tr></thead>
+                <tbody>{% include "admin/stocks/purchasecontract/_commission_rows.html" with rows=g.waiting waiting=True %}</tbody>
+            </table>
+            {% else %}
+            <p style="color:#64748b;">ไม่มีรายการที่ยังไม่ถึงกำหนด</p>
+            {% endif %}
         {% elif not g.rows %}
-            <p style="color:#64748b;">ไม่มีรายการใหม่ที่ต้องจ่าย (ใบสั่งซื้อที่เข้าเงื่อนไขยังไม่จ่ายครบ หรือสร้างใบสรุปไปแล้ว)</p>
+            <p style="color:#64748b;">ไม่มีรายการใหม่ที่ต้องจ่าย (ใบสั่งซื้อที่เข้าเงื่อนไขยังไม่จ่ายครบ — ดู action "คำนวณสัญญาที่ยังไม่ถึงกำหนด" หรือสร้างใบสรุปไปแล้ว)</p>
         {% else %}
         <table class="cp-table">
             <thead><tr>
@@ -49,32 +76,7 @@
                 <th class="num">อัตรา</th>
                 <th class="num">ค่าคอมฯ</th>
             </tr></thead>
-            <tbody>
-            {% for r in g.rows %}
-                <tr class="cp-po" data-row="{{ r.pick }}">
-                    <td><input type="checkbox" name="pick" value="{{ r.pick }}" class="cp-pick" checked
-                               data-cur="{{ r.currency }}" data-base="{{ r.base|unlocalize }}" data-commission="{{ r.commission|unlocalize }}"></td>
-                    <td><a href="{{ r.po_url }}" target="_blank">{{ r.po.po_number }}</a>
-                        <div class="cp-cond">{{ r.cond.get_type_display }} · {{ r.cond.get_period_display }}{% if r.cond.product %} · {{ r.cond.product }}{% elif r.cond.product_tag_link %} · กลุ่ม {{ r.cond.product_tag_link }}{% endif %}</div></td>
-                    <td>{{ r.po.supplier.company_name }}</td>
-                    <td>{{ r.paid_date|date:"d/m/Y" }}</td>
-                    <td></td>
-                    <td class="num">{{ r.base|floatformat:"2g" }} {% if r.currency != "THB" %}{{ r.currency }}{% endif %}</td>
-                    <td></td>
-                    <td class="num">{{ r.commission|floatformat:"2g" }} {% if r.currency != "THB" %}{{ r.currency }}{% endif %}</td>
-                </tr>
-                {% for l in r.lines %}
-                <tr class="cp-line" data-row="{{ r.pick }}">
-                    <td></td>
-                    <td colspan="3">{{ l.product }}</td>
-                    <td class="num">{{ l.qty|floatformat:"-2g" }}</td>
-                    <td class="num">{{ l.base|floatformat:"2g" }}</td>
-                    <td class="num">{{ r.rate_label }}</td>
-                    <td class="num">{{ l.commission|floatformat:"2g" }}</td>
-                </tr>
-                {% endfor %}
-            {% endfor %}
-            </tbody>
+            <tbody>{% include "admin/stocks/purchasecontract/_commission_rows.html" with rows=g.rows waiting=False %}</tbody>
         </table>
         {% endif %}
     {% endfor %}

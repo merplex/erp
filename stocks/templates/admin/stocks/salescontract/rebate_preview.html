@@ -18,11 +18,18 @@
     .cp-cond { font-weight:normal; color:#64748b; font-size:12px; }
     .cp-wait { margin:0 0 20px; padding:10px 14px; background:#fffbeb; border:1px solid #fde68a; border-radius:6px; font-size:13px; color:#92400e; }
     .cp-wait > div { margin:2px 0; }
+    .cp-wait-head { margin:4px 0 0; padding:8px 12px; background:#fffbeb; border:1px solid #fde68a; border-radius:6px 6px 0 0; font-size:14px; color:#92400e; }
+    .cp-waiting .cp-po td { background:#fffbeb; }
 </style>
 <div class="cp-wrap">
     <h2>{{ title }}</h2>
+    {% if waiting_mode %}
+    <p>รายการส่งของในช่วงสัญญาที่ใบสั่งขายยังรับเงินไม่ครบ (รวมขายแฟคตอริ่งแล้วที่ยังไม่ถึงวันรับส่วนที่เหลือ) — ดูอย่างเดียว
+    เมื่อสถานะเป็น "รับเงินครบแล้ว" จะไปอยู่ใน action "คำนวณสัญญาและสรุป" ให้สร้างใบสรุปได้</p>
+    {% else %}
     <p>รายการส่งของของใบสั่งขายที่รับเงินครบแล้ว ที่ยังไม่ได้สร้างใบสรุป แยกทีละใบส่งของ (IV) — ติ๊กใบที่จะจ่าย Rebate แล้วกดยืนยัน ระบบจะสร้างใบสรุปใน A6 (รายการสัญญาซื้อ/ขาย) ตามรอบของเงื่อนไข<br>
     <span style="color:#64748b;">มูลค่า = ยอดส่งของก่อน VAT · ใบลดหนี้ที่อ้าง IV นั้นแสดงติดลบใต้ IV เดียวกัน · ใบที่ไม่ติ๊กยังค้างไว้ คำนวณใหม่ครั้งหน้าได้</span></p>
+    {% endif %}
 
     <form method="post" id="rebate-form">{% csrf_token %}
     {% if has_rows %}
@@ -38,8 +45,35 @@
         <h3 style="margin-top:8px;">{{ g.contract.contract_name }} <span class="cp-cond">ลูกค้า: {{ g.contract.customer.company_name }}</span></h3>
         {% if g.no_condition %}
             <p style="color:#b45309;">⚠️ สัญญานี้ไม่มีเงื่อนไข</p>
+        {% elif waiting_mode %}
+            {% if g.waiting %}
+            <div class="cp-wait-head">⏳ ส่งของแล้ว แต่ใบสั่งขายยังรับเงินไม่ครบ (รวมขายแฟคตอริ่งแล้ว) · Rebate รวม <b>{{ g.waiting_total|floatformat:"2g" }}</b></div>
+            <table class="cp-table cp-waiting">
+                <thead><tr>
+                <th style="width:30px;"></th>
+                <th>ใบส่งของ / สินค้า</th>
+                <th>ใบสั่งขาย</th>
+                <th>วันที่ส่ง</th>
+                <th>สถานะการรับเงิน</th>
+                <th class="num">จำนวน</th>
+                <th class="num">มูลค่า (ก่อน VAT)</th>
+                <th class="num">อัตรา</th>
+                <th class="num">Rebate</th>
+                </tr></thead>
+                <tbody>{% include "admin/stocks/salescontract/_rebate_rows.html" with rows=g.waiting waiting=True %}</tbody>
+            </table>
+            {% elif not g.notes %}
+            <p style="color:#64748b;">ไม่มีรายการที่ยังไม่ถึงกำหนด</p>
+            {% endif %}
+            {% for n in g.notes %}
+            <div class="cp-wait">
+                <span class="cp-cond">{{ n.cond.get_type_display }} · {{ n.cond.get_period_display }}{% if n.cond.product %} · {{ n.cond.product }}{% elif n.cond.product_tag_link %} · กลุ่ม {{ n.cond.product_tag_link }}{% endif %}</span>
+                {% if n.no_target %}<div>⚠️ เงื่อนไขตามสินค้า/กลุ่มสินค้า แต่ไม่ได้เลือกสินค้าหรือกลุ่ม — แก้ที่สัญญา</div>{% endif %}
+                {% if n.outside %}<div>📅 ส่งนอกช่วงวันที่ของสัญญา ({{ g.contract.start_date|date:"d/m/Y" }} – {{ g.contract.end_date|date:"d/m/Y" }}) {{ n.outside }} รายการ — ไม่นับ</div>{% endif %}
+            </div>
+            {% endfor %}
         {% elif not g.rows %}
-            <p style="color:#64748b;">ไม่มีรายการใหม่ที่ต้องจ่าย{% if not g.waiting %} (ไม่มีการส่งสินค้าที่ตรงเงื่อนไขให้ลูกค้านี้ หรือสร้างใบสรุปไปครบแล้ว){% endif %}</p>
+            <p style="color:#64748b;">ไม่มีรายการใหม่ที่ต้องจ่าย (ใบสั่งขายที่เข้าเงื่อนไขยังรับเงินไม่ครบ — ดู action "คำนวณสัญญาที่ยังไม่ถึงกำหนด" หรือสร้างใบสรุปไปแล้ว)</p>
         {% else %}
         <table class="cp-table">
             <thead><tr>
@@ -53,57 +87,9 @@
                 <th class="num">อัตรา</th>
                 <th class="num">Rebate</th>
             </tr></thead>
-            <tbody>
-            {% for r in g.rows %}
-                <tr class="cp-po" data-row="{{ r.pick }}">
-                    <td><input type="checkbox" name="pick" value="{{ r.pick }}" class="cp-pick" checked
-                               data-base="{{ r.base|unlocalize }}" data-rebate="{{ r.rebate|unlocalize }}"></td>
-                    <td>{% if r.receipt %}<a href="{{ r.iv_url }}" target="_blank">{{ r.receipt.receipt_number }}</a>{% else %}<span style="color:#b45309;">ไม่พบใบส่งของ</span>{% endif %}
-                        <div class="cp-cond">{{ r.cond.get_type_display }} · {{ r.cond.get_period_display }}{% if r.cond.product %} · {{ r.cond.product }}{% elif r.cond.product_tag_link %} · กลุ่ม {{ r.cond.product_tag_link }}{% endif %}</div></td>
-                    <td><a href="{{ r.so_url }}" target="_blank">{{ r.so.so_number }}</a></td>
-                    <td>{{ r.shipped_date|date:"d/m/Y" }}</td>
-                    <td>{{ r.paid_date|date:"d/m/Y"|default:"-" }}</td>
-                    <td></td>
-                    <td class="num">{{ r.base|floatformat:"2g" }}</td>
-                    <td></td>
-                    <td class="num">{{ r.rebate|floatformat:"2g" }}</td>
-                </tr>
-                {% for l in r.lines %}
-                <tr class="cp-line{% if l.is_cn %} cn{% endif %}" data-row="{{ r.pick }}">
-                    <td></td>
-                    <td colspan="2">{% if l.is_cn %}ลดหนี้ · {% endif %}{{ l.product|default:"-" }}</td>
-                    <td>{{ l.date|date:"d/m/Y" }}</td>
-                    <td></td>
-                    <td class="num">{{ l.qty|floatformat:"0g" }}</td>
-                    <td class="num">{{ l.base|floatformat:"2g" }}</td>
-                    <td class="num">{{ r.rate_label }}</td>
-                    <td class="num">{{ l.rebate|floatformat:"2g" }}</td>
-                </tr>
-                {% endfor %}
-            {% endfor %}
-            </tbody>
+            <tbody>{% include "admin/stocks/salescontract/_rebate_rows.html" with rows=g.rows waiting=False %}</tbody>
         </table>
         {% endif %}
-        {% for w in g.waiting %}
-        <div class="cp-wait">
-            <div><b>ยังไม่นับ</b> <span class="cp-cond">{{ w.cond.get_type_display }} · {{ w.cond.get_period_display }}{% if w.cond.product %} · {{ w.cond.product }}{% elif w.cond.product_tag_link %} · กลุ่ม {{ w.cond.product_tag_link }}{% endif %}</span></div>
-            {% if w.no_target %}<div>⚠️ เงื่อนไขตามสินค้า/กลุ่มสินค้า แต่ไม่ได้เลือกสินค้าหรือกลุ่ม — แก้ที่สัญญา</div>{% endif %}
-            {% if w.unpaid %}
-            <div>⏳ ส่งของในช่วงสัญญาแล้ว แต่ใบสั่งขายยังรับเงินไม่ครบ {{ w.unpaid|length }} ใบ — นับเมื่อสถานะเป็น "รับเงินครบแล้ว"</div>
-            <table class="cp-table" style="margin:4px 0 0;width:auto;">
-                <thead><tr><th>ใบสั่งขาย</th><th>สถานะการรับเงิน</th><th>ส่งครั้งแรก</th><th class="num">รายการส่ง</th><th class="num">มูลค่า (ก่อน VAT)</th></tr></thead>
-                <tbody>{% for u in w.unpaid %}<tr>
-                    <td><a href="{{ u.so_url }}" target="_blank">{{ u.sales_order__so_number }}</a></td>
-                    <td>{{ u.status }}</td>
-                    <td>{{ u.first|date:"d/m/Y" }}</td>
-                    <td class="num">{{ u.n }}</td>
-                    <td class="num">{{ u.value|floatformat:"2g" }}</td>
-                </tr>{% endfor %}</tbody>
-            </table>
-            {% endif %}
-            {% if w.outside %}<div>📅 ส่งนอกช่วงวันที่ของสัญญา ({{ g.contract.start_date|date:"d/m/Y" }} – {{ g.contract.end_date|date:"d/m/Y" }}) {{ w.outside }} รายการ — ไม่นับ</div>{% endif %}
-        </div>
-        {% endfor %}
     {% endfor %}
 
     {% if has_rows %}
