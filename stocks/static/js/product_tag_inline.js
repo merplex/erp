@@ -1,19 +1,25 @@
 (function () {
     'use strict';
 
-    // W5 สินค้าในแท็ก: เลือกบาร์โค้ด -> ขึ้นชื่อสินค้าทันที (AJAX) + เตือนถ้าสินค้าซ้ำกับแถวอื่น
-    // หรือมีแท็กนี้อยู่แล้ว (บาร์โค้ดต่างกันแต่เป็นสินค้าเดียวกัน) — server เช็คซ้ำอีกชั้นตอนบันทึก
+    // W5 สินค้าในแท็ก — แถวเพิ่มสินค้า: เลือกบาร์โค้ด -> เติมช่องสินค้าให้ (เหมือนใบ SO) หรือค้นหาสินค้าจากชื่อเอง
+    // เลือกสินค้าแล้ว -> ขึ้นบริษัท/ราคา (AJAX) + เตือนถ้าสินค้าซ้ำกับแถวอื่นหรือมีแท็กนี้อยู่แล้ว
+    // (บาร์โค้ดต่างกันแต่เป็นสินค้าเดียวกันก็จับได้) — server เช็คซ้ำอีกชั้นตอนบันทึก
     // + ตารางสินค้าเดิม: ช่องค้นหา (กรองฝั่ง browser) และขีดฆ่าแถวที่ติ๊กเอาออก
     document.addEventListener('DOMContentLoaded', function () {
         var $ = window.django ? django.jQuery : window.jQuery;
         if (!$) return;
-        var SELECT = 'select[name^="Product_tags-"][name$="-barcode"]';
+        var BARCODE = 'select[name^="Product_tags-"][name$="-barcode"]';
+        var PRODUCT = 'select[name^="Product_tags-"][name$="-product"]';
 
         function rowOf(el) { return $(el).closest('tbody.form-group'); }
 
         function isDeleted($row) {
             var del = $row.find('input[name$="-DELETE"]');
             return del.length && del.prop('checked');
+        }
+
+        function rowNumber($row) {
+            return $('tbody.form-group:not(.empty-form)').filter(':visible').index($row) + 1;
         }
 
         function checkDuplicates() {
@@ -24,46 +30,60 @@
                 }
             });
             var seen = {};
-            $('tbody.form-group:not(.empty-form) .tag-product').each(function () {
+            $('tbody.form-group:not(.empty-form) ' + PRODUCT).each(function () {
                 var $row = rowOf(this);
                 $row.find('.tag-dup-warning').remove();
-                var id = $(this).attr('data-product-id');
+                var id = this.value;
                 if (!id || isDeleted($row)) return;
-                var text = existing[id] ? '⚠️ ' + $(this).text() + ' มีแท็กนี้อยู่แล้ว'
+                var name = $(this).find('option:selected').text();
+                var text = existing[id] ? '⚠️ ' + name + ' มีแท็กนี้อยู่แล้ว'
                     : seen[id] ? '⚠️ สินค้าซ้ำกับแถวที่ ' + seen[id].no + ' (' + seen[id].name + ')' : '';
                 if (text) {
-                    var $cell = $row.find('td.field-barcode');
-                    ($cell.length ? $cell : $row.find('td').last()).append($('<div class="tag-dup-warning"></div>').text(text));
+                    $row.find('td.field-product').append($('<div class="tag-dup-warning"></div>').text(text));
                 } else {
-                    seen[id] = {no: $row.find('td.field-row_no').length ? rowNumber($row) : '', name: $(this).text()};
+                    seen[id] = {no: rowNumber($row), name: name};
                 }
             });
         }
 
-        function rowNumber($row) {
-            return $('tbody.form-group:not(.empty-form)').filter(':visible').index($row) + 1;
+        function fillSuppliers($row, productId) {
+            var $sup = $row.find('.tag-suppliers').empty();
+            var $price = $row.find('.tag-prices').empty();
+            if (!productId) return;
+            $.get('/api/product-suppliers/', {product_id: productId}).done(function (data) {
+                var items = (data && data.items) || [];
+                if (!items.length) { $sup.text('—'); $price.text('—'); return; }
+                items.forEach(function (it) {
+                    $sup.append($('<div></div>').attr('title', it.name).text(it.short));
+                    $price.append($('<div></div>').text(it.price));
+                });
+            });
         }
 
-        $(document).on('change', SELECT, function () {
-            var $row = rowOf(this);
-            var $product = $row.find('.tag-product');
-            $product.text('').removeAttr('data-product-id');
-            if (!this.value) { checkDuplicates(); return; }
-            $product.css('opacity', 0.5);
-            $.get('/api/barcode-info/', {barcode_id: this.value})
-                .done(function (data) {
-                    if (!data || !data.product_id) return;
-                    $product.text(data.product_name).attr('data-product-id', data.product_id);
-                })
-                .always(function () {
-                    $product.css('opacity', '');
-                    checkDuplicates();
-                });
+        // เลือกบาร์โค้ด -> ตั้งช่องสินค้าให้ตรง (ช่องสินค้า change ต่อเอง)
+        $(document).on('change', BARCODE, function () {
+            if (!this.value) return;
+            var $product = rowOf(this).find(PRODUCT);
+            $.get('/api/barcode-info/', {barcode_id: this.value}).done(function (data) {
+                if (!data || !data.product_id || String($product.val()) === String(data.product_id)) return;
+                $product.find('option[value="' + data.product_id + '"]').remove();
+                $product.append(new Option(data.product_name, data.product_id, true, true)).trigger('change');
+            });
+        });
+
+        $(document).on('change', PRODUCT, function () {
+            fillSuppliers(rowOf(this), this.value);
+            checkDuplicates();
         });
         $(document).on('change', 'input[name^="Product_tags-"][name$="-DELETE"]', checkDuplicates);
         $(document).on('change', 'input[name="remove_tag_product"]', function () {
             $(this).closest('tr').toggleClass('tag-removing', this.checked);
             checkDuplicates();
+        });
+
+        // หน้าโหลดกลับมาพร้อม error (มีสินค้าเลือกค้างไว้) -> เติมบริษัท/ราคาให้
+        $('tbody.form-group:not(.empty-form) ' + PRODUCT).each(function () {
+            if (this.value) fillSuppliers(rowOf(this), this.value);
         });
 
         var timer;
@@ -72,7 +92,9 @@
             clearTimeout(timer);
             timer = setTimeout(function () {
                 $('tr.tag-existing').each(function () {
-                    this.style.display = !q || this.textContent.toLowerCase().indexOf(q) !== -1 ? '' : 'none';
+                    // ค้นชื่อบริษัทเต็มได้ด้วย (ในตารางแสดงชื่อสั้น ชื่อเต็มอยู่ใน title)
+                    var text = this.textContent + ' ' + $(this).find('[title]').map(function () { return this.title; }).get().join(' ');
+                    this.style.display = !q || text.toLowerCase().indexOf(q) !== -1 ? '' : 'none';
                 });
             }, 150);
         });

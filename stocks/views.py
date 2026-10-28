@@ -261,6 +261,20 @@ def barcode_info_api(request):
 
 
 @staff_member_required
+def product_suppliers_api(request):
+    """API: ผู้จำหน่าย + ราคาตามสกุลเงินของสินค้านี้ — W5 แถวเพิ่มสินค้าเข้าแท็ก"""
+    from .models import ProductSupplier, supplier_short_name
+    product_id = request.GET.get('product_id', '').strip()
+    if not product_id.isdigit():
+        return JsonResponse({'items': []})
+    rows = ProductSupplier.objects.filter(product_id=product_id).select_related('supplier').order_by('supplier__company_name')
+    return JsonResponse({'items': [
+        {'name': r.supplier.company_name, 'short': supplier_short_name(r.supplier.company_name), 'price': r.price_display}
+        for r in rows
+    ]})
+
+
+@staff_member_required
 def product_barcodes_api(request):
     """API: บาร์โค้ดทั้งหมดของสินค้านี้ — ใช้จำกัดตัวเลือก barcode_obj ในฟอร์ม A6 ให้เห็นเฉพาะของสินค้าที่เลือก"""
     from .models import ProductBarcode

@@ -655,6 +655,28 @@ class ProductSupplier(models.Model):
     def __str__(self):
         return f"{self.supplier} - {self.product}"
 
+    @property
+    def price_display(self):
+        """ราคาตามสกุลเงินที่ระบุ เช่น "12.50 RMB" (ทศนิยม 2-4 ตำแหน่ง ตัดศูนย์ท้ายเกิน 2 ตำแหน่ง)"""
+        return f"{format_price_trim(self.latest_buy_price)} {CURRENCY_LABELS.get(self.currency, self.currency)}"
+
+
+_COMPANY_WORDS = re.compile(
+    r'ห้างหุ้นส่วนจำกัด|บริษัท|บจก\.?|หจก\.?|จำกัด|\(?มหาชน\)?|company\s+limited|co\.?,?\s*ltd\.?|limited|ltd\.?|inc\.?',
+    re.IGNORECASE)
+
+
+def supplier_short_name(name, limit=14):
+    """ชื่อบริษัทแบบสั้น (ตัด บริษัท/จำกัด/Co., Ltd. แล้วตัดความยาว) — แสดงชื่อเต็มเป็น tooltip แทน"""
+    short = ' '.join(_COMPANY_WORDS.sub(' ', name or '').split()).strip(' ,.') or (name or '')
+    return short if len(short) <= limit else short[:limit - 1] + '…'
+
+
+def format_price_trim(value):
+    """12.5000 -> 12.50, 12.3450 -> 12.345, 1234 -> 1,234.00"""
+    whole, dec = f"{value or 0:,.4f}".split('.')
+    return f"{whole}.{dec.rstrip('0').ljust(2, '0')}"
+
 @receiver(post_save, sender=ProductSupplier)
 @receiver(post_delete, sender=ProductSupplier)
 def recalc_product_cost_on_supplier_change(sender, instance, **kwargs):

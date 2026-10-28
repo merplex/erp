@@ -4476,38 +4476,53 @@ class ProductCategoryAdmin(UnfoldModelAdmin):
 # ---------------------------------------------------------
 # Register ProductTag เพื่อให้เมนูโผล่ในหน้า Admin
 # ---------------------------------------------------------
+class _SafeAutocompleteSelect(AutocompleteSelect):
+    """ค่า id ไม่ใช่ตัวเลข (POST มั่ว) -> Django filter pk__in แล้ว ValueError ตอนวาดฟอร์มกลับพร้อม error = 500
+    ตัดค่าพวกนั้นทิ้งก่อน ช่องจะว่างแล้วขึ้น error ของฟอร์มตามปกติ"""
+    def optgroups(self, name, value, attr=None):
+        return super().optgroups(name, [v for v in value if str(v).isdigit()], attr)
+
+
 class ProductTagAddForm(forms.ModelForm):
-    """W5 เพิ่มสินค้าเข้าแท็ก: เลือกบาร์โค้ด (ค้นหาได้) -> ผูกสินค้าของบาร์โค้ดนั้น"""
+    """W5 เพิ่มสินค้าเข้าแท็ก: เลือกบาร์โค้ด หรือค้นหาสินค้าจากชื่อ (เหมือนใบ SO) อย่างใดอย่างหนึ่ง
+    เลือกบาร์โค้ด -> JS เติมช่องสินค้าให้, server ใช้สินค้าของบาร์โค้ดเป็นหลัก"""
     barcode = forms.ModelChoiceField(
-        queryset=ProductBarcode.objects.select_related('product'), label="บาร์โค้ด",
-        widget=AutocompleteSelect(CustomerProductContract._meta.get_field('barcode'), admin.site))
+        queryset=ProductBarcode.objects.select_related('product'), label="บาร์โค้ด", required=False,
+        widget=_SafeAutocompleteSelect(CustomerProductContract._meta.get_field('barcode'), admin.site))
+    product = forms.ModelChoiceField(
+        queryset=Product.objects.all(), label="สินค้า", required=False,
+        widget=_SafeAutocompleteSelect(Product.tags.through._meta.get_field('product'), admin.site))
 
     class Meta:
         model = Product.tags.through
-        fields = ('barcode',)
+        fields = ('barcode', 'product')
 
     def clean(self):
         cleaned = super().clean()
         barcode = cleaned.get('barcode')
         if barcode:
-            self.instance.product = barcode.product
+            cleaned['product'] = barcode.product
+        if not cleaned.get('product'):
+            raise forms.ValidationError("เลือกบาร์โค้ดหรือสินค้า")
+        self.instance.product = cleaned['product']
         return cleaned
 
 
 class ProductTagAddFormSet(forms.BaseInlineFormSet):
     def clean(self):
-        super().clean()
+        # เช็คเองก่อน super() — ไม่งั้น validate_unique ของ Django จับซ้ำก่อนแล้วขึ้นข้อความอังกฤษรวมๆ แทน
         seen = set()
         for form in self.forms:
-            barcode = form.cleaned_data.get('barcode') if form.cleaned_data else None
-            if not barcode or form.cleaned_data.get('DELETE'):
+            product = form.cleaned_data.get('product') if form.cleaned_data else None
+            if not product or form.cleaned_data.get('DELETE'):
                 continue
             # สินค้าเดียวกันซ้ำในตาราง / มีแท็กนี้อยู่แล้ว -> แจ้งที่ช่อง (ไม่ให้ชน unique แล้ว error 500)
-            if barcode.product_id in seen:
-                form.add_error('barcode', f"{barcode.product} ซ้ำกันในตารางนี้")
-            elif self.instance.pk and self.instance.products.filter(pk=barcode.product_id).exists():
-                form.add_error('barcode', f"{barcode.product} มีแท็กนี้อยู่แล้ว")
-            seen.add(barcode.product_id)
+            if product.pk in seen:
+                form.add_error('product', f"{product} ซ้ำกันในตารางนี้")
+            elif self.instance.pk and self.instance.products.filter(pk=product.pk).exists():
+                form.add_error('product', f"{product} มีแท็กนี้อยู่แล้ว")
+            seen.add(product.pk)
+        super().clean()
 
 
 class ProductTagAddInline(UnfoldTabularInline):
@@ -4517,13 +4532,13 @@ class ProductTagAddInline(UnfoldTabularInline):
     model = Product.tags.through
     form = ProductTagAddForm
     formset = ProductTagAddFormSet
-    fields = ('row_no', 'barcode', 'get_product')
-    readonly_fields = ('row_no', 'get_product')
+    fields = ('row_no', 'barcode', 'product', 'get_suppliers', 'get_prices')
+    readonly_fields = ('row_no', 'get_suppliers', 'get_prices')
     hide_title = True
     extra = 5
     can_delete = False
     verbose_name = "สินค้า"
-    verbose_name_plural = "เพิ่มสินค้าเข้าแท็กนี้ (เลือกบาร์โค้ดในแถวว่าง)"
+    verbose_name_plural = "เพิ่มสินค้าเข้าแท็กนี้ (เลือกบาร์โค้ด หรือค้นหาชื่อสินค้า ในแถวว่าง)"
 
     def get_queryset(self, request):
         return super().get_queryset(request).none()
@@ -4532,10 +4547,14 @@ class ProductTagAddInline(UnfoldTabularInline):
     def row_no(self, obj):
         return ''  # เลขลำดับเติมด้วย CSS counter (นับเฉพาะแถวที่เห็น รวมแถวที่กดเพิ่ม)
 
-    @admin.display(description="สินค้า")
-    def get_product(self, obj):
-        # JS เติมชื่อ + data-product-id ตอนเลือกบาร์โค้ด (ใช้เช็คสินค้าซ้ำ)
-        return mark_safe('<span class="tag-product"></span>')
+    # JS เติมบริษัท/ราคา ตอนเลือกสินค้า (/api/product-suppliers/)
+    @admin.display(description="บริษัท")
+    def get_suppliers(self, obj):
+        return mark_safe('<div class="tag-suppliers"></div>')
+
+    @admin.display(description="ราคา")
+    def get_prices(self, obj):
+        return mark_safe('<div class="tag-prices"></div>')
 
     class Media:
         css = {'all': ('css/product_tag_inline.css',)}
@@ -4571,17 +4590,29 @@ class ProductTagAdmin(UnfoldModelAdmin):
         if not products:
             return "ยังไม่มีสินค้าในแท็กนี้"
         codes = {}
-        for pid, code in ProductBarcode.objects.filter(product_id__in=[p[0] for p in products]).values_list('product_id', 'code'):
+        for pid, code in ProductBarcode.objects.filter(product__tags=obj).values_list('product_id', 'code'):
             codes.setdefault(pid, []).append(code)
+        # บริษัท/ราคา: บริษัทละบรรทัด (บรรทัดที่ n ของ 2 คอลัมน์ตรงกัน) ชื่อสั้น + tooltip ชื่อเต็ม
+        sups, prices = {}, {}
+        for ps in (ProductSupplier.objects.filter(product__tags=obj).select_related('supplier')
+                   .order_by('supplier__company_name')):
+            name = ps.supplier.company_name
+            sups.setdefault(ps.product_id, []).append(
+                format_html('<div title="{}">{}</div>', name, supplier_short_name(name)))
+            prices.setdefault(ps.product_id, []).append(format_html('<div>{}</div>', ps.price_display))
+        dash = mark_safe('<div>—</div>')
         rows = format_html_join('', (
             '<tr class="tag-existing" data-product-id="{}"><td class="tag-no">{}</td><td>{}</td><td>{}</td>'
+            '<td class="tag-sup">{}</td><td class="tag-price">{}</td>'
             '<td class="tag-remove"><label><input type="checkbox" name="remove_tag_product" value="{}"> 🗑️</label></td></tr>'),
-            ((pid, i, ', '.join(codes.get(pid, [])) or '—', name, pid) for i, (pid, name) in enumerate(products, 1)))
+            ((pid, i, ', '.join(codes.get(pid, [])) or '—', name,
+              mark_safe(''.join(sups.get(pid, []))) or dash, mark_safe(''.join(prices.get(pid, []))) or dash, pid)
+             for i, (pid, name) in enumerate(products, 1)))
         return format_html(
             '<div class="tag-existing-wrap">'
-            '<input type="search" class="tag-existing-search" placeholder="🔍 ค้นหาบาร์โค้ด / ชื่อสินค้า ({} รายการ)">'
+            '<input type="search" class="tag-existing-search" placeholder="🔍 ค้นหาบาร์โค้ด / ชื่อสินค้า / บริษัท ({} รายการ)">'
             '<div class="tag-existing-scroll"><table class="tag-existing-table">'
-            '<thead><tr><th>#</th><th>บาร์โค้ด</th><th>สินค้า</th><th>เอาออก</th></tr></thead>'
+            '<thead><tr><th>#</th><th>บาร์โค้ด</th><th>สินค้า</th><th>บริษัท</th><th>ราคา</th><th>เอาออก</th></tr></thead>'
             '<tbody>{}</tbody></table></div>'
             '<div class="tag-existing-hint">ติ๊ก 🗑️ แล้วกดบันทึก = เอาสินค้าออกจากแท็กนี้เท่านั้น (แท็กอื่นของสินค้ายังอยู่)</div></div>',
             len(products), rows)

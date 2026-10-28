@@ -23,3 +23,7 @@ td.field-row_no { width: 40px; text-align: center; }
 .tag-existing-hint { font-size: 12px; color: #6b7280; margin-top: 6px; }
 .dark .tag-existing-table th { background: #1f2937; }
 .dark .tag-existing-table td, .dark .tag-existing-scroll { border-color: #374151; }
+/* บริษัท/ราคา: บริษัทละบรรทัด ชื่อสั้น เอาเมาส์วางเห็นชื่อเต็ม (title) */
+.tag-existing-table td.tag-sup, .tag-existing-table td.tag-price, .tag-suppliers, .tag-prices { white-space: nowrap; }
+.tag-existing-table td.tag-price, .tag-prices { text-align: right; font-variant-numeric: tabular-nums; }
+.tag-existing-table td.tag-sup div[title], .tag-suppliers div[title] { cursor: help; }
