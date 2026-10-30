@@ -1761,6 +1761,16 @@ class ProductAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelMixin, 
         value = obj._total_stock_value or 0
         return f"{int(value):,}"
 
+    def fast_column_totals(self, queryset, fields):
+        # กล่องสรุปยอด: สต็อกปัจจุบัน/มูลค่า รวมด้วย DB ทีเดียว (ไม่ต้องกดคำนวณ)
+        # ค้นหา/กรองที่ join ตารางอื่น (บาร์โค้ด, แท็ก) ทำให้แถวซ้ำ -> รวมจากชุด pk ที่ไม่ซ้ำ
+        result = (Product.objects.filter(pk__in=queryset.values('pk')).order_by()
+                  .aggregate(stock=Sum('stock_quantity'),
+                             value=Sum(F('stock_quantity') * F('sale_price'), output_field=DecimalField())))
+        totals = {'stock_quantity': Decimal(result['stock'] or 0),
+                  'get_total_stock_value': result['value'] or Decimal(0)}
+        return {f: v for f, v in totals.items() if f in fields}
+
     def save_model(self, request, obj, form, change):
         if not change:
             obj.created_by = request.user
