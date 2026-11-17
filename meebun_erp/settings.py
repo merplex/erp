@@ -241,6 +241,8 @@ UNFOLD = {
                 "items": [
                     {"title": "O1. สูตรการผลิต",             "icon": "science",        "link": "/admin/stocks/bom/"},
                     {"title": "O2. ใบสั่งผลิต",              "icon": "factory",        "link": "/admin/stocks/productionorder/"},
+                    {"title": "O3. แผนกผลิต",               "icon": "groups",         "link": "/admin/stocks/productiondepartment/"},
+                    {"title": "O4. เครื่องจักร",              "icon": "precision_manufacturing", "link": "/admin/stocks/machine/"},
                 ],
             },
             {

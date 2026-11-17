@@ -82,6 +82,22 @@
             });
         }
 
+        // ---- ประเภท "ใบสั่งผลิต": ช่องสินค้าค้นหาได้เฉพาะสินค้าที่ติ๊ก มีBOM ----
+        // แนบ has_bom=1 ไปกับ /admin/autocomplete/ ของช่อง product ให้ ProductAdmin.get_search_results กรอง
+        $.ajaxPrefilter(function (options) {
+            if (!options.url || options.url.indexOf('/admin/autocomplete/') === -1) return;
+            if ($('input[name="order_type"]:checked').val() !== 'PRODUCTION') return;
+            var isProduct = function (str) { return /(^|[?&])field_name=product(&|$)/.test(str || ''); };
+            if (options.data && typeof options.data === 'object') {
+                if (options.data.field_name !== 'product') return;
+                options.data.has_bom = '1';
+            } else if (typeof options.data === 'string' && isProduct(options.data)) {
+                options.data += '&has_bom=1';
+            } else if (isProduct(options.url.split('?')[1])) {
+                options.url += '&has_bom=1';
+            }
+        });
+
         // ---- radio order_type: toggle fields ----
         $(document).on('change', 'input[name="order_type"]', toggleFieldsByType);
         toggleFieldsByType();

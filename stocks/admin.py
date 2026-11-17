@@ -783,6 +783,14 @@ class ProductBarcodeAdmin(UnfoldModelAdmin):
             material_id = (request.GET.get('material_id') or request.GET.get('product_id') or '').strip()
             if material_id:
                 queryset = queryset.filter(product_id=material_id)
+            # O2 ใบสั่งผลิต: เฉพาะบาร์โค้ดของสินค้าที่มี BOM / เลือกสินค้าแล้ว = ตัวเลือกและลำดับตาม production_barcode_choices
+            if request.GET.get('model_name') in ('productionorder', 'machineproductcapacity'):
+                queryset = queryset.filter(product__has_bom=True)
+                if material_id.isdigit():
+                    ids = [b.pk for b in production_barcode_choices(int(material_id))]
+                    queryset = queryset.filter(pk__in=ids).order_by(
+                        Case(*[When(pk=pk, then=Value(i)) for i, pk in enumerate(ids)],
+                             default=Value(len(ids)), output_field=IntegerField()))
             # ใบสั่งซื้อ: เหมือนช่องสินค้า — เฉพาะบาร์โค้ดของสินค้าที่ supplier นี้ขาย + รายการที่ไม่ใช่สต็อก
             # (purchase_order_supplier_filter.js แนบ supplier_id ที่เลือกอยู่ในหน้ามา)
             supplier_id = request.GET.get('supplier_id', '').strip()
@@ -1655,6 +1663,12 @@ class ProductAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelMixin, 
         # 🎯 2. จัดการระบบ Autocomplete สำหรับ PO (ล็อคตาม Supplier)
         if 'autocomplete' in request.path:
             from django.db.models import Q
+            # F3 ประเภท "ใบสั่งผลิต": advance_order_rule_form.js แนบ has_bom=1 -> เหลือเฉพาะสินค้าที่ติ๊ก มีBOM
+            if request.GET.get('model_name') == 'advanceorderrule' and request.GET.get('has_bom') == '1':
+                queryset = queryset.filter(has_bom=True)
+            # O2 ใบสั่งผลิต: ช่องสินค้า (และตัวกรองสินค้าในหน้ารายการ) เฉพาะสินค้าที่ติ๊ก มีBOM
+            if request.GET.get('model_name') in ('productionorder', 'bom'):
+                queryset = queryset.filter(has_bom=True)
             supplier_id = request.GET.get('supplier_id', '').strip()
 
             # ✅ วิธีหลัก: JS (purchase_order_supplier_filter.js) ส่ง supplier_id ของ supplier
@@ -1840,7 +1854,9 @@ class ProductAdmin(ColumnTotalsMixin, DetailedHistoryMixin, ExportToExcelMixin, 
 
 @admin.register(BOM)
 class BOMAdmin(DocumentLockMixin, UnfoldModelAdmin):
-    list_display = ('name', 'product', 'get_customer', 'total_cost_display', 'unit', 'production_time', 'created_by')
+    list_display = ('name', 'product', 'get_customer', 'total_cost_display', 'unit', 'machine_display', 'production_rate_display', 'created_by')
+    # เวลาผลิต: ไม่กรอกเองแล้ว แสดง ผลผลิต/เวลา จาก O4 เครื่องจักร (คิดตอนแสดงผล -> แก้ O4 แล้วขึ้นทันทีไม่ต้อง save สูตร)
+    fields = ('product', 'name', 'customer', 'unit', 'machine_display', 'production_rate_display', 'created_by', 'updated_by')
     list_filter = (('product__category', AutocompleteSelectMultipleFilter),
                    ('customer', AutocompleteSelectMultipleFilter))
     list_filter_submit = True
@@ -1851,7 +1867,24 @@ class BOMAdmin(DocumentLockMixin, UnfoldModelAdmin):
     def get_customer(self, obj):
         return obj.customer.company_name if obj.customer_id else "ทุกลูกค้า"
     inlines = [BOMIngredientInline]
-    readonly_fields = ('created_by', 'updated_by')
+    readonly_fields = ('created_by', 'updated_by', 'machine_display', 'production_rate_display')
+
+    def _capacity_summary(self, obj):
+        if not obj or not obj.pk:
+            return '-', '-'
+        cache = getattr(obj, '_capacity_summary_cache', None)
+        if cache is None:
+            cache = machine_capacity_summary(machine_capacities_for(obj.product_id, bom_barcode(obj)))
+            obj._capacity_summary_cache = cache
+        return cache
+
+    @admin.display(description="เครื่องจักร")
+    def machine_display(self, obj):
+        return self._capacity_summary(obj)[0]
+
+    @admin.display(description="เวลาผลิต (ผลผลิต / เวลา)")
+    def production_rate_display(self, obj):
+        return self._capacity_summary(obj)[1]
 
     def total_cost_display(self, obj):
         try:
@@ -3674,7 +3707,7 @@ class ProductionMaterialUsageInline(UnfoldTabularInline):
 
 @admin.register(ProductionOrder)
 class ProductionOrderAdmin(ColumnTotalsMixin, DocumentLockMixin, UnfoldModelAdmin):
-    fields = ['product', 'bom', 'quantity_planned', 'quantity_actual', 'created_by','status', 'notes']
+    fields = ['product', 'barcode_obj', 'machine_display', 'bom', 'quantity_planned', 'quantity_actual', 'created_by','status', 'notes']
     list_display = ('pd_number', 'product', 'quantity_planned', 'quantity_actual', 'get_diff', 'status')
     list_filter = (
         ('status', MultipleChoicesDropdownFilter),
@@ -3682,17 +3715,25 @@ class ProductionOrderAdmin(ColumnTotalsMixin, DocumentLockMixin, UnfoldModelAdmi
         ('product', AutocompleteSelectMultipleFilter),
     )
     list_filter_submit = True
-    search_fields = ('pd_number', 'product__name')
-    autocomplete_fields = ['product']
+    search_fields = ('pd_number', 'product__name', 'barcode_obj__code')
+    autocomplete_fields = ['product', 'barcode_obj']
     inlines = [ProductionMaterialUsageInline,ProductionLogInline]
     date_hierarchy = 'order_date' # ✅ เพิ่มบรรทัดนี้ค่ะ
-    readonly_fields = ('pd_number','quantity_actual',  'created_by', 'status') 
+    readonly_fields = ('pd_number','quantity_actual',  'created_by', 'status', 'machine_display')
     
     actions = ['mark_as_completed']
 
+    @admin.display(description="เครื่องจักร")
+    def machine_display(self, obj):
+        # ประเภทเครื่องจักรจาก O4 ตามบาร์โค้ด/สินค้าของใบ — production_order_form.js อัปเดต span นี้ทันทีที่เปลี่ยนบาร์
+        text = '-'
+        if obj and obj.product_id:
+            text = machine_capacity_summary(machine_capacities_for(obj.product_id, obj.barcode_obj))[0]
+        return format_html('<span id="pd-machine-display">{}</span>', text)
+
     class Media:
         js = (
-            'js/filter_bom.js',
+            'js/production_order_form.js',
             'js/admin_sum_selected.js',
         ) # เรียกไฟล์ JS มาใช้งาน
 
@@ -3713,8 +3754,93 @@ class ProductionOrderAdmin(ColumnTotalsMixin, DocumentLockMixin, UnfoldModelAdmi
     def get_urls(self):
         custom_urls = [
             path('<int:object_id>/print/', self.admin_site.admin_view(self.print_view), name='stocks_productionorder_print'),
+            path('production-info/', self.admin_site.admin_view(self.production_info_view),
+                 name='stocks_productionorder_production_info'),
         ]
         return custom_urls + super().get_urls()
+
+    def production_info_view(self, request):
+        """production_order_form.js: สินค้า <-> บาร์โค้ด <-> สูตร <-> ส่วนประกอบ ในฟอร์มใบสั่งผลิต
+        trigger = ช่องที่ผู้ใช้เพิ่งเปลี่ยน: barcode (ตั้งสินค้า+สูตรตามบาร์), product (บาร์ตาม production_barcode_choices + สูตร),
+        bom/qty/init (คงสินค้า/บาร์/สูตรเดิม แค่คำนวณส่วนประกอบใหม่)"""
+        from django.http import JsonResponse
+        from urllib.parse import urlencode
+        if not self.has_view_or_change_permission(request):
+            return JsonResponse({'error': 'ไม่มีสิทธิ์'}, status=403)
+        g = request.GET
+        trigger = g.get('trigger', '')
+        pid = (g.get('product_id') or '').strip()
+        bid = (g.get('barcode_id') or '').strip()
+        bom_id = (g.get('bom_id') or '').strip()
+        picking = trigger in ('product', 'barcode')
+
+        barcode = None
+        if bid.isdigit():
+            barcode = ProductBarcode.objects.select_related('product').filter(pk=int(bid)).first()
+        if trigger == 'barcode' and barcode:
+            pid = str(barcode.product_id)
+        if not pid.isdigit():
+            return JsonResponse({})
+        product = Product.objects.filter(pk=int(pid)).first()
+        if not product:
+            return JsonResponse({})
+        if not product.has_bom:
+            return JsonResponse({'error': f"สินค้า '{product.name}' ไม่ได้ติ๊ก มีBOM จึงสั่งผลิตไม่ได้"})
+
+        if barcode is not None and barcode.product_id != product.pk:
+            barcode = None
+        if barcode is None and trigger == 'product':
+            choices = production_barcode_choices(product.pk)
+            barcode = choices[0] if choices else None
+
+        boms = list(BOM.objects.filter(product=product).select_related('product', 'customer').order_by('-id'))
+        bom = None
+        if picking:
+            bom = production_bom_for(product, barcode)
+        elif bom_id.isdigit():
+            bom = next((b for b in boms if b.pk == int(bom_id)), None)
+
+        try:
+            qty = Decimal((g.get('qty') or '0').strip() or '0')
+            if not qty.is_finite() or qty < 0 or qty > Decimal('1e12'):
+                qty = Decimal('0')
+        except Exception:
+            qty = Decimal('0')
+
+        def fmt(v):
+            text = f"{v:,.4f}"
+            return text.rstrip('0').rstrip('.') if '.' in text else text
+
+        ingredients = []
+        if bom:
+            for ing in bom.ingredients.select_related('material', 'barcode_obj').all():
+                per_unit = ing.quantity_base
+                ingredients.append({
+                    'name': ing.material.name,
+                    'barcode': ing.barcode_obj.code if ing.barcode_obj_id else '',
+                    'per_unit': fmt(per_unit),
+                    'total': fmt(per_unit * qty),
+                    'unit': ing.material.unit,
+                    'is_scrap': ing.is_scrap,
+                })
+
+        # บาร์โค้ดที่เลือกไม่มีสูตรของตัวเอง (ชื่อสูตร == รหัสบาร์) -> เตือน + ปุ่มสร้างสูตร (กรอกสินค้า/ชื่อสูตรให้)
+        missing_bom = None
+        if barcode and not BOM.objects.filter(product=product, name=barcode.code, customer__isnull=True).exists():
+            missing_bom = {
+                'code': barcode.code,
+                'create_url': reverse('admin:stocks_bom_add') + '?' + urlencode({'product': product.pk, 'name': barcode.code}),
+            }
+
+        return JsonResponse({
+            'machine': machine_capacity_summary(machine_capacities_for(product.pk, barcode))[0],
+            'product': {'id': product.pk, 'text': str(product)},
+            'barcode': {'id': barcode.pk, 'text': str(barcode)} if barcode else None,
+            'boms': [{'id': b.pk, 'text': str(b)} for b in boms],
+            'bom_id': bom.pk if bom else None,
+            'ingredients': ingredients,
+            'missing_bom': missing_bom,
+        })
 
     def print_view(self, request, object_id):
         from django.core.exceptions import PermissionDenied
@@ -3868,12 +3994,19 @@ class ProductionOrderAdmin(ColumnTotalsMixin, DocumentLockMixin, UnfoldModelAdmi
             from .models import Product
             kwargs["queryset"] = Product.objects.filter(has_bom=True)
 
-        # 2. กรองสูตร BOM: ให้ตรงกับสินค้าในใบนี้
-        if db_field.name == "bom":
-            if obj and hasattr(obj, 'product') and obj.product:
-                kwargs["queryset"] = BOM.objects.filter(product=obj.product)
-            elif 'product' in request.GET:
-                kwargs["queryset"] = BOM.objects.filter(product_id=request.GET.get('product'))
+        # 2. กรองสูตร BOM: ให้ตรงกับสินค้าในใบนี้ (หน้าเพิ่มใหม่ production_order_form.js เติมตัวเลือกตามสินค้าที่เลือกให้)
+        # POST ต้องรับได้ทุกสูตร เพราะผู้ใช้อาจเปลี่ยนสินค้าในหน้า — model clean() เช็กว่าสูตรเป็นของสินค้าเอง
+        if db_field.name == "bom" and request.method == 'GET':
+            resolved = request.resolver_match
+            object_id = resolved.kwargs.get('object_id') if resolved else None
+            product_id = request.GET.get('product', '')
+            if object_id:
+                current = self.get_object(request, object_id)
+                product_id = current.product_id if current else None
+            if str(product_id or '').isdigit():
+                kwargs["queryset"] = BOM.objects.filter(product_id=product_id)
+            else:
+                kwargs["queryset"] = BOM.objects.none()
         
         # 🎯 ห้ามใส่ obj ลงใน super() นะครับ! 
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
@@ -8189,7 +8322,7 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
                      'description')
 
     class Media:
-        js = ('js/admin_sum_selected.js', 'js/amount_comma_preview.js', 'js/bank_party_suggest.js')
+        js = ('js/admin_sum_selected.js', 'js/amount_comma_preview.js', 'js/text_suggest.js', 'js/bank_party_suggest.js')
 
     def party_suggest_view(self, request):
         # ช่อง บริษัท/บุคคล: รายชื่อที่เคยพิมพ์ (รายการบันทึกเอง) เรียงแบบช่อง URL ของ browser — ใช้บ่อย+ล่าสุดขึ้นก่อน
@@ -8798,3 +8931,185 @@ class LoanAdmin(UnfoldModelAdmin):
         if not nxt:
             return '-'
         return f"{nxt.due_date:%d/%m/%Y} ({nxt.total_amount:,.2f})"
+
+
+# ==========================================
+# O3. แผนกผลิต / O4. เครื่องจักร
+# ==========================================
+from django.forms.models import BaseInlineFormSet
+
+
+class _SafeAutocompleteSelect(AutocompleteSelect):
+    # ค่าที่ส่งมาไม่ใช่เลข id (เช่นแก้ POST เอง) -> ไม่ให้ query พังตอน render ฟอร์มกลับพร้อม error
+    def optgroups(self, name, value, attr=None):
+        value = [v for v in value if str(v).isdigit()]
+        return super().optgroups(name, value, attr)
+
+
+class DepartmentMachineForm(forms.ModelForm):
+    # แถวใน inline O3 = เลือกเครื่องจักรที่มีอยู่แล้วใน O4 (ค้นหาได้) ไม่ใช่สร้างเครื่องใหม่
+    # ใช้ FK MachineProductCapacity.machine เป็นต้นทาง URL autocomplete ของ Machine (ไม่มี FK อื่นชี้ Machine)
+    machine_pick = forms.ModelChoiceField(
+        queryset=Machine.objects.all(), required=False, label="ชื่อเครื่องจักร",
+        widget=_SafeAutocompleteSelect(MachineProductCapacity._meta.get_field('machine'), admin.site))
+
+    class Meta:
+        model = Machine
+        fields = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance.pk:
+            # แถวเดิม: ล็อกไว้ (จะเปลี่ยนเครื่อง = ลบแถวแล้วเพิ่มแถวใหม่)
+            self.fields['machine_pick'].initial = self.instance.pk
+            self.fields['machine_pick'].disabled = True
+
+    def clean(self):
+        cleaned = super().clean()
+        if not self.instance.pk and self.has_changed() and not cleaned.get('machine_pick')                 and not cleaned.get('DELETE'):
+            raise ValidationError({'machine_pick': "กรุณาเลือกเครื่องจักร"})
+        return cleaned
+
+
+class DepartmentMachineFormSet(BaseInlineFormSet):
+    def save_new(self, form, commit=True):
+        # ไม่สร้าง Machine ใหม่ แต่ย้ายเครื่องที่เลือกมาอยู่แผนกนี้
+        machine = form.cleaned_data['machine_pick']
+        machine.department = self.instance
+        if commit:
+            machine.save(update_fields=['department'])
+        return machine
+
+    def delete_existing(self, obj, commit=True):
+        # ลบแถว = เอาเครื่องออกจากแผนก ไม่ลบเครื่องจักรใน O4
+        obj.department = None
+        if commit:
+            obj.save(update_fields=['department'])
+
+
+class DepartmentMachineInline(UnfoldTabularInline):
+    model = Machine
+    form = DepartmentMachineForm
+    formset = DepartmentMachineFormSet
+    fk_name = 'department'
+    extra = 1
+    fields = ('machine_pick', 'machine_type_display')
+    readonly_fields = ('machine_type_display',)
+    verbose_name = "เครื่องจักร"
+    verbose_name_plural = "เครื่องจักรในแผนก"
+
+    @admin.display(description="ประเภทเครื่องจักร")
+    def machine_type_display(self, obj):
+        return (obj.machine_type or "-") if obj and obj.pk else "-"
+
+
+@admin.register(ProductionDepartment)
+class ProductionDepartmentAdmin(UnfoldModelAdmin):
+    list_display = ('name', 'labor_cost_display', 'machine_list')
+    search_fields = ('name', 'machines__name')
+    fields = ('name', 'labor_cost_per_hour', 'notes')
+    inlines = [DepartmentMachineInline]
+
+    @admin.display(description="ค่าแรงต่อชั่วโมง", ordering='labor_cost_per_hour')
+    def labor_cost_display(self, obj):
+        return f"{obj.labor_cost_per_hour:,.2f}"
+
+    @admin.display(description="เครื่องจักร")
+    def machine_list(self, obj):
+        names = [m.name for m in obj.machines.all()]
+        return ", ".join(names) if names else "-"
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related('machines')
+
+
+class MachineProductCapacityFormSet(BaseInlineFormSet):
+    def clean(self):
+        # สินค้า/บาร์โค้ดซ้ำในเครื่องเดียวกัน (ในฟอร์มเดียว) -> แจ้ง error แทน IntegrityError
+        super().clean()
+        seen = set()
+        for form in self.forms:
+            if not hasattr(form, 'cleaned_data') or not form.cleaned_data or form.cleaned_data.get('DELETE'):
+                continue
+            product = form.cleaned_data.get('product')
+            barcode = form.cleaned_data.get('barcode_obj')
+            if not product:
+                continue
+            key = ('b', barcode.pk) if barcode else ('p', product.pk)
+            if key in seen:
+                form.add_error('barcode_obj' if barcode else 'product', "รายการนี้ซ้ำกับแถวอื่นในเครื่องเดียวกัน")
+            seen.add(key)
+
+
+class MachineProductCapacityInline(UnfoldTabularInline):
+    model = MachineProductCapacity
+    formset = MachineProductCapacityFormSet
+    extra = 1
+    autocomplete_fields = ['product', 'barcode_obj']
+    fields = ('product', 'barcode_obj', 'output_qty', 'hours', 'min_lot', 'scrap_per_lot', 'workers')
+
+
+@admin.register(Machine)
+class MachineAdmin(UnfoldModelAdmin):
+    list_display = ('name', 'machine_type', 'department', 'product_count')
+    list_filter = ('department', 'machine_type')
+    search_fields = ('name', 'machine_type', 'department__name')
+    autocomplete_fields = ['department']
+    fields = ('name', 'machine_type', 'department', 'notes')
+    inlines = [MachineProductCapacityInline]
+    actions = ['copy_machines']
+
+    class Media:
+        js = ('js/text_suggest.js', 'js/machine_type_suggest.js', 'js/machine_capacity_inline.js')
+
+    @staticmethod
+    def next_copy_name(name):
+        """ชื่อเครื่องที่คัดลอก: "<ชื่อเดิม> #n" n = เลขสูงสุดที่มีอยู่ + 1 (คัดลอกจาก #1 ก็ต่อเลขจากชื่อหลักเหมือนกัน)"""
+        import re
+        base = re.sub(r'\s*#\d+$', '', name).strip() or name
+        pattern = re.compile(r'^' + re.escape(base) + r' #(\d+)$')
+        nums = [int(m.group(1)) for m in
+                (pattern.match(n) for n in Machine.objects.filter(name__startswith=base).values_list('name', flat=True)) if m]
+        max_len = Machine._meta.get_field('name').max_length
+        n = max(nums, default=0) + 1
+        while True:
+            # ชื่อยาวเกินต้องตัดชื่อเดิมให้พอใส่ #n -> กันชื่อชนด้วยการไล่เลขจนกว่าจะไม่ซ้ำ
+            suffix = f" #{n}"
+            candidate = base[:max_len - len(suffix)] + suffix
+            if not Machine.objects.filter(name=candidate).exists():
+                return candidate
+            n += 1
+
+    @admin.action(description="คัดลอกเครื่องจักร (ชื่อเดิม #เลขถัดไป พร้อมรายการสินค้า)")
+    def copy_machines(self, request, queryset):
+        created = []
+        with transaction.atomic():
+            for machine in queryset.order_by('name'):
+                new = Machine.objects.create(name=self.next_copy_name(machine.name), machine_type=machine.machine_type,
+                                             department=machine.department, notes=machine.notes)
+                MachineProductCapacity.objects.bulk_create([
+                    MachineProductCapacity(machine=new, product_id=c.product_id, barcode_obj_id=c.barcode_obj_id,
+                                           output_qty=c.output_qty, hours=c.hours, min_lot=c.min_lot,
+                                           scrap_per_lot=c.scrap_per_lot, workers=c.workers)
+                    for c in machine.capacities.all()])
+                created.append(new.name)
+        self.message_user(request, "คัดลอกแล้ว: " + ", ".join(created), messages.SUCCESS)
+
+    @admin.display(description="จำนวนสินค้า")
+    def product_count(self, obj):
+        return obj.capacities.count()
+
+    def type_suggest_view(self, request):
+        # ช่อง ประเภทเครื่องจักร: ประเภทที่เคยกรอก เรียงใช้บ่อยก่อน (แบบช่อง บริษัท/บุคคล ใน M2)
+        from django.http import JsonResponse
+        from django.db.models import Count
+        if not self.has_view_or_change_permission(request):
+            return JsonResponse({'error': 'forbidden'}, status=403)
+        rows = (Machine.objects.exclude(machine_type='').values('machine_type')
+                .annotate(n=Count('id')).order_by('-n', 'machine_type'))
+        names = list(dict.fromkeys(r['machine_type'].strip() for r in rows if r['machine_type'].strip()))[:200]
+        return JsonResponse({'names': names})
+
+    def get_urls(self):
+        return [path('type-suggest/', self.admin_site.admin_view(self.type_suggest_view),
+                     name='stocks_machine_type_suggest')] + super().get_urls()

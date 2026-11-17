@@ -746,6 +746,40 @@ def pick_bom(product, barcode=None, customer=None):
             return bom
     return None
 
+def production_barcode_choices(product_id):
+    """บาร์โค้ดที่ใช้สั่งผลิตสินค้านี้ เรียงตามลำดับที่จะแสดง (ตัวแรก = ค่าที่เลือกให้อัตโนมัติ) — O2 ใบสั่งผลิต
+    - "บาร์โค้ดมี BOM" = มีสูตรทุกลูกค้าที่ชื่อสูตร == รหัสบาร์โค้ด (กติกาเดียวกับ pick_bom)
+    - มีบาร์ที่มี BOM: เอาเฉพาะบาร์ที่มี BOM, บาร์หลักขึ้นก่อนถ้ามี BOM, ที่เหลือบาร์ล่าสุดก่อน
+    - ไม่มีบาร์ไหนมี BOM เลย (ใช้สูตรรวมของสินค้า): ทุกบาร์ บาร์หลักก่อน"""
+    barcodes = list(ProductBarcode.objects.filter(product_id=product_id).order_by('id'))
+    if not barcodes:
+        return []
+    codes = set(BOM.objects.filter(product_id=product_id, customer__isnull=True).values_list('name', flat=True))
+    with_bom = [b for b in barcodes if b.code in codes]
+    if not with_bom:
+        return barcodes
+    primary = barcodes[0]  # บาร์หลัก = บาร์โค้ดแรกที่เพิ่มให้สินค้า
+    rest = sorted((b for b in with_bom if b.pk != primary.pk), key=lambda b: -b.pk)
+    return ([primary] if primary in with_bom else []) + rest
+
+
+def production_bom_for(product, barcode=None):
+    """สูตรสำหรับใบสั่งผลิต (O2): มีบาร์โค้ด -> สูตรของบาร์นั้น (ชื่อสูตร == รหัสบาร์) ไม่มีก็ใช้ "สูตรรวม" ล่าสุดของสินค้า
+    (สูตรที่ชื่อไม่ตรงบาร์ไหนของสินค้าเลย) — ไม่หยิบสูตรของบาร์อื่น เพราะขนาด/ปริมาณอาจคนละแบบ
+    ไม่มีบาร์โค้ด = pick_bom แบบเดิม. ใบสั่งผลิตไม่ผูกลูกค้า -> เฉพาะสูตรทุกลูกค้า"""
+    if not product:
+        return None
+    if barcode is None:
+        return pick_bom(product)
+    product_id = getattr(product, 'pk', product)
+    base = BOM.objects.filter(product_id=product_id, customer__isnull=True)
+    own = base.filter(name=barcode.code).order_by('-id').first()
+    if own:
+        return own
+    codes = ProductBarcode.objects.filter(product_id=product_id).values_list('code', flat=True)
+    return base.exclude(name__in=codes).order_by('-id').first()
+
+
 class BOMIngredient(models.Model):
     bom = models.ForeignKey(BOM, on_delete=models.CASCADE, related_name='ingredients')
     material = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name="วัตถุดิบ")
@@ -1992,11 +2026,17 @@ class ProductionOrder(models.Model):
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     bom = models.ForeignKey('BOM', on_delete=models.SET_NULL, null=True, blank=True, verbose_name="สูตรที่ใช้ผลิต")
-    
+    barcode_obj = models.ForeignKey('ProductBarcode', on_delete=models.SET_NULL, null=True, blank=True,
+                                    related_name='production_orders', verbose_name="บาร์โค้ด")
+
     def clean(self):
+        if self.product_id and not self.product.has_bom:
+            raise ValidationError({'product': f"❌ สินค้า '{self.product}' ไม่ได้ติ๊ก มีBOM จึงสั่งผลิตไม่ได้"})
+        if self.barcode_obj_id and self.product_id and self.barcode_obj.product_id != self.product_id:
+            raise ValidationError({'barcode_obj': f"❌ บาร์โค้ด '{self.barcode_obj}' ไม่ใช่ของสินค้า '{self.product}' กรุณาเลือกใหม่"})
         # Validate 1: เช็กว่า BOM ที่เลือก เป็นของสินค้าตัวนี้จริงๆ
-        if self.product and self.bom:
-            if self.bom.product != self.product:
+        if self.product_id and self.bom_id:
+            if self.bom.product_id != self.product_id:
                 raise ValidationError({
                     'bom': f"❌ BOM '{self.bom}' ไม่ใช่สูตรของสินค้า '{self.product}' กรุณาเลือกใหม่"
                 })
@@ -2034,7 +2074,8 @@ class ProductionOrder(models.Model):
         # 2. Auto ดึง BOM ล่าสุดมาแปะถ้ายังไม่ได้เลือก
         if not self.bom and self.product:
             # ใบสั่งผลิตไม่ผูกลูกค้า -> สูตรทุกลูกค้า (ไม่หยิบสูตรเฉพาะลูกค้ามาใช้เอง)
-            self.bom = pick_bom(self.product)
+            # มีบาร์โค้ด -> สูตรที่ชื่อตรงรหัสบาร์โค้ดก่อน (ไม่มีบาร์โค้ด = เหมือนเดิม: สูตรล่าสุดของสินค้า)
+            self.bom = production_bom_for(self.product, self.barcode_obj)
 
         # 3. ตรรกะสถานะ (ของเปรม)
         if self.status not in ['Completed', 'Cancelled']:
@@ -2457,6 +2498,8 @@ class AdvanceOrderRule(models.Model):
     def clean(self):
         if self.order_type == 'PURCHASE' and not self.supplier_id:
             raise ValidationError({'supplier': "❌ ใบสั่งซื้อล่วงหน้าต้องเลือกผู้จำหน่ายก่อน"})
+        if self.order_type == 'PRODUCTION' and self.product_id and not self.product.has_bom:
+            raise ValidationError({'product': f"❌ สินค้า '{self.product}' ไม่ได้ติ๊ก มีBOM จึงสั่งผลิตไม่ได้"})
         if self.order_type == 'PRODUCTION' and not self.bom_id:
             raise ValidationError({'bom': "❌ ใบสั่งผลิตล่วงหน้าต้องเลือกสูตรการผลิต (BOM) ก่อน"})
         if self.barcode_obj_id and self.product_id and self.barcode_obj.product_id != self.product_id:
@@ -4873,3 +4916,131 @@ def apply_dc_rebate_deduction(log, kind, month):
     payment.remark = f"หักค่า {label} สินค้า {log.product.name} [REF-ID:{log.id}] รอบ {month:%m/%Y}"[:200]
     payment.save()
     return payment
+
+
+# ==========================================
+# O3. แผนกผลิต / O4. เครื่องจักร (กำลังการผลิตของเครื่องต่อสินค้า)
+# ==========================================
+class ProductionDepartment(models.Model):
+    name = models.CharField(max_length=150, unique=True, verbose_name="ชื่อแผนก",
+                            error_messages={'unique': "มีแผนกชื่อนี้อยู่แล้ว กรุณาใช้ชื่ออื่น"})
+    labor_cost_per_hour = models.DecimalField(
+        max_digits=18, decimal_places=4, default=0, validators=[MinValueValidator(0)],
+        verbose_name="ค่าแรงต่อชั่วโมง (บาท)")
+    notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
+
+    class Meta:
+        ordering = ['name']
+        verbose_name = "แผนกผลิต"
+        verbose_name_plural = "O3. แผนกผลิต"
+
+    def __str__(self):
+        return self.name
+
+
+class Machine(models.Model):
+    name = models.CharField(max_length=150, unique=True, verbose_name="ชื่อเครื่องจักร",
+                            error_messages={'unique': "มีเครื่องจักรชื่อนี้อยู่แล้ว กรุณาใช้ชื่ออื่น (ถ้าเป็นเครื่องเหมือนกัน ใช้ action คัดลอกเครื่องจักร)"})
+    machine_type = models.CharField(max_length=150, blank=True, verbose_name="ประเภทเครื่องจักร")
+    department = models.ForeignKey(
+        ProductionDepartment, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='machines', verbose_name="แผนกผลิต")
+    notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
+
+    class Meta:
+        ordering = ['name']
+        verbose_name = "เครื่องจักร"
+        verbose_name_plural = "O4. เครื่องจักร"
+
+    def __str__(self):
+        return self.name
+
+
+class MachineProductCapacity(models.Model):
+    """การผลิตสินค้า 1 รายการบนเครื่องนี้: ได้ผลผลิต output_qty ใช้เวลา hours ชม.
+    สั่งผลิตขั้นต่ำ min_lot, ในแต่ละ min_lot มีของเสีย scrap_per_lot, ใช้คน workers คน"""
+    machine = models.ForeignKey(Machine, on_delete=models.CASCADE, related_name='capacities',
+                                verbose_name="เครื่องจักร")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='machine_capacities',
+                                limit_choices_to={'has_bom': True}, verbose_name="สินค้า (มี BOM)")
+    # ว่าง = ใช้กับทุกบาร์โค้ดของสินค้า (ที่ไม่มีแถวระบุบาร์ของตัวเอง) — ดู machine_capacities_for
+    barcode_obj = models.ForeignKey('ProductBarcode', on_delete=models.SET_NULL, null=True, blank=True,
+                                    related_name='machine_capacities', verbose_name="บาร์โค้ด")
+    output_qty = models.DecimalField(max_digits=18, decimal_places=4,
+                                     validators=[MinValueValidator(Decimal('0.0001'))],
+                                     verbose_name="ผลผลิต")
+    hours = models.DecimalField(max_digits=18, decimal_places=4,
+                                validators=[MinValueValidator(Decimal('0.0001'))],
+                                verbose_name="เวลาที่ใช้ (ชม.)")
+    min_lot = models.DecimalField(max_digits=18, decimal_places=4, default=0,
+                                  validators=[MinValueValidator(0)],
+                                  verbose_name="หน่วยผลิต (ขั้นต่ำ)")
+    scrap_per_lot = models.DecimalField(max_digits=18, decimal_places=4, default=0,
+                                        validators=[MinValueValidator(0)],
+                                        verbose_name="ของเสียต่อหน่วยผลิต")
+    workers = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)],
+                                          verbose_name="จำนวนคน")
+
+    class Meta:
+        verbose_name = "สินค้าที่ผลิตได้"
+        verbose_name_plural = "สินค้าที่ผลิตได้"
+        constraints = [
+            models.UniqueConstraint(fields=['machine', 'barcode_obj'], condition=models.Q(barcode_obj__isnull=False),
+                                    name='uniq_machine_barcode_capacity'),
+            models.UniqueConstraint(fields=['machine', 'product'], condition=models.Q(barcode_obj__isnull=True),
+                                    name='uniq_machine_product_nobarcode_capacity'),
+        ]
+
+    def __str__(self):
+        return f"{self.machine} - {self.product}"
+
+    def clean(self):
+        if self.barcode_obj_id and self.product_id and self.barcode_obj.product_id != self.product_id:
+            raise ValidationError({'barcode_obj': f"บาร์โค้ด '{self.barcode_obj}' ไม่ใช่ของสินค้า '{self.product}'"})
+        if (self.min_lot is not None and self.scrap_per_lot is not None
+                and self.min_lot > 0 and self.scrap_per_lot > self.min_lot):
+            raise ValidationError({'scrap_per_lot': "ของเสียต้องไม่มากกว่าหน่วยผลิต (ขั้นต่ำ)"})
+
+
+def machine_capacities_for(product_id, barcode=None):
+    """แถวกำลังการผลิต (O4) ที่ใช้กับสินค้า/บาร์โค้ดนี้: แถวที่ระบุบาร์นี้ก่อน ไม่มีก็ใช้แถวที่ไม่ระบุบาร์ของสินค้า"""
+    if not product_id:
+        return []
+    rows = list(MachineProductCapacity.objects.filter(product_id=product_id)
+                .select_related('machine').order_by('machine__name', 'id'))
+    if barcode is not None:
+        exact = [c for c in rows if c.barcode_obj_id == barcode.pk]
+        if exact:
+            return exact
+    return [c for c in rows if c.barcode_obj_id is None]
+
+
+def _fmt_qty(value):
+    text = f"{value:,.4f}"
+    return text.rstrip('0').rstrip('.') if '.' in text else text
+
+
+def machine_capacity_summary(capacities):
+    """(ประเภทเครื่องจักร, ผลผลิต/เวลา) สำหรับแสดงผลใน O1/O2 — เครื่องที่คัดลอกมา (#1 #2) ค่าเหมือนกันแสดงครั้งเดียว
+    ไม่มีข้อมูล = ('-', '-')"""
+    if not capacities:
+        return '-', '-'
+    types, rates = [], []
+    for c in capacities:
+        label = c.machine.machine_type or c.machine.name
+        if label not in types:
+            types.append(label)
+        rate = (label, _fmt_qty(c.output_qty), _fmt_qty(c.hours))
+        if rate not in rates:
+            rates.append(rate)
+    multi = len(types) > 1
+    rate_text = ", ".join(f"{t}: {o} / {h} ชม." if multi else f"{o} / {h} ชม." for t, o, h in rates)
+    return ", ".join(types), rate_text
+
+
+def bom_barcode(bom):
+    """บาร์โค้ดของสูตร (ชื่อสูตร == รหัสบาร์โค้ดของสินค้า) ไม่ตรงบาร์ไหน = None (สูตรรวม)"""
+    if not bom or not bom.product_id:
+        return None
+    return ProductBarcode.objects.filter(product_id=bom.product_id, code=bom.name).first()
+
