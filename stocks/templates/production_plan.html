@@ -55,9 +55,10 @@
   /* filter แผนกด้านซ้าย (ย่อซ่อนได้) */
   .layout { display: flex; align-items: flex-start; }
   .content { flex: 1; min-width: 0; }
-  /* อยู่กับที่ด้านบนซ้าย ไม่เลื่อนตามหน้า */
-  .filter { flex: 0 0 210px; margin: 12px 0 12px 16px; background: var(--panel);
-            border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+  /* ค้างอยู่บนจอใต้แถบวันที่ เลื่อนดูเครื่องจักรแล้วแถบไม่เลื่อนตาม */
+  .filter { flex: 0 0 210px; align-self: flex-start; position: sticky; top: calc(var(--top-h, 120px) + 12px);
+            margin: 12px 0 12px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+            padding: 10px 12px; max-height: calc(100vh - var(--top-h, 120px) - 24px); overflow-y: auto; }
   .filter-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
   .filter-head b { font-size: 15px; }
   .filter label { display: flex; align-items: center; gap: 8px; padding: 4px 2px; cursor: pointer; }
@@ -65,7 +66,7 @@
   .filter .links { display: flex; gap: 6px; margin: 4px 0 6px; }
   .filter .links button { font-size: 12px; padding: 2px 8px; }
   .filter .note { color: var(--muted); font-size: 12px; margin-top: 6px; }
-  .filter-open { margin: 12px 0 0 16px; writing-mode: vertical-rl; padding: 10px 4px; display: none; }
+  .filter-open { align-self: flex-start; position: sticky; top: calc(var(--top-h, 120px) + 12px); margin: 12px 0 0 16px; writing-mode: vertical-rl; padding: 10px 4px; display: none; }
   body.filter-collapsed .filter { display: none; }
   body.filter-collapsed .filter-open { display: block; }
   .daybar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 16px 0; }
@@ -139,8 +140,8 @@
   .toast.ok { background: var(--ok); }
   @media (max-width: 600px) {
     .layout { flex-direction: column; }
-    .filter { margin: 12px 12px 0; flex-basis: auto; width: calc(100% - 24px); }
-    .filter-open { writing-mode: horizontal-tb; margin: 12px 12px 0; }
+    .filter { position: static; max-height: none; margin: 12px 12px 0; flex-basis: auto; width: calc(100% - 24px); }
+    .filter-open { position: static; writing-mode: horizontal-tb; margin: 12px 12px 0; }
     .board { padding: 12px; }
     header input { min-width: 0; width: 100%; }
     .col, .pool .card { flex-basis: 100%; }
@@ -609,10 +610,12 @@
     document.body.classList.remove('filter-collapsed');
     try { localStorage.setItem('o5_filter_collapsed', '0'); } catch (err) {}
   });
+  // ความสูงหัวหน้า (รวมแถบวันที่) -> แถบแผนกค้างใต้หัวพอดี วัดใหม่ทุกครั้งที่หัวเปลี่ยนขนาด (แถบวันที่โหลดทีหลัง)
   function measureTop() {
     document.documentElement.style.setProperty('--top-h', document.querySelector('.top').offsetHeight + 'px');
   }
   window.addEventListener('resize', measureTop);
+  if (window.ResizeObserver) new ResizeObserver(measureTop).observe(document.querySelector('.top'));
   measureTop();
   document.getElementById('search').addEventListener('input', applySearch);
   document.getElementById('reload').addEventListener('click', function () { load(board ? board.date : null); });
