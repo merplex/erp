@@ -127,6 +127,7 @@
   .tag { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 10px; background: var(--line); color: var(--text); }
   .sortable-ghost { opacity: .35; }
   .sortable-chosen { box-shadow: 0 6px 16px rgba(0,0,0,.18); }
+  .sortable-fallback { opacity: .9 !important; transform: rotate(1.5deg); pointer-events: none; }
   body.dragging .col.blocked { opacity: .45; }
   body.dragging .col.blocked .drop-note { color: var(--bad); }
   body.dragging .col.allowed { outline: 2px dashed var(--ok); outline-offset: -2px; }
@@ -364,7 +365,7 @@
         (o._groups > 1 ? ' <span class="tag">ลงได้ ' + o._groups + ' กลุ่ม</span>' : '') + '</div>';
     }
     return '<div class="card' + (group ? '' : ' static') + '" data-key="p' + o.order_id + '" data-search="' + esc(searchText(o)) + '">' +
-      '<div class="row1"><span class="pd"><a href="' + esc(o.url) + '" target="_blank" rel="noopener">' + esc(o.pd_number) + '</a></span></div>' +
+      '<div class="row1"><span class="pd"><a href="' + esc(o.url) + '" target="_blank" rel="noopener" draggable="false">' + esc(o.pd_number) + '</a></span></div>' +
       '<div class="prod">' + esc(o.product) + (o.barcode ? ' <span class="sub">(' + esc(o.barcode) + ')</span>' : '') + '</div>' +
       '<div class="sub">รอลงเครื่อง <b>' + fmt(o.unplanned) + '</b> / ' + fmt(o.planned) + ' · ' + esc(o.status) + ' · ' + esc(o.order_date) + '</div>' +
       note + '</div>';
@@ -373,7 +374,7 @@
   function slotCard(s) {
     var dis = editable() ? '' : ' disabled';
     return '<div class="card' + (s.hours == null ? ' warn' : '') + '" data-key="s' + s.id + '" data-search="' + esc(searchText(s)) + '">' +
-      '<div class="row1"><span class="pd"><a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.pd_number) + '</a></span>' +
+      '<div class="row1"><span class="pd"><a href="' + esc(s.url) + '" target="_blank" rel="noopener" draggable="false">' + esc(s.pd_number) + '</a></span>' +
       '<span class="hrs">' + (s.hours != null ? fmt(s.hours) + ' ชม.' : '?') + '</span></div>' +
       '<div class="prod">' + esc(s.product) + (s.barcode ? ' <span class="sub">(' + esc(s.barcode) + ')</span>' : '') + '</div>' +
       '<label class="qty">จำนวน <input type="text" inputmode="numeric" autocomplete="off" value="' + s.qty + '" data-slot="' + s.id + '"' + dis + '>' +
@@ -479,8 +480,13 @@
         },
         disabled: !editable() || busy,
         draggable: '.card',
-        filter: 'a, input, .print-btn',
+        // จับลากได้ทั้งการ์ด (รวมเลข PD) ยกเว้นช่องพิมพ์จำนวน — คลิกเลข PD เฉยๆ ยังเปิดใบสั่งผลิตได้
+        filter: 'input, .print-btn',
         preventOnFilter: false,
+        // ไม่ใช้ native drag ของ browser (บางเครื่อง/Windows ลากไม่ติด, ลากโดนลิงก์กลายเป็นลากลิงก์)
+        forceFallback: true,
+        fallbackOnBody: true,
+        fallbackTolerance: 4,
         animation: 150,
         delay: 120,
         delayOnTouchOnly: true,
