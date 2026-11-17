@@ -18,6 +18,7 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path
 from django.views.generic import RedirectView
+from stocks.production_plan import production_plan_view, production_plan_data, production_plan_action, production_plan_print
 from stocks.views import unlock_document_view, line_webhook_view, line_webhook2_view, barcode_remaining_api, delivery_log_autosave, pending_barcodes_api, barcode_info_api, contract_update_barcode_api, stock_report_webview, purchase_quotation_price_api, sales_quotation_price_api, product_barcodes_api, product_suppliers_api, product_bom_by_barcode_api, recommended_supplier_api, supplier_currency_rate_api, po_product_currency_api
 
 urlpatterns = [
@@ -44,4 +45,9 @@ urlpatterns = [
     path("webhook/line/", line_webhook_view),
     path("webhook/line2/", line_webhook2_view),
     path("report/stock/", stock_report_webview),
+    # O5 แผนงานผลิต: หน้าเดี่ยว (นอก Django admin) ลากใบสั่งผลิตลงเครื่องจักร
+    path("production-plan/", production_plan_view, name="production_plan"),
+    path("production-plan/data/", production_plan_data),
+    path("production-plan/action/", production_plan_action),
+    path("production-plan/print/", production_plan_print),
 ]

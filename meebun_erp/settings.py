@@ -190,6 +190,7 @@ UNFOLD = {
         lambda request: static("js/input_hover_scroll.js"),
         lambda request: static("js/number_input_no_wheel.js"),
         lambda request: static("js/submit_once.js"),
+        lambda request: static("js/sidebar_new_tab.js"),
     ],
     "SITE_TITLE": "Meebun ERP",
     "SITE_HEADER": "Meebun ERP",
@@ -243,6 +244,7 @@ UNFOLD = {
                     {"title": "O2. ใบสั่งผลิต",              "icon": "factory",        "link": "/admin/stocks/productionorder/"},
                     {"title": "O3. แผนกผลิต",               "icon": "groups",         "link": "/admin/stocks/productiondepartment/"},
                     {"title": "O4. เครื่องจักร",              "icon": "precision_manufacturing", "link": "/admin/stocks/machine/"},
+                    {"title": "O5. แผนงานผลิต",              "icon": "view_kanban",    "link": "/production-plan/"},
                 ],
             },
             {

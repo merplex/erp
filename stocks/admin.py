@@ -9051,11 +9051,11 @@ class MachineProductCapacityInline(UnfoldTabularInline):
 
 @admin.register(Machine)
 class MachineAdmin(UnfoldModelAdmin):
-    list_display = ('name', 'machine_type', 'department', 'product_count')
+    list_display = ('name', 'machine_type', 'department', 'daily_hours_display', 'product_count')
     list_filter = ('department', 'machine_type')
     search_fields = ('name', 'machine_type', 'department__name')
     autocomplete_fields = ['department']
-    fields = ('name', 'machine_type', 'department', 'notes')
+    fields = ('name', 'machine_type', 'department', 'daily_hours', 'notes')
     inlines = [MachineProductCapacityInline]
     actions = ['copy_machines']
 
@@ -9086,7 +9086,8 @@ class MachineAdmin(UnfoldModelAdmin):
         with transaction.atomic():
             for machine in queryset.order_by('name'):
                 new = Machine.objects.create(name=self.next_copy_name(machine.name), machine_type=machine.machine_type,
-                                             department=machine.department, notes=machine.notes)
+                                             department=machine.department, daily_hours=machine.daily_hours,
+                                             notes=machine.notes)
                 MachineProductCapacity.objects.bulk_create([
                     MachineProductCapacity(machine=new, product_id=c.product_id, barcode_obj_id=c.barcode_obj_id,
                                            output_qty=c.output_qty, hours=c.hours, min_lot=c.min_lot,
@@ -9094,6 +9095,12 @@ class MachineAdmin(UnfoldModelAdmin):
                     for c in machine.capacities.all()])
                 created.append(new.name)
         self.message_user(request, "คัดลอกแล้ว: " + ", ".join(created), messages.SUCCESS)
+
+    @admin.display(description="เวลาผลิตต่อวัน", ordering='daily_hours')
+    def daily_hours_display(self, obj):
+        hours = obj.default_day_hours
+        text = f"{hours:,.2f}".rstrip('0').rstrip('.')
+        return f"{text} ชม." + ("" if obj.daily_hours is not None else " (ค่าเริ่มต้น)")
 
     @admin.display(description="จำนวนสินค้า")
     def product_count(self, obj):

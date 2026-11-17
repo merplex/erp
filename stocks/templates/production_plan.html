@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>แผนงานผลิต - Meebun ERP</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+<style>
+  :root {
+    --bg: #f3f4f6; --panel: #ffffff; --text: #111827; --muted: #6b7280; --line: #e5e7eb;
+    --primary: #2563eb; --primary-soft: #dbeafe; --ok: #16a34a; --warn: #d97706; --bad: #dc2626;
+    --card: #ffffff; --pool: #eef2ff; --weekend: #fef2f2; --past: #f9fafb; --lock: #fef3c7; --lock-text: #92400e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111827; --panel: #1f2937; --text: #f3f4f6; --muted: #9ca3af; --line: #374151;
+      --primary: #60a5fa; --primary-soft: #1e3a8a; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
+      --card: #111827; --pool: #1e1b4b; --weekend: #3b1d1d; --past: #18212f; --lock: #422006; --lock-text: #fde68a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Sarabun', system-ui, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; }
+  .top { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 16px; }
+  header h1 { font-size: 18px; margin: 0; }
+  header .spacer { flex: 1; }
+  header input { padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card);
+                 color: var(--text); min-width: 200px; font-family: inherit; }
+  .btn { color: var(--primary); text-decoration: none; background: none; border: 1px solid var(--line);
+         border-radius: 6px; padding: 6px 10px; cursor: pointer; font-family: inherit; font-size: 14px; }
+  .hint { color: var(--muted); font-size: 13px; }
+
+  /* แถบวันที่: เดือน (รวมช่อง) + วัน เลื่อนซ้ายขวาได้ */
+  .strip-wrap { display: flex; align-items: stretch; border-top: 1px solid var(--line); }
+  .strip-nav { flex: 0 0 34px; border: 0; background: var(--panel); color: var(--primary); font-size: 20px; cursor: pointer; }
+  .strip-nav:hover { background: var(--bg); }
+  .strip { flex: 1; overflow-x: auto; scrollbar-width: thin; }
+  .strip-inner { display: inline-flex; flex-direction: column; min-width: 100%; }
+  .strip-row { display: flex; }
+  .month { flex: 0 0 auto; font-weight: 700; font-size: 13px; padding: 3px 8px; border-left: 1px solid var(--line);
+           border-bottom: 1px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .day { flex: 0 0 44px; width: 44px; text-align: center; padding: 4px 0 5px; cursor: pointer; border-left: 1px solid var(--line);
+         font-size: 12px; line-height: 1.25; position: relative; user-select: none; }
+  .day .dn { font-size: 15px; font-weight: 700; }
+  .day.weekend { background: var(--weekend); }
+  .day.past { color: var(--muted); }
+  .day.today .dn { color: var(--primary); }
+  .day.selected { background: var(--primary); color: #fff; }
+  .day.selected .dn { color: #fff; }
+  .day .dot { display: block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin: 2px auto 0; }
+  .day .dot.none { background: transparent; }
+
+  /* filter แผนกด้านซ้าย (ย่อซ่อนได้) */
+  .layout { display: flex; align-items: flex-start; }
+  .content { flex: 1; min-width: 0; }
+  .filter { flex: 0 0 210px; position: sticky; top: var(--top-h, 120px); margin: 12px 0 12px 16px; background: var(--panel);
+            border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; max-height: calc(100vh - var(--top-h, 120px) - 24px);
+            overflow-y: auto; }
+  .filter-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+  .filter-head b { font-size: 15px; }
+  .filter label { display: flex; align-items: center; gap: 8px; padding: 4px 2px; cursor: pointer; }
+  .filter label .n { margin-left: auto; color: var(--muted); font-size: 12px; }
+  .filter .links { display: flex; gap: 6px; margin: 4px 0 6px; }
+  .filter .links button { font-size: 12px; padding: 2px 8px; }
+  .filter .note { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .filter-open { position: sticky; top: var(--top-h, 120px); margin: 12px 0 0 16px; writing-mode: vertical-rl; padding: 10px 4px; display: none; }
+  body.filter-collapsed .filter { display: none; }
+  body.filter-collapsed .filter-open { display: block; }
+  .daybar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 16px 0; }
+  .daybar h2 { margin: 0; font-size: 17px; }
+  .lock { display: flex; align-items: center; gap: 10px; background: var(--lock); color: var(--lock-text); border-radius: 8px;
+          padding: 6px 12px; font-weight: 600; }
+  .lock .btn { color: var(--lock-text); border-color: currentColor; padding: 3px 10px; }
+
+  .board { padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 20px; }
+  body.readonly .board { background: var(--past); }
+  .dept { background: var(--panel); border: 2px solid var(--line); border-radius: 14px; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+  .dept-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .dept-head h2 { font-size: 19px; margin: 0; }
+  .dept-head .meta { color: var(--muted); font-size: 13px; }
+  .print-btn { display: inline-flex; align-items: center; gap: 4px; color: var(--primary); background: var(--card); border: 1px solid var(--line);
+               border-radius: 6px; padding: 3px 9px; cursor: pointer; font-family: inherit; font-size: 13px; text-decoration: none; white-space: nowrap; }
+  .print-btn:hover { border-color: var(--primary); }
+  .col-head .title { display: flex; align-items: center; gap: 6px; }
+  .col-head .title .print-btn { padding: 1px 6px; font-size: 12px; }
+  .group { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+  .group .col { background: var(--panel); }
+  .group-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .group-head h3 { font-size: 17px; margin: 0; }
+  .group-head .meta { color: var(--muted); font-size: 13px; }
+  .machines { display: flex; flex-wrap: wrap; gap: 10px; }
+  .col { flex: 0 1 260px; min-width: 230px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+         display: flex; flex-direction: column; transition: opacity .15s; }
+  .col-head { padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  .col-head .name { font-weight: 700; font-size: 15px; }
+  .col-head .meta { color: var(--muted); font-size: 12px; min-height: 16px; }
+  .gauge { height: 8px; background: var(--line); border-radius: 4px; margin-top: 6px; overflow: hidden; }
+  .gauge > div { height: 100%; background: var(--ok); }
+  .gauge.mid > div { background: var(--warn); }
+  .gauge.full > div { background: var(--bad); }
+  .used { font-size: 12px; margin-top: 4px; display: flex; justify-content: space-between; }
+  .cap { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 6px; }
+  .cap input, .qty input { width: 74px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--card);
+                           color: var(--text); font-family: inherit; font-size: 13px; text-align: right; }
+  .cap input:disabled, .qty input:disabled { opacity: .7; }
+  .drop-note { font-size: 12px; margin-top: 4px; font-weight: 600; }
+  .col .list { padding: 8px; min-height: 70px; display: flex; flex-direction: column; gap: 8px; }
+  .pool { margin-top: 12px; background: var(--pool); border-radius: 10px; padding: 10px; }
+  .pool-title { font-weight: 600; margin-bottom: 8px; }
+  .pool .list { display: flex; flex-wrap: wrap; gap: 8px; min-height: 60px; }
+  .pool .card { flex: 0 1 240px; }
+  .empty { color: var(--muted); text-align: center; padding: 12px 0; font-size: 13px; width: 100%; pointer-events: none; }
+  .card { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--primary); border-radius: 8px;
+          padding: 8px 10px; cursor: grab; touch-action: none; user-select: none; }
+  body.readonly .card { cursor: default; touch-action: auto; }
+  .card.static { cursor: default; border-left-color: var(--muted); }
+  .card.warn { border-left-color: var(--bad); }
+  .card .row1 { display: flex; justify-content: space-between; gap: 6px; }
+  .card .pd { font-weight: 700; }
+  .card .pd a { color: inherit; text-decoration: none; }
+  .card .hrs { font-weight: 700; color: var(--primary); white-space: nowrap; }
+  .card .prod { margin-top: 2px; }
+  .card .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .qty { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 4px; }
+  .tag { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 10px; background: var(--line); color: var(--text); }
+  .sortable-ghost { opacity: .35; }
+  .sortable-chosen { box-shadow: 0 6px 16px rgba(0,0,0,.18); }
+  body.dragging .col.blocked { opacity: .45; }
+  body.dragging .col.blocked .drop-note { color: var(--bad); }
+  body.dragging .col.allowed { outline: 2px dashed var(--ok); outline-offset: -2px; }
+  body.dragging .col.allowed .drop-note { color: var(--ok); }
+  body.dragging .col.partial .drop-note { color: var(--warn); }
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--bad); color: #fff;
+           padding: 10px 16px; border-radius: 8px; max-width: calc(100% - 32px); display: none; z-index: 10; }
+  .toast.ok { background: var(--ok); }
+  @media (max-width: 600px) {
+    .layout { flex-direction: column; }
+    .filter { position: static; margin: 12px 12px 0; max-height: none; flex-basis: auto; width: calc(100% - 24px); }
+    .filter-open { position: static; writing-mode: horizontal-tb; margin: 12px 12px 0; }
+    .board { padding: 12px; }
+    header input { min-width: 0; width: 100%; }
+    .col, .pool .card { flex-basis: 100%; }
+  }
+</style>
+</head>
+<body>
+<div class="top">
+  <header>
+    <h1>O5. แผนงานผลิต</h1>
+    <span class="hint">ลากใบสั่งผลิตขึ้นไปวางบนเครื่อง — เวลาไม่พอจะตัดจำนวนให้ ที่เหลือลงวัน/เครื่องอื่นได้</span>
+    <span class="spacer"></span>
+    <input id="search" type="search" placeholder="ค้นหา PD / สินค้า / บาร์โค้ด">
+    <button class="btn" id="reload" type="button">โหลดใหม่</button>
+    <a class="btn" href="/admin/stocks/productionorder/">ใบสั่งผลิต (O2)</a>
+    <a class="btn" href="/admin/stocks/machine/">เครื่องจักร (O4)</a>
+  </header>
+  <div class="strip-wrap">
+    <button class="strip-nav" id="strip-left" type="button" aria-label="เลื่อนซ้าย">‹</button>
+    <div class="strip" id="strip"><div class="strip-inner"><div class="strip-row" id="months"></div><div class="strip-row" id="days"></div></div></div>
+    <button class="strip-nav" id="strip-right" type="button" aria-label="เลื่อนขวา">›</button>
+  </div>
+</div>
+<div class="layout">
+  <button class="btn filter-open" id="filter-open" type="button">☰ แผนก</button>
+  <aside class="filter" id="filter"></aside>
+  <div class="content">
+    <div class="daybar" id="daybar"></div>
+    <div class="board" id="board"></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  'use strict';
+  var CAN_CHANGE = {{ can_change|yesno:"true,false" }};
+  var CSRF = '{{ csrf_token }}';
+  var NO_TYPE = 'ไม่ระบุประเภท';
+  var MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+  var WEEKDAYS = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
+  var WEEKDAYS_FULL = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
+  var board = null;
+  var sortables = [];
+  var busy = false;
+  var unlocked = false;
+  var stripKey = '';
+  var NO_DEPT = 'ไม่ระบุแผนก';
+  var deptSelected = [];   // ว่าง หรือ ติ๊กครบ = แสดงทุกแผนก
+  try { deptSelected = JSON.parse(localStorage.getItem('o5_depts') || '[]') || []; } catch (e) { deptSelected = []; }
+  try {
+    if (localStorage.getItem('o5_filter_collapsed') === '1' || window.innerWidth < 600) document.body.classList.add('filter-collapsed');
+  } catch (e) {}
+
+  function deptOf(m) { return m.department || NO_DEPT; }
+  function allDepts() {
+    var list = [];
+    board.machines.forEach(function (m) { if (list.indexOf(deptOf(m)) === -1) list.push(deptOf(m)); });
+    return list.sort(function (a, b) {
+      if (a === NO_DEPT) return 1;
+      if (b === NO_DEPT) return -1;
+      return a.localeCompare(b, 'th');
+    });
+  }
+  function visibleMachines() {
+    var depts = allDepts();
+    var sel = deptSelected.filter(function (d) { return depts.indexOf(d) !== -1; });
+    if (!sel.length || sel.length === depts.length) return board.machines;
+    return board.machines.filter(function (m) { return sel.indexOf(deptOf(m)) !== -1; });
+  }
+  function saveFilter() {
+    try { localStorage.setItem('o5_depts', JSON.stringify(deptSelected)); } catch (e) {}
+  }
+
+  function renderFilter() {
+    var depts = allDepts();
+    var html = '<div class="filter-head"><b>แผนก</b><button class="btn" id="filter-close" type="button" title="ย่อ">«</button></div>' +
+      '<div class="links"><button class="btn" type="button" data-all="1">ติ๊กทั้งหมด</button><button class="btn" type="button" data-all="0">ล้าง</button></div>';
+    depts.forEach(function (d) {
+      var n = board.machines.filter(function (m) { return deptOf(m) === d; }).length;
+      html += '<label><input type="checkbox" value="' + esc(d) + '"' + (deptSelected.indexOf(d) !== -1 ? ' checked' : '') + '>' +
+        '<span>' + esc(d) + '</span><span class="n">' + n + '</span></label>';
+    });
+    if (!depts.length) html += '<div class="note">ยังไม่มีเครื่องจักร</div>';
+    var showing = visibleMachines().length;
+    html += '<div class="note">' + (showing === board.machines.length ? 'แสดงทุกแผนก' : 'แสดง ' + showing + ' จาก ' + board.machines.length + ' เครื่อง') +
+      ' (ไม่ติ๊กหรือติ๊กครบ = แสดงทั้งหมด)</div>';
+    document.getElementById('filter').innerHTML = html;
+  }
+
+  function esc(t) {
+    return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) {
+      return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+    });
+  }
+  function fmt(n) { return (Math.round(n * 100) / 100).toLocaleString('th-TH', {maximumFractionDigits: 2}); }
+  function parseISO(s) { var p = s.split('-'); return new Date(+p[0], +p[1] - 1, +p[2]); }
+  function iso(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+  function thaiDate(s) { var d = parseISO(s); return WEEKDAYS_FULL[d.getDay()] + ' ' + d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + (d.getFullYear() + 543); }
+  function editable() { return CAN_CHANGE && board && (!board.past || unlocked); }
+
+  var toastTimer = null;
+  function toast(msg, ok) {
+    var el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = 'toast' + (ok ? ' ok' : '');
+    el.style.display = 'block';
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.style.display = 'none'; }, ok ? 2200 : 5000);
+  }
+
+  // ---------- แถบวันที่ ----------
+  function renderStrip() {
+    var key = board.strip_start + board.strip_end + JSON.stringify(board.plan_days);
+    var start = parseISO(board.strip_start), end = parseISO(board.strip_end);
+    if (key !== stripKey) {
+      stripKey = key;
+      var months = '', days = '', cur = null, span = 0;
+      var flush = function () {
+        if (cur) months += '<div class="month" style="width:' + (span * 44) + 'px">' + MONTHS[cur.m] + ' ' + (cur.y + 543) + '</div>';
+      };
+      for (var d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        if (!cur || cur.m !== d.getMonth() || cur.y !== d.getFullYear()) { flush(); cur = {m: d.getMonth(), y: d.getFullYear()}; span = 0; }
+        span++;
+        var s = iso(d), wd = d.getDay();
+        days += '<div class="day' + (wd === 0 || wd === 6 ? ' weekend' : '') + (s < board.today ? ' past' : '') +
+          (s === board.today ? ' today' : '') + '" data-date="' + s + '" title="' + esc(thaiDate(s)) + '">' +
+          '<div>' + WEEKDAYS[wd] + '</div><div class="dn">' + d.getDate() + '</div>' +
+          '<span class="dot' + (board.plan_days[s] ? '' : ' none') + '"></span></div>';
+      }
+      flush();
+      document.getElementById('months').innerHTML = months;
+      document.getElementById('days').innerHTML = days;
+    }
+    document.querySelectorAll('.day').forEach(function (el) { el.classList.toggle('selected', el.dataset.date === board.date); });
+  }
+
+  function scrollToSelected(smooth) {
+    var el = document.querySelector('.day.selected');
+    var strip = document.getElementById('strip');
+    if (!el) return;
+    var left = el.offsetLeft - strip.clientWidth / 2 + 22;
+    strip.scrollTo({left: Math.max(left, 0), behavior: smooth ? 'smooth' : 'auto'});
+  }
+
+  // ---------- หัววัน + ล็อก ----------
+  function renderDaybar() {
+    var html = '<h2>' + esc(thaiDate(board.date)) + (board.date === board.today ? ' (วันนี้)' : '') + '</h2>';
+    if (board.date !== board.today) html += '<button class="btn" id="go-today" type="button">ไปวันนี้</button>';
+    if (board.past && CAN_CHANGE) {
+      html += unlocked
+        ? '<span class="lock">🔓 กำลังแก้ไขวันที่ผ่านมาแล้ว — จำนวนที่แก้มีผลกับยอดรอวางแผนปัจจุบัน <button class="btn" id="lock-btn" type="button">ล็อก</button></span>'
+        : '<span class="lock">🔒 วันที่ผ่านมาแล้ว ดูได้อย่างเดียว <button class="btn" id="lock-btn" type="button">ปลดล็อก</button></span>';
+    } else if (!CAN_CHANGE) {
+      html += '<span class="lock">ดูได้อย่างเดียว (ไม่มีสิทธิ์แก้ไขใบสั่งผลิต)</span>';
+    }
+    document.getElementById('daybar').innerHTML = html;
+    var lockBtn = document.getElementById('lock-btn');
+    if (lockBtn) lockBtn.addEventListener('click', function () { unlocked = !unlocked; render(); });
+    var todayBtn = document.getElementById('go-today');
+    if (todayBtn) todayBtn.addEventListener('click', function () { load(board.today, true); });
+  }
+
+  // ---------- กระดาน ----------
+  function items() {
+    var all = board.pool.map(function (o) { return {kind: 'pool', key: 'p' + o.order_id, o: o}; });
+    board.machines.forEach(function (m) {
+      m.slots.forEach(function (s) { all.push({kind: 'slot', key: 's' + s.id, o: s, machine: m}); });
+    });
+    return all;
+  }
+  function findItem(key) { return items().filter(function (i) { return i.key === key; })[0]; }
+  function machineById(id) { return board.machines.filter(function (m) { return String(m.id) === String(id); })[0]; }
+  function unitOf(item, machineId) {
+    if (item.kind === 'slot' && String(item.machine.id) === String(machineId)) return item.o.unit;
+    return item.o.units[String(machineId)];
+  }
+
+  // แผนก (กล่องนอก) -> ประเภทเครื่องจักร (กล่องใน) ; ใบรอลงเครื่องอยู่ใต้กลุ่มประเภทที่ผลิตได้
+  function sortTh(list, last) {
+    return list.sort(function (a, b) {
+      if (a === last) return 1;
+      if (b === last) return -1;
+      return a.localeCompare(b, 'th');
+    });
+  }
+  function buildGroups() {
+    var depts = [], deptMap = {}, groups = [];
+    visibleMachines().forEach(function (m) {
+      var d = deptOf(m);
+      if (!deptMap[d]) { deptMap[d] = {key: d, id: m.department_id, typeMap: {}, types: []}; depts.push(d); }
+      var dept = deptMap[d], t = m.type || NO_TYPE;
+      if (!dept.typeMap[t]) { dept.typeMap[t] = {key: t, machines: [], pool: [], dept: dept}; dept.types.push(t); }
+      dept.typeMap[t].machines.push(m);
+    });
+    var result = sortTh(depts, NO_DEPT).map(function (d) {
+      var dept = deptMap[d];
+      dept.groups = sortTh(dept.types, NO_TYPE).map(function (t) { return dept.typeMap[t]; });
+      dept.groups.forEach(function (g) { g.index = groups.length; groups.push(g); });
+      return dept;
+    });
+    var orphans = [];
+    board.pool.forEach(function (o) {
+      var hit = groups.filter(function (g) { return g.machines.some(function (m) { return o.units[String(m.id)] != null; }); });
+      o._groups = hit.length;
+      hit.forEach(function (g) { g.pool.push(o); });
+      if (!Object.keys(o.units).length) orphans.push(o);   // ไม่มีเครื่องไหนผลิตได้เลย (ไม่ใช่แค่ถูกกรองแผนกออก)
+    });
+    return {depts: result, groups: groups, orphans: orphans};
+  }
+
+  function printUrl(params) { return 'print/?' + params; }
+
+  function searchText(o) { return (o.pd_number + ' ' + o.product + ' ' + o.barcode).toLowerCase(); }
+
+  function poolCard(o, group) {
+    var note = '';
+    if (group) {
+      var fit = group.machines.filter(function (m) { return o.units[String(m.id)] != null; });
+      var hrs = fit.map(function (m) { return o.units[String(m.id)] * o.unplanned; });
+      var lo = Math.min.apply(null, hrs), hi = Math.max.apply(null, hrs);
+      note = '<div class="sub">ลงได้ ' + fit.length + ' เครื่อง · ใช้ ' + (lo === hi ? fmt(lo) : fmt(lo) + '–' + fmt(hi)) + ' ชม.' +
+        (o._groups > 1 ? ' <span class="tag">ลงได้ ' + o._groups + ' กลุ่ม</span>' : '') + '</div>';
+    }
+    return '<div class="card' + (group ? '' : ' static') + '" data-key="p' + o.order_id + '" data-search="' + esc(searchText(o)) + '">' +
+      '<div class="row1"><span class="pd"><a href="' + esc(o.url) + '" target="_blank" rel="noopener">' + esc(o.pd_number) + '</a></span></div>' +
+      '<div class="prod">' + esc(o.product) + (o.barcode ? ' <span class="sub">(' + esc(o.barcode) + ')</span>' : '') + '</div>' +
+      '<div class="sub">รอลงเครื่อง <b>' + fmt(o.unplanned) + '</b> / ' + fmt(o.planned) + ' · ' + esc(o.status) + ' · ' + esc(o.order_date) + '</div>' +
+      note + '</div>';
+  }
+
+  function slotCard(s) {
+    var dis = editable() ? '' : ' disabled';
+    return '<div class="card' + (s.hours == null ? ' warn' : '') + '" data-key="s' + s.id + '" data-search="' + esc(searchText(s)) + '">' +
+      '<div class="row1"><span class="pd"><a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.pd_number) + '</a></span>' +
+      '<span class="hrs">' + (s.hours != null ? fmt(s.hours) + ' ชม.' : '?') + '</span></div>' +
+      '<div class="prod">' + esc(s.product) + (s.barcode ? ' <span class="sub">(' + esc(s.barcode) + ')</span>' : '') + '</div>' +
+      '<label class="qty">จำนวน <input type="text" inputmode="numeric" autocomplete="off" value="' + s.qty + '" data-slot="' + s.id + '"' + dis + '>' +
+      '<span class="sub">/ ' + fmt(s.planned) + '</span></label>' +
+      '<div class="sub">' + (s.unplanned > 0 ? 'รอลงอีก ' + fmt(s.unplanned) : 'ลงแผนครบแล้ว') + ' · ' + esc(s.status) + '</div>' +
+      (s.hours == null ? '<div class="sub" style="color:var(--bad)">เครื่องนี้ไม่มีผลผลิตของสินค้านี้ใน O4 แล้ว</div>' : '') +
+      '</div>';
+  }
+
+  function gaugeClass(used, cap) { return used >= cap ? 'full' : (used >= cap * 0.75 ? 'mid' : ''); }
+
+  function render() {
+    document.body.classList.toggle('readonly', !editable());
+    renderStrip();
+    renderFilter();
+    renderDaybar();
+    var built = buildGroups();
+    var dis = editable() ? '' : ' disabled';
+    var html = '';
+    if (board.machines.length && !built.depts.length) {
+      html += '<div class="group"><div class="group-head"><h3>ไม่มีเครื่องจักรในแผนกที่เลือก</h3></div></div>';
+    }
+    if (!board.machines.length) {
+      html += '<div class="group"><div class="group-head"><h3>ยังไม่มีเครื่องจักร</h3><span class="meta">เพิ่มเครื่องจักรได้ที่ O4</span></div></div>';
+    }
+    built.depts.forEach(function (dept) {
+      var dm = [];
+      dept.groups.forEach(function (g) { dm = dm.concat(g.machines); });
+      var dUsed = dm.reduce(function (sum, m) { return sum + m.used; }, 0);
+      var dCap = dm.reduce(function (sum, m) { return sum + m.capacity; }, 0);
+      var deptParam = 'department=' + (dept.id ? dept.id : 'none');
+      html += '<section class="dept"><div class="dept-head">' +
+        '<a class="print-btn" href="' + printUrl(deptParam) + '" target="_blank" rel="noopener" title="พิมพ์งานที่ยังไม่เสร็จของทุกเครื่องในแผนกนี้">🖨 พิมพ์</a>' +
+        '<h2>' + esc(dept.key) + '</h2><span class="meta">' + dm.length + ' เครื่อง · วันนี้ใช้ ' + fmt(dUsed) + ' / ' + fmt(dCap) + ' ชม.</span></div>';
+      dept.groups.forEach(function (g) {
+        var gi = g.index;
+        var used = g.machines.reduce(function (sum, m) { return sum + m.used; }, 0);
+        var cap = g.machines.reduce(function (sum, m) { return sum + m.capacity; }, 0);
+        html += '<section class="group" data-group="' + gi + '"><div class="group-head"><h3>' + esc(g.key) + '</h3>' +
+          '<span class="meta">' + g.machines.length + ' เครื่อง · ใช้รวม ' + fmt(used) + ' / ' + fmt(cap) + ' ชม. · รอลงเครื่อง ' + g.pool.length + ' ใบ</span></div>' +
+          '<div class="machines">';
+        g.machines.forEach(function (m) {
+          var pct = m.capacity > 0 ? Math.min(100, m.used / m.capacity * 100) : (m.used > 0 ? 100 : 0);
+          html += '<div class="col" data-machine="' + m.id + '"><div class="col-head">' +
+            '<div class="title"><a class="print-btn" href="' + printUrl('machine=' + m.id) + '" target="_blank" rel="noopener" title="พิมพ์งานที่ยังไม่เสร็จของเครื่องนี้">🖨</a>' +
+            '<span class="name">' + esc(m.name) + '</span></div>' +
+            '<div class="gauge ' + gaugeClass(m.used, m.capacity) + '"><div style="width:' + pct + '%"></div></div>' +
+            '<div class="used"><span>ใช้ ' + fmt(m.used) + ' / ' + fmt(m.capacity) + ' ชม.</span><span>ว่าง ' + fmt(Math.max(m.capacity - m.used, 0)) + ' ชม.</span></div>' +
+            '<label class="cap">เวลาเต็ม <input type="text" inputmode="decimal" autocomplete="off" value="' + m.capacity + '" data-cap="' + m.id + '"' + dis + '> ชม.' +
+            (m.capacity !== m.default_capacity ? ' <span class="sub">(ปกติ ' + fmt(m.default_capacity) + ')</span>' : '') + '</label>' +
+            '<div class="drop-note"></div></div>' +
+            '<div class="list" data-machine="' + m.id + '" data-group="' + gi + '">' +
+            (m.slots.length ? m.slots.map(slotCard).join('') : '<div class="empty">ลากใบสั่งผลิตมาวาง</div>') +
+            '</div></div>';
+        });
+        html += '</div><div class="pool"><div class="pool-title">ใบสั่งผลิตรอลงเครื่อง (ผลิตได้ด้วย' + esc(g.key) + ')</div>' +
+          '<div class="list" data-machine="" data-group="' + gi + '">' +
+          (g.pool.length ? g.pool.map(function (o) { return poolCard(o, g); }).join('') : '<div class="empty">ไม่มีใบรอลงเครื่อง</div>') +
+          '</div></div></section>';
+      });
+      html += '</section>';
+    });
+    if (built.orphans.length) {
+      html += '<section class="group" style="background:var(--panel)"><div class="group-head"><h3>ยังไม่มีเครื่องที่ผลิตได้</h3>' +
+        '<span class="meta">ตั้งผลผลิตของสินค้าเหล่านี้ที่ O4 เครื่องจักรก่อน จึงจะลากลงเครื่องได้</span></div>' +
+        '<div class="pool"><div class="list">' + built.orphans.map(function (o) { return poolCard(o, null); }).join('') +
+        '</div></div></section>';
+    }
+    document.getElementById('board').innerHTML = html;
+    applySearch();
+    bindSortable();
+  }
+
+  // ลงเครื่องนี้ได้ไหม / ได้กี่ชิ้น (เวลาไม่พอ = ตัดจำนวน)
+  function check(item, machineId) {
+    if (!machineId) return {ok: true, note: ''};
+    var m = machineById(machineId);
+    if (item.kind === 'slot' && String(item.machine.id) === String(machineId)) return {ok: true, note: 'จัดลำดับ'};
+    var unit = unitOf(item, machineId);
+    if (unit == null) return {ok: false, note: 'ยังไม่ได้ตั้งผลผลิตสินค้านี้ใน O4'};
+    var want = item.kind === 'pool' ? item.o.unplanned : item.o.qty;
+    var free = m.capacity - m.used;
+    var fit = Math.floor((free + 1e-9) / unit);
+    if (fit < 1) return {ok: false, note: 'เวลาเต็มแล้ว (ว่าง ' + fmt(Math.max(free, 0)) + ' ชม.)'};
+    if (fit < want) return {ok: true, partial: true, note: 'ลงได้ ' + fmt(fit) + ' จาก ' + fmt(want) + ' (เต็มเวลา)'};
+    return {ok: true, note: '+' + fmt(want * unit) + ' ชม. → รวม ' + fmt(m.used + want * unit) + ' ชม.'};
+  }
+
+  function bindSortable() {
+    sortables.forEach(function (s) { s.destroy(); });
+    sortables = [];
+    document.querySelectorAll('.list[data-group]').forEach(function (list) {
+      var gi = list.dataset.group;
+      sortables.push(Sortable.create(list, {
+        group: {
+          name: 'plan-' + gi,
+          put: function (to, from, dragEl) {
+            var item = findItem(dragEl.dataset.key);
+            if (!item) return false;
+            if (!to.el.dataset.machine) return item.kind === 'slot' || from.el === to.el;
+            return check(item, to.el.dataset.machine).ok;
+          }
+        },
+        disabled: !editable() || busy,
+        draggable: '.card',
+        filter: 'a, input, .print-btn',
+        preventOnFilter: false,
+        animation: 150,
+        delay: 120,
+        delayOnTouchOnly: true,
+        onStart: function (evt) {
+          var item = findItem(evt.item.dataset.key);
+          document.body.classList.add('dragging');
+          document.querySelectorAll('.group[data-group="' + gi + '"] .col').forEach(function (col) {
+            var r = check(item, col.dataset.machine);
+            col.classList.toggle('blocked', !r.ok);
+            col.classList.toggle('allowed', r.ok);
+            col.classList.toggle('partial', !!r.partial);
+            col.querySelector('.drop-note').textContent = r.note;
+          });
+        },
+        onEnd: function (evt) {
+          document.body.classList.remove('dragging');
+          document.querySelectorAll('.col').forEach(function (col) {
+            col.classList.remove('blocked', 'allowed', 'partial');
+            col.querySelector('.drop-note').textContent = '';
+          });
+          if (evt.from === evt.to && evt.oldIndex === evt.newIndex) return;
+          var key = evt.item.dataset.key;
+          var target = evt.to.dataset.machine;
+          if (!target && key.charAt(0) === 'p') { render(); return; }   // สลับในกองรอ ไม่ต้องบันทึก
+          var position = Array.prototype.indexOf.call(
+            Array.prototype.filter.call(evt.to.children, function (c) { return c.classList.contains('card'); }), evt.item);
+          if (key.charAt(0) === 'p') act({op: 'place', order_id: key.slice(1), machine_id: target, position: position});
+          else act({op: 'move', slot_id: key.slice(1), machine_id: target || null, position: position});
+        }
+      }));
+    });
+  }
+
+  function setBusy(v) {
+    busy = v;
+    sortables.forEach(function (s) { s.option('disabled', !editable() || v); });
+  }
+
+  function act(payload) {
+    setBusy(true);
+    payload.date = board.date;
+    payload.allow_past = unlocked;
+    fetch('action/', {
+      method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF},
+      body: JSON.stringify(payload)
+    }).then(function (r) { return r.json().catch(function () { return {error: 'บันทึกไม่สำเร็จ (' + r.status + ')'}; }); })
+      .then(function (data) {
+        if (data.board) board = data.board;
+        if (data.error) toast(data.error); else toast(data.message || 'บันทึกแล้ว', true);
+        busy = false;
+        render();
+      })
+      .catch(function () { toast('เชื่อมต่อไม่ได้ ลองโหลดใหม่'); busy = false; load(board.date); });
+  }
+
+  function load(date, smooth) {
+    var url = 'data/' + (date ? '?date=' + encodeURIComponent(date) : '');
+    fetch(url, {credentials: 'same-origin'})
+      .then(function (r) {
+        if (r.redirected || !r.ok) throw new Error('auth');
+        return r.json();
+      })
+      .then(function (data) {
+        var changed = !board || board.date !== data.date;
+        if (changed) unlocked = false;   // เปลี่ยนวัน -> ล็อกวันย้อนหลังใหม่ทุกครั้ง
+        board = data;
+        history.replaceState(null, '', '?date=' + data.date);
+        render();
+        if (changed) scrollToSelected(smooth);
+      })
+      .catch(function () { toast('โหลดข้อมูลไม่ได้ (อาจหมดเวลาเข้าสู่ระบบ) ลองรีเฟรชหน้า'); });
+  }
+
+  function applySearch() {
+    var q = document.getElementById('search').value.trim().toLowerCase();
+    document.querySelectorAll('.card').forEach(function (c) {
+      c.style.display = !q || c.dataset.search.indexOf(q) !== -1 ? '' : 'none';
+    });
+  }
+
+  document.getElementById('days').addEventListener('click', function (e) {
+    var el = e.target.closest('.day');
+    if (el && board && el.dataset.date !== board.date) load(el.dataset.date, true);
+  });
+  document.getElementById('strip-left').addEventListener('click', function () {
+    var s = document.getElementById('strip'); s.scrollBy({left: -s.clientWidth * 0.8, behavior: 'smooth'});
+  });
+  document.getElementById('strip-right').addEventListener('click', function () {
+    var s = document.getElementById('strip'); s.scrollBy({left: s.clientWidth * 0.8, behavior: 'smooth'});
+  });
+  document.getElementById('board').addEventListener('change', function (e) {
+    var t = e.target;
+    if (t.dataset.slot) act({op: 'qty', slot_id: t.dataset.slot, qty: t.value});
+    else if (t.dataset.cap) act({op: 'capacity', machine_id: t.dataset.cap, hours: t.value});
+  });
+  document.getElementById('board').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && e.target.tagName === 'INPUT') e.target.blur();
+  });
+  document.getElementById('filter').addEventListener('change', function (e) {
+    if (e.target.type !== 'checkbox') return;
+    deptSelected = Array.prototype.map.call(document.querySelectorAll('#filter input:checked'), function (i) { return i.value; });
+    saveFilter();
+    render();
+  });
+  document.getElementById('filter').addEventListener('click', function (e) {
+    var t = e.target;
+    if (t.id === 'filter-close') {
+      document.body.classList.add('filter-collapsed');
+      try { localStorage.setItem('o5_filter_collapsed', '1'); } catch (err) {}
+    } else if (t.dataset.all) {
+      deptSelected = t.dataset.all === '1' ? allDepts() : [];
+      saveFilter();
+      render();
+    }
+  });
+  document.getElementById('filter-open').addEventListener('click', function () {
+    document.body.classList.remove('filter-collapsed');
+    try { localStorage.setItem('o5_filter_collapsed', '0'); } catch (err) {}
+  });
+  function measureTop() {
+    document.documentElement.style.setProperty('--top-h', document.querySelector('.top').offsetHeight + 'px');
+  }
+  window.addEventListener('resize', measureTop);
+  measureTop();
+  document.getElementById('search').addEventListener('input', applySearch);
+  document.getElementById('reload').addEventListener('click', function () { load(board ? board.date : null); });
+
+  var params = new URLSearchParams(location.search);
+  load(params.get('date'));
+})();
+</script>
+</body>
+</html>

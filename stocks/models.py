@@ -4945,7 +4945,15 @@ class Machine(models.Model):
     department = models.ForeignKey(
         ProductionDepartment, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='machines', verbose_name="แผนกผลิต")
+    daily_hours = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True,
+                                      validators=[MinValueValidator(0), MaxValueValidator(24)],
+                                      verbose_name="เวลาผลิตต่อวัน (ชม.)",
+                                      help_text="ว่าง = 24 ชม. — เป็นค่าเริ่มต้นของเวลาเต็มใน O5 แผนงานผลิต (แก้รายวันใน O5 ได้)")
     notes = models.TextField(blank=True, verbose_name="หมายเหตุ")
+
+    @property
+    def default_day_hours(self):
+        return self.daily_hours if self.daily_hours is not None else PLAN_DEFAULT_HOURS
 
     class Meta:
         ordering = ['name']
@@ -5044,3 +5052,50 @@ def bom_barcode(bom):
         return None
     return ProductBarcode.objects.filter(product_id=bom.product_id, code=bom.name).first()
 
+
+PLAN_ACTIVE_STATUSES = ('Draft', 'Started', 'Finished')  # ใบที่ยังต้องผลิต (ไม่รวมปิดงาน/ยกเลิก)
+PLAN_DEFAULT_HOURS = Decimal('24')                       # เวลาเต็มของเครื่องต่อวัน (แก้รายวันได้ที่ MachineDayCapacity)
+
+
+class ProductionPlanSlot(models.Model):
+    """O5 แผนงานผลิต: ใบสั่งผลิตลงเครื่องจักร วันไหน จำนวนเท่าไร (ใบเดียวแบ่งลงหลายวัน/หลายเครื่องได้)
+    ยอดที่ยังต้องวางแผน = จำนวนวางแผนของใบ - รวม quantity ทุกวัน (วันในอดีตถือว่าผลิตตามนี้)"""
+    order = models.ForeignKey(ProductionOrder, on_delete=models.CASCADE, related_name='plan_slots', verbose_name="ใบสั่งผลิต")
+    machine = models.ForeignKey(Machine, on_delete=models.CASCADE, related_name='plan_slots', verbose_name="เครื่องจักร")
+    plan_date = models.DateField(db_index=True, verbose_name="วันที่")
+    quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)], verbose_name="จำนวน")
+    sequence = models.PositiveIntegerField(default=0, verbose_name="ลำดับในเครื่อง")
+
+    class Meta:
+        ordering = ['plan_date', 'sequence', 'id']
+        verbose_name = "แผนงานผลิต"
+        verbose_name_plural = "แผนงานผลิต"
+        constraints = [
+            models.UniqueConstraint(fields=['order', 'machine', 'plan_date'], name='uniq_plan_slot_order_machine_date'),
+        ]
+
+    def __str__(self):
+        return f"{self.plan_date} {self.machine} {self.order.pd_number} x{self.quantity}"
+
+
+class MachineDayCapacity(models.Model):
+    """เวลาเต็มของเครื่องในวันนั้น (ไม่มีแถว = PLAN_DEFAULT_HOURS)"""
+    machine = models.ForeignKey(Machine, on_delete=models.CASCADE, related_name='day_capacities', verbose_name="เครื่องจักร")
+    plan_date = models.DateField(verbose_name="วันที่")
+    hours = models.DecimalField(max_digits=6, decimal_places=2,
+                                validators=[MinValueValidator(0), MaxValueValidator(24)], verbose_name="เวลาเต็ม (ชม.)")
+
+    class Meta:
+        verbose_name = "เวลาเต็มเครื่องจักรรายวัน"
+        verbose_name_plural = "เวลาเต็มเครื่องจักรรายวัน"
+        constraints = [
+            models.UniqueConstraint(fields=['machine', 'plan_date'], name='uniq_machine_day_capacity'),
+        ]
+
+
+def plan_unit_hours(order, machine_id):
+    """ชั่วโมงต่อ 1 หน่วยของใบนี้บนเครื่องนี้ (เวลา / ผลผลิต จาก O4) — None = เครื่องนี้ยังไม่ได้ตั้งผลผลิตของสินค้านี้"""
+    rows = [c for c in machine_capacities_for(order.product_id, order.barcode_obj) if c.machine_id == machine_id]
+    cap = rows[0] if rows else MachineProductCapacity.objects.filter(
+        machine_id=machine_id, product_id=order.product_id, barcode_obj__isnull=True).first()
+    return (cap.hours / cap.output_qty) if cap else None

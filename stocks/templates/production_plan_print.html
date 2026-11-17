@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ใบงานผลิต {{ title }}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  @page { size: A4; margin: 12mm; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Sarabun', sans-serif; font-size: 13px; color: #111; background: #fff; }
+  .page { max-width: 190mm; margin: 0 auto; padding: 16px; }
+  .toolbar { display: flex; gap: 8px; justify-content: flex-end; margin-bottom: 12px; }
+  .toolbar button { font-family: inherit; font-size: 14px; padding: 6px 14px; border: 1px solid #999; border-radius: 6px; background: #fff; cursor: pointer; }
+  h1 { font-size: 20px; margin: 0; }
+  .head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #111; padding-bottom: 6px; margin-bottom: 12px; }
+  .head .meta { text-align: right; font-size: 12px; color: #444; }
+  .machine { margin-bottom: 18px; break-inside: avoid-page; }
+  .machine h2 { font-size: 16px; margin: 0 0 4px; display: flex; justify-content: space-between; align-items: baseline; }
+  .machine h2 small { font-size: 12px; font-weight: 400; color: #444; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { border: 1px solid #999; padding: 4px 6px; vertical-align: top; }
+  th { background: #eee; text-align: left; font-weight: 600; }
+  td.num, th.num { text-align: right; white-space: nowrap; }
+  tr { break-inside: avoid; }
+  .days td { border: 0; padding: 1px 0; }
+  .days td.num { padding-left: 10px; }
+  .empty { color: #666; font-style: italic; padding: 6px 0; }
+  .check { width: 18px; height: 18px; border: 1px solid #555; display: inline-block; }
+  .note { margin-top: 16px; border: 1px dashed #777; padding: 8px 10px; break-inside: avoid; }
+  .note h3 { font-size: 14px; margin: 0 0 6px; }
+  .sign { display: flex; justify-content: space-between; margin-top: 28px; font-size: 12px; }
+  .sign div { width: 45%; border-top: 1px solid #555; padding-top: 4px; text-align: center; }
+  @media print { .toolbar { display: none; } .page { padding: 0; max-width: none; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="toolbar"><button type="button" onclick="window.print()">🖨 พิมพ์</button><button type="button" onclick="window.close()">ปิด</button></div>
+  <div class="head">
+    <div><h1>ใบงานผลิต — {{ title_kind }} {{ title }}</h1><div>งานที่ยังไม่เสร็จ ตั้งแต่ {{ today }} จนหมดแผน</div></div>
+    <div class="meta">พิมพ์เมื่อ {{ printed_at }}</div>
+  </div>
+
+  {% for sec in sections %}
+  <div class="machine">
+    <h2>{{ sec.machine.name }}{% if sec.machine.machine_type %} ({{ sec.machine.machine_type }}){% endif %}
+      <small>{% if sec.rows %}รวม {{ sec.total_hours }} ชม. · ถึง {{ sec.last_date }}{% endif %}</small></h2>
+    {% if sec.rows %}
+    <table>
+      <thead><tr><th style="width:24%">ใบสั่งผลิต</th><th>สินค้า</th><th style="width:38%">วันทำงาน / ยอดแต่ละวัน</th><th class="num">รวม</th><th style="width:34px">เสร็จ</th></tr></thead>
+      <tbody>
+      {% for row in sec.rows %}
+        <tr>
+          <td><b>{{ row.order.pd_number }}</b><br><small>สั่ง {{ row.planned }}</small></td>
+          <td>{{ row.order.product.name }}{% if row.order.barcode_obj_id %}<br><small>{{ row.order.barcode_obj.code }}</small>{% endif %}</td>
+          <td><table class="days">{% for d in row.days %}<tr><td>{{ d.date }}</td><td class="num">{{ d.qty }} ชิ้น</td><td class="num">{{ d.hours }} ชม.</td></tr>{% endfor %}</table></td>
+          <td class="num"><b>{{ row.qty }}</b><br><small>{{ row.hours }} ชม.</small></td>
+          <td style="text-align:center"><span class="check"></span></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">ยังไม่มีงานที่ลงเครื่องนี้ตั้งแต่วันนี้</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  {% if pending %}
+  <div class="note">
+    <h3>หมายเหตุ: ใบสั่งผลิตที่ยังไม่ได้ระบุเครื่อง (ลงแผนยังไม่ครบ) ที่{% if single %}เครื่องนี้{% else %}เครื่องในแผนกนี้{% endif %}ผลิตได้</h3>
+    <table>
+      <thead><tr><th>ใบสั่งผลิต</th><th>สินค้า</th><th class="num">ยังไม่ลงเครื่อง</th>{% if not single %}<th>เครื่องที่ผลิตได้</th>{% endif %}</tr></thead>
+      <tbody>
+      {% for p in pending %}
+        <tr><td>{{ p.order.pd_number }}</td><td>{{ p.order.product.name }}{% if p.order.barcode_obj_id %} ({{ p.order.barcode_obj.code }}){% endif %}</td>
+          <td class="num">{{ p.left }} / {{ p.planned }}</td>{% if not single %}<td>{{ p.machines }}</td>{% endif %}</tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <div class="sign"><div>ผู้จ่ายงาน</div><div>หัวหน้าแผนก / ผู้รับงาน</div></div>
+</div>
+<script>
+  window.addEventListener('load', function () { setTimeout(function () { window.print(); }, 300); });
+</script>
+</body>
+</html>
