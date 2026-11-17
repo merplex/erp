@@ -24,7 +24,8 @@
                 if (!data || data.suggested_price === undefined) return;
                 var unitPrice = parseFloat(data.suggested_price) || 0;
                 $priceInput.data('autofilling', true);
-                $priceInput.val((unitPrice * (factor || 1)).toFixed(2));
+                // 4 ตำแหน่งให้ตรงกับ SalesItem.sale_price / contract_price (เช่น 26.667 ต้องไม่ถูกปัดเป็น 26.67)
+                $priceInput.val((unitPrice * (factor || 1)).toFixed(4));
                 $priceInput.data('autofilling', false);
             });
         }
