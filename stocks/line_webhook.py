@@ -58,8 +58,16 @@ def handle_event(event, access_token: str):
         return
 
     t = text.lower()
-    if t in ['report', 'สต็อก', 'สต๊อก', 'stock', 'สต']:
+    if t in ['report', 'รายงาน']:
         _handle_report_menu(reply_token, access_token)
+    elif t in ['sale report', 'sales report', 'sale']:
+        _handle_sale_menu(reply_token, access_token)
+    elif t in ['purchase report', 'purchase']:
+        _handle_purchase_menu(reply_token, access_token)
+    elif t in ['product menu', 'สต็อก', 'สต๊อก', 'stock', 'สต']:
+        _handle_product_menu(reply_token, access_token)
+    elif t in ['sale this month', 'ยอดขายเดือนนี้']:
+        _handle_sale_this_month(reply_token, access_token)
     elif t in ['ต้นทุนสต๊อก', 'ต้นทุน']:
         _handle_cost_stock(reply_token, access_token)
     elif t in ['มูลค่าสต๊อก', 'มูลค่า', 'value', 'มูลค่าสต็อก']:
@@ -94,43 +102,217 @@ def handle_event(event, access_token: str):
 
 # ── Report Menu ───────────────────────────────────────────────────────────────
 
-def _handle_report_menu(reply_token, access_token):
-    def _btn(emoji, title, subtitle, msg):
-        return {
-            'type': 'box', 'layout': 'horizontal', 'paddingAll': '12px',
-            'backgroundColor': '#f8f9fa', 'cornerRadius': '8px',
-            'action': {'type': 'message', 'label': title, 'text': msg},
-            'contents': [
-                {'type': 'text', 'text': emoji, 'size': 'xl', 'flex': 1, 'gravity': 'center'},
-                {'type': 'box', 'layout': 'vertical', 'flex': 9, 'paddingStart': '8px', 'contents': [
-                    {'type': 'text', 'text': title, 'weight': 'bold', 'size': 'sm', 'color': '#1a1a2e'},
-                    {'type': 'text', 'text': subtitle, 'size': 'xxs', 'color': '#888888'},
-                ]},
-                {'type': 'text', 'text': '›', 'size': 'lg', 'color': '#cccccc', 'align': 'end', 'flex': 1, 'gravity': 'center'},
-            ],
-        }
+def _menu_btn(emoji, title, subtitle, msg):
+    return {
+        'type': 'box', 'layout': 'horizontal', 'paddingAll': '12px',
+        'backgroundColor': '#f8f9fa', 'cornerRadius': '8px',
+        'action': {'type': 'message', 'label': title[:20], 'text': msg},
+        'contents': [
+            {'type': 'text', 'text': emoji, 'size': 'xl', 'flex': 1, 'gravity': 'center'},
+            {'type': 'box', 'layout': 'vertical', 'flex': 9, 'paddingStart': '8px', 'contents': [
+                {'type': 'text', 'text': title, 'weight': 'bold', 'size': 'sm', 'color': '#1a1a2e'},
+                {'type': 'text', 'text': subtitle, 'size': 'xxs', 'color': '#888888', 'wrap': True},
+            ]},
+            {'type': 'text', 'text': '›', 'size': 'lg', 'color': '#cccccc', 'align': 'end', 'flex': 1, 'gravity': 'center'},
+        ],
+    }
 
+
+def _reply_menu(reply_token, access_token, title, subtitle, contents, header_color='#1a1a2e'):
     bubble = {
         'type': 'bubble',
         'header': {
-            'type': 'box', 'layout': 'vertical', 'backgroundColor': '#1a1a2e', 'paddingAll': '15px',
+            'type': 'box', 'layout': 'vertical', 'backgroundColor': header_color, 'paddingAll': '15px',
             'contents': [
-                {'type': 'text', 'text': '📊 Dashboard Report', 'weight': 'bold', 'size': 'lg', 'color': '#ffffff'},
-                {'type': 'text', 'text': 'เลือกรายงานที่ต้องการ', 'size': 'xs', 'color': '#aaaaaa'},
+                {'type': 'text', 'text': title, 'weight': 'bold', 'size': 'lg', 'color': '#ffffff'},
+                {'type': 'text', 'text': subtitle, 'size': 'xs', 'color': '#aaaaaa'},
+            ],
+        },
+        'body': {'type': 'box', 'layout': 'vertical', 'spacing': 'md', 'paddingAll': '12px', 'contents': contents},
+    }
+    reply_message(reply_token, [{'type': 'flex', 'altText': title, 'contents': bubble}], access_token)
+
+
+def _handle_report_menu(reply_token, access_token):
+    _reply_menu(reply_token, access_token, '📊 Dashboard Report', 'เลือกรายงานที่ต้องการ', [
+        _menu_btn('💵', 'Sale Report', 'ยอดขายรายลูกค้า', 'sale report'),
+        _menu_btn('🛒', 'Purchase Report', 'รายงานฝั่งซื้อ', 'purchase report'),
+        _menu_btn('📦', 'Product Report', 'สต๊อก / มูลค่า / Forecast / สินค้าใหม่', 'product menu'),
+    ])
+
+
+def _handle_sale_menu(reply_token, access_token):
+    _reply_menu(reply_token, access_token, '💵 Sale Report', 'เลือกรายงานยอดขาย', [
+        _menu_btn('📅', 'ยอดขายเดือนนี้', 'แยกการ์ดรายลูกค้า เรียงยอดมากไปน้อย รวมตามวันส่งของ', 'sale this month'),
+    ], header_color='#1e3a2a')
+
+
+def _handle_purchase_menu(reply_token, access_token):
+    _reply_menu(reply_token, access_token, '🛒 Purchase Report', 'เลือกรายงานฝั่งซื้อ', [
+        {'type': 'text', 'text': 'ยังไม่มีรายงานในหมวดนี้', 'size': 'sm', 'color': '#888888', 'align': 'center'},
+    ], header_color='#3a2a1e')
+
+
+def _handle_product_menu(reply_token, access_token):
+    _reply_menu(reply_token, access_token, '📦 Product Report', 'เลือกรายงานสินค้า', [
+        _menu_btn('💰', 'ต้นทุนสต๊อก', 'มูลค่าต้นทุน × จำนวนสต๊อก เรียงมากสุด', 'ต้นทุนสต๊อก'),
+        _menu_btn('💲', 'มูลค่าสต๊อก', 'มูลค่าขาย × จำนวนสต๊อก เรียงมากสุด', 'มูลค่าสต๊อก'),
+        _menu_btn('📦', 'Product Report', 'สต๊อก + Forecast + ต้นทุน + ขาย แยก Tag', 'product report'),
+        _menu_btn('📋', 'Package Report', 'สต๊อก + Forecast + ต้นทุน แยก Tag', 'package report'),
+        _menu_btn('🆕', 'New Product', 'ตรวจสอบสินค้าที่ยังข้อมูลไม่ครบ', 'new product'),
+    ])
+
+
+# ── ยอดขายเดือนนี้ (รายลูกค้า) ────────────────────────────────────────────────
+
+_SALE_MAX_BUBBLES = 12          # LINE carousel รับได้สูงสุด 12 ใบ -> ลูกค้า 11 อันดับแรก + การ์ด "อื่นๆ"
+_FLEX_MAX_BYTES = 45_000        # LINE จำกัดขนาด flex message ~50KB เผื่อไว้
+
+
+def _sale_month_data(today=None):
+    """คืน list ของ dict ต่อ 1 ลูกค้า เรียงยอดมากไปน้อย:
+    {'name', 'total', 'factored', 'days': {date: [ยอดปกติ, ยอดขายแฟคตอริ่งแล้ว]}}
+    ยอด = ยอดรวมสุทธิของใบเสร็จ (SalesReceipt, 1 ใบ = 1 SO + 1 วันส่งของ) ที่วันส่งของอยู่ในเดือนนี้"""
+    from django.utils import timezone
+    from .models import SalesReceipt, SalesPayment
+
+    today = today or timezone.localdate()
+    start = today.replace(day=1)
+    receipts = list(SalesReceipt.objects
+                    .filter(is_cancelled=False, shipped_date__gte=start, shipped_date__lte=today)
+                    .exclude(sales_order__status='Cancelled')
+                    .values('id', 'sales_order_id', 'shipped_date', 'grand_total',
+                            'sales_order__customer_id', 'sales_order__customer__company_name'))
+    if not receipts:
+        return []
+
+    so_ids = {r['sales_order_id'] for r in receipts}
+    fx = SalesPayment.objects.filter(order_id__in=so_ids).exclude(factoring_role='')
+    factored_iv = set(fx.exclude(receipt__isnull=True).values_list('receipt_id', flat=True))
+    factored_so = set(fx.filter(receipt__isnull=True).values_list('order_id', flat=True))
+
+    customers = {}
+    for r in receipts:
+        c = customers.setdefault(r['sales_order__customer_id'], {
+            'name': r['sales_order__customer__company_name'] or '-',
+            'total': 0.0, 'factored': 0.0, 'days': defaultdict(lambda: [0.0, 0.0]),
+        })
+        amt = float(r['grand_total'] or 0)
+        is_fx = r['id'] in factored_iv or r['sales_order_id'] in factored_so
+        c['total'] += amt
+        c['days'][r['shipped_date']][1 if is_fx else 0] += amt
+        if is_fx:
+            c['factored'] += amt
+    return sorted(customers.values(), key=lambda c: c['total'], reverse=True)
+
+
+def _merge_others(customers):
+    days = defaultdict(lambda: [0.0, 0.0])
+    for c in customers:
+        for d, (n, f) in c['days'].items():
+            days[d][0] += n
+            days[d][1] += f
+    return {
+        'name': f'อื่นๆ ({len(customers)} ราย)',
+        'total': sum(c['total'] for c in customers),
+        'factored': sum(c['factored'] for c in customers),
+        'days': days,
+    }
+
+
+def _money(v):
+    return f'{v:,.2f}'
+
+
+def _sale_customer_bubble(c, rank, month_label):
+    rows = []
+    for d in sorted(c['days']):
+        normal, factored = c['days'][d]
+        for amt, is_fx in ((normal, False), (factored, True)):
+            if not amt:
+                continue
+            style = {'weight': 'regular', 'style': 'italic', 'color': '#999999'} if is_fx \
+                else {'weight': 'bold', 'color': '#222222'}
+            rows.append({'type': 'box', 'layout': 'horizontal', 'contents': [
+                {'type': 'text', 'text': d.strftime('%d/%m'), 'size': 'sm', 'flex': 3, **style},
+                {'type': 'text', 'text': _money(amt), 'size': 'sm', 'flex': 7, 'align': 'end', **style},
+            ]})
+    if not rows:
+        rows.append({'type': 'text', 'text': '-', 'size': 'sm', 'color': '#999999'})
+
+    title = c['name'] if rank is None else f'{rank}. {c["name"]}'
+    return {
+        'type': 'bubble', 'size': 'kilo',
+        'header': {
+            'type': 'box', 'layout': 'vertical', 'backgroundColor': '#1e3a2a', 'paddingAll': '12px', 'spacing': 'xs',
+            'contents': [
+                {'type': 'text', 'text': title, 'weight': 'bold', 'size': 'md', 'color': '#ffffff', 'wrap': True, 'maxLines': 2},
+                {'type': 'text', 'text': f'ยอดขาย {month_label}', 'size': 'xxs', 'color': '#aaaaaa'},
+                {'type': 'box', 'layout': 'horizontal', 'margin': 'sm', 'contents': [
+                    {'type': 'text', 'text': 'ยอดรวมทั้งหมด', 'size': 'xs', 'color': '#cccccc', 'flex': 5},
+                    {'type': 'text', 'text': _money(c['total']), 'size': 'sm', 'weight': 'bold', 'color': '#ffffff', 'align': 'end', 'flex': 6},
+                ]},
+                {'type': 'box', 'layout': 'horizontal', 'contents': [
+                    {'type': 'text', 'text': 'ขายแฟคตอริ่งแล้ว', 'size': 'xs', 'color': '#cccccc', 'flex': 5},
+                    {'type': 'text', 'text': _money(c['factored']), 'size': 'sm', 'color': '#f5c26b', 'align': 'end', 'flex': 6},
+                ]},
             ],
         },
         'body': {
-            'type': 'box', 'layout': 'vertical', 'spacing': 'md', 'paddingAll': '12px',
+            'type': 'box', 'layout': 'vertical', 'paddingAll': '12px', 'spacing': 'xs',
             'contents': [
-                _btn('💰', 'ต้นทุนสต๊อก', 'มูลค่าต้นทุน × จำนวนสต๊อก เรียงมากสุด', 'ต้นทุนสต๊อก'),
-                _btn('💲', 'มูลค่าสต๊อก', 'มูลค่าขาย × จำนวนสต๊อก เรียงมากสุด', 'มูลค่าสต๊อก'),
-                _btn('📦', 'Product Report', 'สต๊อก + Forecast + ต้นทุน + ขาย แยก Tag', 'product report'),
-                _btn('📋', 'Package Report', 'สต๊อก + Forecast + ต้นทุน แยก Tag', 'package report'),
-                _btn('🆕', 'New Product', 'ตรวจสอบสินค้าที่ยังข้อมูลไม่ครบ', 'new product'),
+                {'type': 'box', 'layout': 'horizontal', 'contents': [
+                    {'type': 'text', 'text': 'วันที่ส่ง', 'size': 'xxs', 'color': '#aaaaaa', 'flex': 3},
+                    {'type': 'text', 'text': 'ยอดขาย', 'size': 'xxs', 'color': '#aaaaaa', 'flex': 7, 'align': 'end'},
+                ]},
+                {'type': 'separator', 'margin': 'xs'},
+                *rows,
+                {'type': 'separator', 'margin': 'md'},
+                {'type': 'text', 'text': 'ตัวเอียง = ขายแฟคตอริ่งแล้ว', 'size': 'xxs', 'color': '#bbbbbb',
+                 'style': 'italic', 'margin': 'sm'},
             ],
         },
     }
-    reply_message(reply_token, [{'type': 'flex', 'altText': '📊 เลือกรายงาน', 'contents': bubble}], access_token)
+
+
+def _chunk_carousels(bubbles, alt_text):
+    """แบ่ง bubble เป็นหลาย carousel ไม่ให้เกินขนาดที่ LINE รับได้ (reply ได้สูงสุด 5 ข้อความ)"""
+    import json
+    messages, cur, cur_size = [], [], 0
+    for b in bubbles:
+        size = len(json.dumps(b, ensure_ascii=False).encode('utf-8'))
+        if cur and (len(cur) >= _SALE_MAX_BUBBLES or cur_size + size > _FLEX_MAX_BYTES):
+            messages.append(cur)
+            cur, cur_size = [], 0
+        cur.append(b)
+        cur_size += size
+    if cur:
+        messages.append(cur)
+    return [{'type': 'flex', 'altText': alt_text, 'contents': {'type': 'carousel', 'contents': m}}
+            for m in messages[:5]]
+
+
+def _handle_sale_this_month(reply_token, access_token):
+    from django.utils import timezone
+    try:
+        today = timezone.localdate()
+        month_label = today.strftime('%m/%Y')
+        customers = _sale_month_data(today)
+        if not customers:
+            reply_message(reply_token, [{'type': 'text', 'text': f'📅 ยอดขายเดือนนี้ ({month_label})\nยังไม่มีการส่งของ'}], access_token)
+            return
+        if len(customers) > _SALE_MAX_BUBBLES:
+            top, rest = customers[:_SALE_MAX_BUBBLES - 1], customers[_SALE_MAX_BUBBLES - 1:]
+        else:
+            top, rest = customers, []
+        bubbles = [_sale_customer_bubble(c, i + 1, month_label) for i, c in enumerate(top)]
+        if rest:
+            bubbles.append(_sale_customer_bubble(_merge_others(rest), None, month_label))
+        total = sum(c['total'] for c in customers)
+        alt = f'📅 ยอดขายเดือนนี้ {month_label}: {_money(total)} ({len(customers)} ลูกค้า)'
+        reply_message(reply_token, _chunk_carousels(bubbles, alt), access_token)
+    except Exception as e:
+        reply_message(reply_token, [{'type': 'text', 'text': f'📅 ยอดขายเดือนนี้ Error:\n{type(e).__name__}: {e}'}], access_token)
 
 
 # ── ต้นทุนสต๊อก ───────────────────────────────────────────────────────────────
@@ -508,7 +690,9 @@ def _handle_search(reply_token, keyword, access_token):
 def _handle_help(reply_token, access_token):
     reply_message(reply_token, [{'type': 'text', 'text': (
         '📋 คำสั่งที่ใช้ได้:\n'
-        '• report — เมนูรายงาน\n'
+        '• report — เมนูรายงาน (Sale / Purchase / Product)\n'
+        '• ยอดขายเดือนนี้ — ยอดขายรายลูกค้า\n'
+        '• stock — เมนู Product Report\n'
         '• ต้นทุนสต๊อก — เรียงตามต้นทุน\n'
         '• มูลค่าสต๊อก — เรียงตามมูลค่าขาย\n'
         '• product report — แยกตาม Tag\n'
