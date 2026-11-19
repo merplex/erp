@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import base64
 import os
+import re
 import requests
 from collections import defaultdict
 from django.db.models import Sum, F, Value, DecimalField, ExpressionWrapper
@@ -59,12 +60,15 @@ def handle_event(event, access_token: str):
         return
 
     t = text.lower()
-    if t in ['report', 'รายงาน']:
+    m = _PARTY_CMD_RE.match(t)
+    if m:
+        _handle_party_command(reply_token, access_token, *m.groups())
+    elif t in ['report', 'รายงาน']:
         _handle_report_menu(reply_token, access_token)
-    elif t in ['sale report', 'sales report', 'sale']:
-        _handle_sale_menu(reply_token, access_token)
-    elif t in ['purchase report', 'purchase']:
-        _handle_purchase_menu(reply_token, access_token)
+    elif t in ['sales report', 'sale']:
+        _handle_party_menu(reply_token, access_token, 'sale')
+    elif t in ['purchase']:
+        _handle_party_menu(reply_token, access_token, 'purchase')
     elif t in ['product menu', 'สต็อก', 'สต๊อก', 'stock', 'สต']:
         _handle_product_menu(reply_token, access_token)
     elif t in ['sale this month', 'ยอดขายเดือนนี้']:
@@ -125,7 +129,7 @@ def _menu_btn(emoji, title, subtitle, msg):
     }
 
 
-def _reply_menu(reply_token, access_token, title, subtitle, contents, header_color='#1a1a2e'):
+def _reply_menu(reply_token, access_token, title, subtitle, contents, header_color='#1a1a2e', header_extra=()):
     bubble = {
         'type': 'bubble',
         'header': {
@@ -133,6 +137,7 @@ def _reply_menu(reply_token, access_token, title, subtitle, contents, header_col
             'contents': [
                 {'type': 'text', 'text': title, 'weight': 'bold', 'size': 'lg', 'color': '#ffffff'},
                 {'type': 'text', 'text': subtitle, 'size': 'xs', 'color': '#aaaaaa'},
+                *header_extra,
             ],
         },
         'body': {'type': 'box', 'layout': 'vertical', 'spacing': 'md', 'paddingAll': '12px', 'contents': contents},
@@ -146,20 +151,6 @@ def _handle_report_menu(reply_token, access_token):
         _menu_btn('🛒', 'Purchase Report', 'ยอดซื้อราย Supplier', 'purchase report'),
         _menu_btn('📦', 'Product Report', 'สต๊อก / มูลค่า / Forecast / สินค้าใหม่', 'product menu'),
     ])
-
-
-def _handle_sale_menu(reply_token, access_token):
-    _reply_menu(reply_token, access_token, '💵 Sale Report', 'เลือกรายงานยอดขาย', [
-        _menu_btn('📅', 'ยอดขายเดือนนี้', 'แยกการ์ดรายลูกค้า เรียงยอดมากไปน้อย รวมตามวันส่งของ', 'sale this month'),
-        _menu_btn('🗓️', 'ยอดขายทั้งปี', 'แยกการ์ดรายลูกค้า เรียงยอดมากไปน้อย รวมรายเดือน', 'sale this year'),
-    ], header_color='#1e3a2a')
-
-
-def _handle_purchase_menu(reply_token, access_token):
-    _reply_menu(reply_token, access_token, '🛒 Purchase Report', 'เลือกรายงานฝั่งซื้อ', [
-        _menu_btn('📅', 'ยอดสั่งซื้อเดือนนี้', 'แยกการ์ดราย Supplier เรียงยอดมากไปน้อย รวมตามวันที่สั่ง', 'purchase this month'),
-        _menu_btn('🗓️', 'ยอดซื้อทั้งปี', 'แยกการ์ดราย Supplier เรียงยอดมากไปน้อย รวมรายเดือน', 'purchase this year'),
-    ], header_color='#3a2a1e')
 
 
 def _handle_product_menu(reply_token, access_token):
@@ -366,45 +357,152 @@ def _reply_by_party(reply_token, access_token, title, period_label, rows_fn, sta
 
 # ยอดขาย/ยอดซื้อใน LINE นับเฉพาะตั้งแต่วันนี้เป็นต้นไป (ข้อมูลก่อนหน้ายังไม่ครบ ไม่นับ)
 _REPORT_START = datetime.date(2026, 9, 1)
+_YEAR_CHOICES = 4               # จำนวนปีให้เลือกในหัวเมนู (ปีปัจจุบันย้อนหลัง)
+
+_PARTY_REPORTS = {
+    'sale': {
+        'title': '💵 Sale Report', 'subtitle': 'เลือกปี แล้วเลือกรายงานยอดขาย', 'color': '#1e3a2a',
+        'month_now': 'ยอดขายเดือนนี้', 'month_any': 'ยอดขายรายเดือน', 'year': 'ยอดขายทั้งปี',
+        'month_desc': 'แยกการ์ดรายลูกค้า เรียงยอดมากไปน้อย รวมตามวันส่งของ',
+        'year_desc': 'แยกการ์ดรายลูกค้า เรียงยอดมากไปน้อย รวมรายเดือน',
+        'card': _SALE_CARD, 'rows_fn': lambda *a: _sale_by_customer(*a),
+    },
+    'purchase': {
+        'title': '🛒 Purchase Report', 'subtitle': 'เลือกปี แล้วเลือกรายงานฝั่งซื้อ', 'color': '#3a2a1e',
+        'month_now': 'ยอดสั่งซื้อเดือนนี้', 'month_any': 'ยอดสั่งซื้อรายเดือน', 'year': 'ยอดซื้อทั้งปี',
+        'month_desc': 'แยกการ์ดราย Supplier เรียงยอดมากไปน้อย รวมตามวันที่สั่ง',
+        'year_desc': 'แยกการ์ดราย Supplier เรียงยอดมากไปน้อย รวมรายเดือน',
+        'card': _PURCHASE_CARD, 'rows_fn': lambda *a: _purchase_by_supplier(*a),
+    },
+}
+
+# "sale report 2025" / "sale month 2025-3" / "purchase year 2026" (ปี/เดือนไม่ใส่ = ปัจจุบัน)
+_PARTY_CMD_RE = re.compile(r'^(sale|purchase) (report|month|year)(?: (\d{4})(?:-(\d{1,2}))?)?$')
 
 
-def _this_month(today):
-    return today.strftime('%m/%Y'), max(today.replace(day=1), _REPORT_START)
+def _today():
+    from django.utils import timezone
+    return timezone.localdate()
 
 
-def _this_year(today):
-    start = today.replace(month=1, day=1)
+def _report_years(today):
+    return list(range(max(_REPORT_START.year, today.year - _YEAR_CHOICES + 1), today.year + 1))
+
+
+def _report_months(year, today):
+    """เดือนของปีนี้ที่มีข้อมูลให้ดู (ไม่ก่อนวันเริ่มนับ ไม่เกินวันนี้)"""
+    return [mo for mo in range(1, 13)
+            if datetime.date(year, mo, 1) <= today
+            and (datetime.date(year, mo, 1) >= _REPORT_START.replace(day=1))]
+
+
+def _period(year, month, today):
+    """(ป้ายช่วงเวลา, วันเริ่ม, วันสิ้นสุด) — None ถ้าช่วงนั้นอยู่ก่อนวันเริ่มนับ/ยังมาไม่ถึง"""
+    if month:
+        start = datetime.date(year, month, 1)
+        end = (start.replace(day=28) + datetime.timedelta(days=4)).replace(day=1) - datetime.timedelta(days=1)
+        label = f'{month:02d}/{year}'
+    else:
+        start, end = datetime.date(year, 1, 1), datetime.date(year, 12, 31)
+        label = f'ปี {year}'
+    end = min(end, today)
     if start < _REPORT_START:
-        return f'ปี {today.year} (ตั้งแต่ {_TH_MONTHS[_REPORT_START.month - 1]})', _REPORT_START
-    return f'ปี {today.year}', start
+        start = _REPORT_START
+        if not month:
+            label += f' (ตั้งแต่ {_TH_MONTHS[_REPORT_START.month - 1]})'
+    if start > end:
+        return None
+    return label, start, end
+
+
+def _year_selector(kind, selected, today):
+    chips = []
+    for y in _report_years(today):
+        on = y == selected
+        chips.append({
+            'type': 'box', 'layout': 'vertical', 'flex': 1, 'paddingAll': '6px', 'cornerRadius': '12px',
+            'backgroundColor': '#ffffff' if on else '#ffffff22',
+            'action': {'type': 'message', 'label': str(y), 'text': f'{kind} report {y}'},
+            'contents': [{'type': 'text', 'text': f'{"✓ " if on else ""}{y}', 'size': 'xs', 'align': 'center',
+                          'weight': 'bold' if on else 'regular', 'color': '#1a1a2e' if on else '#ffffff'}],
+        })
+    return [
+        {'type': 'text', 'text': 'เลือกปี', 'size': 'xxs', 'color': '#aaaaaa', 'margin': 'md'},
+        {'type': 'box', 'layout': 'horizontal', 'spacing': 'sm', 'margin': 'xs', 'contents': chips},
+    ]
+
+
+def _handle_party_menu(reply_token, access_token, kind, year=None):
+    cfg = _PARTY_REPORTS[kind]
+    today = _today()
+    year = year or today.year
+    if year == today.year:
+        month_btn = _menu_btn('📅', cfg['month_now'], cfg['month_desc'], f'{kind} month {year}-{today.month}')
+    else:
+        month_btn = _menu_btn('📅', f"{cfg['month_any']} {year}", 'เลือกเดือนจากปุ่มด้านล่างแชท', f'{kind} month {year}')
+    _reply_menu(reply_token, access_token, cfg['title'], cfg['subtitle'], [
+        month_btn,
+        _menu_btn('🗓️', f"{cfg['year']} {year}", cfg['year_desc'], f'{kind} year {year}'),
+    ], header_color=cfg['color'], header_extra=_year_selector(kind, year, today))
+
+
+def _handle_party_command(reply_token, access_token, kind, action, year, month):
+    cfg = _PARTY_REPORTS[kind]
+    today = _today()
+    year = int(year) if year else today.year
+    month = int(month) if month else None
+    if action == 'report':
+        return _handle_party_menu(reply_token, access_token, kind, year)
+    if action == 'month' and not month:
+        if year == today.year:
+            month = today.month
+        else:  # ปีก่อน -> ให้เลือกเดือนจาก quick reply
+            months = _report_months(year, today)
+            if not months:
+                reply_message(reply_token, [{'type': 'text', 'text': _no_data_text(year)}], access_token)
+                return
+            reply_message(reply_token, [{
+                'type': 'text', 'text': f"📅 {cfg['month_any']} ปี {year}\nเลือกเดือนจากปุ่มด้านล่าง",
+                'quickReply': {'items': [
+                    {'type': 'action', 'action': {'type': 'message', 'label': f'{_TH_MONTHS[mo - 1]} {year}',
+                                                  'text': f'{kind} month {year}-{mo}'}}
+                    for mo in months]},
+            }], access_token)
+            return
+    if month and not 1 <= month <= 12:
+        reply_message(reply_token, [{'type': 'text', 'text': 'เดือนไม่ถูกต้อง'}], access_token)
+        return
+    period = _period(year, month if action == 'month' else None, today)
+    if not period:
+        reply_message(reply_token, [{'type': 'text', 'text': _no_data_text(year)}], access_token)
+        return
+    label, start, end = period
+    if action == 'month':
+        title = f"📅 {cfg['month_now'] if (year, month) == (today.year, today.month) else cfg['month_any']}"
+    else:
+        title = f"🗓️ {cfg['year']}"
+    _reply_by_party(reply_token, access_token, title, label, cfg['rows_fn'], start, end, action == 'year', cfg['card'])
+
+
+def _no_data_text(year):
+    return (f'ปี {year} ไม่มีข้อมูล\n(รายงานนับตั้งแต่ '
+            f'{_TH_MONTHS[_REPORT_START.month - 1]} {_REPORT_START.year} เป็นต้นไป)')
 
 
 def _handle_sale_this_month(reply_token, access_token):
-    from django.utils import timezone
-    today = timezone.localdate()
-    label, start = _this_month(today)
-    _reply_by_party(reply_token, access_token, '📅 ยอดขายเดือนนี้', label, _sale_by_customer, start, today, False, _SALE_CARD)
+    _handle_party_command(reply_token, access_token, 'sale', 'month', None, str(_today().month))
 
 
 def _handle_sale_this_year(reply_token, access_token):
-    from django.utils import timezone
-    today = timezone.localdate()
-    label, start = _this_year(today)
-    _reply_by_party(reply_token, access_token, '🗓️ ยอดขายทั้งปี', label, _sale_by_customer, start, today, True, _SALE_CARD)
+    _handle_party_command(reply_token, access_token, 'sale', 'year', None, None)
 
 
 def _handle_purchase_this_month(reply_token, access_token):
-    from django.utils import timezone
-    today = timezone.localdate()
-    label, start = _this_month(today)
-    _reply_by_party(reply_token, access_token, '📅 ยอดสั่งซื้อเดือนนี้', label, _purchase_by_supplier, start, today, False, _PURCHASE_CARD)
+    _handle_party_command(reply_token, access_token, 'purchase', 'month', None, str(_today().month))
 
 
 def _handle_purchase_this_year(reply_token, access_token):
-    from django.utils import timezone
-    today = timezone.localdate()
-    label, start = _this_year(today)
-    _reply_by_party(reply_token, access_token, '🗓️ ยอดซื้อทั้งปี', label, _purchase_by_supplier, start, today, True, _PURCHASE_CARD)
+    _handle_party_command(reply_token, access_token, 'purchase', 'year', None, None)
 
 
 # ── ต้นทุนสต๊อก ───────────────────────────────────────────────────────────────
