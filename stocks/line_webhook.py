@@ -1,3 +1,4 @@
+import datetime
 import hashlib
 import hmac
 import base64
@@ -363,12 +364,19 @@ def _reply_by_party(reply_token, access_token, title, period_label, rows_fn, sta
         reply_message(reply_token, [{'type': 'text', 'text': f'{title} Error:\n{type(e).__name__}: {e}'}], access_token)
 
 
+# ยอดขาย/ยอดซื้อใน LINE นับเฉพาะตั้งแต่วันนี้เป็นต้นไป (ข้อมูลก่อนหน้ายังไม่ครบ ไม่นับ)
+_REPORT_START = datetime.date(2026, 9, 1)
+
+
 def _this_month(today):
-    return today.strftime('%m/%Y'), today.replace(day=1)
+    return today.strftime('%m/%Y'), max(today.replace(day=1), _REPORT_START)
 
 
 def _this_year(today):
-    return f'ปี {today.year}', today.replace(month=1, day=1)
+    start = today.replace(month=1, day=1)
+    if start < _REPORT_START:
+        return f'ปี {today.year} (ตั้งแต่ {_TH_MONTHS[_REPORT_START.month - 1]})', _REPORT_START
+    return f'ปี {today.year}', start
 
 
 def _handle_sale_this_month(reply_token, access_token):
