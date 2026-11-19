@@ -43,12 +43,22 @@ def reply_message(reply_token, messages, access_token: str):
         )
 
 
+def _cmd_action(label, cmd):
+    """ปุ่มกดแล้วสั่งงานบอทแบบ postback — ไม่มีข้อความคำสั่งโผล่ในแชท (ผลลัพธ์แสดงเลย)"""
+    return {'type': 'postback', 'label': str(label)[:20], 'data': cmd}
+
+
 def handle_event(event, access_token: str):
-    if event.get('type') != 'message' or event['message'].get('type') != 'text':
+    if event.get('type') == 'postback':
+        text = (event.get('postback') or {}).get('data', '').strip()
+    elif event.get('type') == 'message' and event['message'].get('type') == 'text':
+        text = event['message']['text'].strip()
+    else:
+        return
+    if not text or not event.get('replyToken'):
         return
     user_id = event['source'].get('userId', '')
     reply_token = event['replyToken']
-    text = event['message']['text'].strip()
 
     if not LINE_OWNER_USER_IDS:
         reply_message(reply_token, [{'type': 'text', 'text': f'Your User ID:\n{user_id}'}], access_token)
@@ -117,7 +127,7 @@ def _menu_btn(emoji, title, subtitle, msg):
     return {
         'type': 'box', 'layout': 'horizontal', 'paddingAll': '12px',
         'backgroundColor': '#f8f9fa', 'cornerRadius': '8px',
-        'action': {'type': 'message', 'label': title[:20], 'text': msg},
+        'action': _cmd_action(title, msg),
         'contents': [
             {'type': 'text', 'text': emoji, 'size': 'xl', 'flex': 1, 'gravity': 'center'},
             {'type': 'box', 'layout': 'vertical', 'flex': 9, 'paddingStart': '8px', 'contents': [
@@ -346,7 +356,7 @@ def _period_row(text, nav):
                'contents': [{'type': 'text', 'text': sym, 'size': 'xs', 'align': 'center',
                              'color': '#ffffff' if cmd else '#ffffff44'}]}
         if cmd:
-            box['action'] = {'type': 'message', 'label': sym, 'text': cmd}
+            box['action'] = _cmd_action(sym, cmd)
         return box
 
     return {'type': 'box', 'layout': 'horizontal', 'margin': 'xs', 'spacing': 'sm', 'contents': [
@@ -450,7 +460,7 @@ def _year_selector(kind, selected, today):
         chips.append({
             'type': 'box', 'layout': 'vertical', 'flex': 1, 'paddingAll': '6px', 'cornerRadius': '12px',
             'backgroundColor': '#ffffff' if on else '#ffffff22',
-            'action': {'type': 'message', 'label': str(y), 'text': f'{kind} report {y}'},
+            'action': _cmd_action(y, f'{kind} report {y}'),
             'contents': [{'type': 'text', 'text': f'{"✓ " if on else ""}{y}', 'size': 'xs', 'align': 'center',
                           'weight': 'bold' if on else 'regular', 'color': '#1a1a2e' if on else '#ffffff'}],
         })
@@ -492,8 +502,7 @@ def _handle_party_command(reply_token, access_token, kind, action, year, month):
             reply_message(reply_token, [{
                 'type': 'text', 'text': f"📅 {cfg['month_any']} ปี {year}\nเลือกเดือนจากปุ่มด้านล่าง",
                 'quickReply': {'items': [
-                    {'type': 'action', 'action': {'type': 'message', 'label': f'{_TH_MONTHS[mo - 1]} {year}',
-                                                  'text': f'{kind} month {year}-{mo}'}}
+                    {'type': 'action', 'action': _cmd_action(f'{_TH_MONTHS[mo - 1]} {year}', f'{kind} month {year}-{mo}')}
                     for mo in months]},
             }], access_token)
             return
@@ -535,9 +544,8 @@ def _month_nav(kind, year, month, today):
     return {
         'prev': cmd(prev[-1]) if prev else None,
         'next': cmd(nxt[0]) if nxt else None,
-        'quick': [{'type': 'action', 'action': {
-                      'type': 'message', 'label': f"{'✓ ' if ym == cur else ''}{_TH_MONTHS[ym[1] - 1]} {ym[0]}",
-                      'text': cmd(ym)}}
+        'quick': [{'type': 'action', 'action': _cmd_action(
+                      f"{'✓ ' if ym == cur else ''}{_TH_MONTHS[ym[1] - 1]} {ym[0]}", cmd(ym))}
                   for ym in reversed(window)],
     }
 
@@ -723,7 +731,7 @@ def _handle_new_product_menu(reply_token, access_token):
         return {
             'type': 'box', 'layout': 'horizontal', 'paddingAll': '12px',
             'backgroundColor': '#f8f9fa', 'cornerRadius': '8px',
-            'action': {'type': 'message', 'label': title, 'text': msg},
+            'action': _cmd_action(title, msg),
             'contents': [
                 {'type': 'text', 'text': emoji, 'size': 'xl', 'flex': 1, 'gravity': 'center'},
                 {'type': 'box', 'layout': 'vertical', 'flex': 9, 'paddingStart': '8px', 'contents': [
