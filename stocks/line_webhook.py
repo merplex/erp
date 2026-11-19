@@ -68,6 +68,8 @@ def handle_event(event, access_token: str):
         _handle_product_menu(reply_token, access_token)
     elif t in ['sale this month', 'ยอดขายเดือนนี้']:
         _handle_sale_this_month(reply_token, access_token)
+    elif t in ['sale this year', 'ยอดขายทั้งปี', 'ยอดขายปีนี้']:
+        _handle_sale_this_year(reply_token, access_token)
     elif t in ['ต้นทุนสต๊อก', 'ต้นทุน']:
         _handle_cost_stock(reply_token, access_token)
     elif t in ['มูลค่าสต๊อก', 'มูลค่า', 'value', 'มูลค่าสต็อก']:
@@ -144,6 +146,7 @@ def _handle_report_menu(reply_token, access_token):
 def _handle_sale_menu(reply_token, access_token):
     _reply_menu(reply_token, access_token, '💵 Sale Report', 'เลือกรายงานยอดขาย', [
         _menu_btn('📅', 'ยอดขายเดือนนี้', 'แยกการ์ดรายลูกค้า เรียงยอดมากไปน้อย รวมตามวันส่งของ', 'sale this month'),
+        _menu_btn('🗓️', 'ยอดขายทั้งปี', 'แยกการ์ดรายลูกค้า เรียงยอดมากไปน้อย รวมรายเดือน', 'sale this year'),
     ], header_color='#1e3a2a')
 
 
@@ -163,21 +166,22 @@ def _handle_product_menu(reply_token, access_token):
     ])
 
 
-# ── ยอดขายเดือนนี้ (รายลูกค้า) ────────────────────────────────────────────────
+# ── ยอดขายเดือนนี้ / ทั้งปี (รายลูกค้า) ───────────────────────────────────────
 
 _SALE_MAX_BUBBLES = 12          # LINE carousel รับได้สูงสุด 12 ใบ -> ลูกค้า 11 อันดับแรก + การ์ด "อื่นๆ"
 _FLEX_MAX_BYTES = 45_000        # LINE จำกัดขนาด flex message ~50KB เผื่อไว้
 
 
-def _sale_month_data(today=None):
+_TH_MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.']
+
+
+def _sale_by_customer(start, today, by_month=False):
     """คืน list ของ dict ต่อ 1 ลูกค้า เรียงยอดมากไปน้อย:
-    {'name', 'total', 'factored', 'days': {date: [ยอดปกติ, ยอดขายแฟคตอริ่งแล้ว]}}
-    ยอด = ยอดรวมสุทธิของใบเสร็จ (SalesReceipt, 1 ใบ = 1 SO + 1 วันส่งของ) ที่วันส่งของอยู่ในเดือนนี้"""
-    from django.utils import timezone
+    {'name', 'total', 'factored', 'days': {key: [ยอดปกติ, ยอดขายแฟคตอริ่งแล้ว]}}
+    key = วันที่ส่งของ (date) หรือ (ปี, เดือน) ถ้า by_month
+    ยอด = ยอดรวมสุทธิของใบเสร็จ (SalesReceipt, 1 ใบ = 1 SO + 1 วันส่งของ) ที่วันส่งของอยู่ในช่วง start..today"""
     from .models import SalesReceipt, SalesPayment
 
-    today = today or timezone.localdate()
-    start = today.replace(day=1)
     receipts = list(SalesReceipt.objects
                     .filter(is_cancelled=False, shipped_date__gte=start, shipped_date__lte=today)
                     .exclude(sales_order__status='Cancelled')
@@ -200,7 +204,9 @@ def _sale_month_data(today=None):
         amt = float(r['grand_total'] or 0)
         is_fx = r['id'] in factored_iv or r['sales_order_id'] in factored_so
         c['total'] += amt
-        c['days'][r['shipped_date']][1 if is_fx else 0] += amt
+        d = r['shipped_date']
+        key = (d.year, d.month) if by_month else d
+        c['days'][key][1 if is_fx else 0] += amt
         if is_fx:
             c['factored'] += amt
     return sorted(customers.values(), key=lambda c: c['total'], reverse=True)
@@ -224,7 +230,7 @@ def _money(v):
     return f'{v:,.2f}'
 
 
-def _sale_customer_bubble(c, rank, month_label):
+def _sale_customer_bubble(c, rank, period_label, by_month=False):
     rows = []
     for d in sorted(c['days']):
         normal, factored = c['days'][d]
@@ -234,7 +240,7 @@ def _sale_customer_bubble(c, rank, month_label):
             style = {'weight': 'regular', 'style': 'italic', 'color': '#999999'} if is_fx \
                 else {'weight': 'bold', 'color': '#222222'}
             rows.append({'type': 'box', 'layout': 'horizontal', 'contents': [
-                {'type': 'text', 'text': d.strftime('%d/%m'), 'size': 'sm', 'flex': 3, **style},
+                {'type': 'text', 'text': (_TH_MONTHS[d[1] - 1] if by_month else d.strftime('%d/%m')), 'size': 'sm', 'flex': 3, **style},
                 {'type': 'text', 'text': _money(amt), 'size': 'sm', 'flex': 7, 'align': 'end', **style},
             ]})
     if not rows:
@@ -247,7 +253,7 @@ def _sale_customer_bubble(c, rank, month_label):
             'type': 'box', 'layout': 'vertical', 'backgroundColor': '#1e3a2a', 'paddingAll': '12px', 'spacing': 'xs',
             'contents': [
                 {'type': 'text', 'text': title, 'weight': 'bold', 'size': 'md', 'color': '#ffffff', 'wrap': True, 'maxLines': 2},
-                {'type': 'text', 'text': f'ยอดขาย {month_label}', 'size': 'xxs', 'color': '#aaaaaa'},
+                {'type': 'text', 'text': f'ยอดขาย {period_label}', 'size': 'xxs', 'color': '#aaaaaa'},
                 {'type': 'box', 'layout': 'horizontal', 'margin': 'sm', 'contents': [
                     {'type': 'text', 'text': 'ยอดรวมทั้งหมด', 'size': 'xs', 'color': '#cccccc', 'flex': 5},
                     {'type': 'text', 'text': _money(c['total']), 'size': 'sm', 'weight': 'bold', 'color': '#ffffff', 'align': 'end', 'flex': 6},
@@ -262,7 +268,7 @@ def _sale_customer_bubble(c, rank, month_label):
             'type': 'box', 'layout': 'vertical', 'paddingAll': '12px', 'spacing': 'xs',
             'contents': [
                 {'type': 'box', 'layout': 'horizontal', 'contents': [
-                    {'type': 'text', 'text': 'วันที่ส่ง', 'size': 'xxs', 'color': '#aaaaaa', 'flex': 3},
+                    {'type': 'text', 'text': 'เดือน' if by_month else 'วันที่ส่ง', 'size': 'xxs', 'color': '#aaaaaa', 'flex': 3},
                     {'type': 'text', 'text': 'ยอดขาย', 'size': 'xxs', 'color': '#aaaaaa', 'flex': 7, 'align': 'end'},
                 ]},
                 {'type': 'separator', 'margin': 'xs'},
@@ -292,27 +298,38 @@ def _chunk_carousels(bubbles, alt_text):
             for m in messages[:5]]
 
 
-def _handle_sale_this_month(reply_token, access_token):
-    from django.utils import timezone
+def _reply_sale_by_customer(reply_token, access_token, title, period_label, start, today, by_month):
     try:
-        today = timezone.localdate()
-        month_label = today.strftime('%m/%Y')
-        customers = _sale_month_data(today)
+        customers = _sale_by_customer(start, today, by_month)
         if not customers:
-            reply_message(reply_token, [{'type': 'text', 'text': f'📅 ยอดขายเดือนนี้ ({month_label})\nยังไม่มีการส่งของ'}], access_token)
+            reply_message(reply_token, [{'type': 'text', 'text': f'{title} ({period_label})\nยังไม่มีการส่งของ'}], access_token)
             return
         if len(customers) > _SALE_MAX_BUBBLES:
             top, rest = customers[:_SALE_MAX_BUBBLES - 1], customers[_SALE_MAX_BUBBLES - 1:]
         else:
             top, rest = customers, []
-        bubbles = [_sale_customer_bubble(c, i + 1, month_label) for i, c in enumerate(top)]
+        bubbles = [_sale_customer_bubble(c, i + 1, period_label, by_month) for i, c in enumerate(top)]
         if rest:
-            bubbles.append(_sale_customer_bubble(_merge_others(rest), None, month_label))
+            bubbles.append(_sale_customer_bubble(_merge_others(rest), None, period_label, by_month))
         total = sum(c['total'] for c in customers)
-        alt = f'📅 ยอดขายเดือนนี้ {month_label}: {_money(total)} ({len(customers)} ลูกค้า)'
+        alt = f'{title} {period_label}: {_money(total)} ({len(customers)} ลูกค้า)'
         reply_message(reply_token, _chunk_carousels(bubbles, alt), access_token)
     except Exception as e:
-        reply_message(reply_token, [{'type': 'text', 'text': f'📅 ยอดขายเดือนนี้ Error:\n{type(e).__name__}: {e}'}], access_token)
+        reply_message(reply_token, [{'type': 'text', 'text': f'{title} Error:\n{type(e).__name__}: {e}'}], access_token)
+
+
+def _handle_sale_this_month(reply_token, access_token):
+    from django.utils import timezone
+    today = timezone.localdate()
+    _reply_sale_by_customer(reply_token, access_token, '📅 ยอดขายเดือนนี้', today.strftime('%m/%Y'),
+                            today.replace(day=1), today, by_month=False)
+
+
+def _handle_sale_this_year(reply_token, access_token):
+    from django.utils import timezone
+    today = timezone.localdate()
+    _reply_sale_by_customer(reply_token, access_token, '🗓️ ยอดขายทั้งปี', f'ปี {today.year}',
+                            today.replace(month=1, day=1), today, by_month=True)
 
 
 # ── ต้นทุนสต๊อก ───────────────────────────────────────────────────────────────
@@ -691,7 +708,8 @@ def _handle_help(reply_token, access_token):
     reply_message(reply_token, [{'type': 'text', 'text': (
         '📋 คำสั่งที่ใช้ได้:\n'
         '• report — เมนูรายงาน (Sale / Purchase / Product)\n'
-        '• ยอดขายเดือนนี้ — ยอดขายรายลูกค้า\n'
+        '• ยอดขายเดือนนี้ — ยอดขายรายลูกค้า (รายวัน)\n'
+        '• ยอดขายทั้งปี — ยอดขายรายลูกค้า (รายเดือน)\n'
         '• stock — เมนู Product Report\n'
         '• ต้นทุนสต๊อก — เรียงตามต้นทุน\n'
         '• มูลค่าสต๊อก — เรียงตามมูลค่าขาย\n'
