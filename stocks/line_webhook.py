@@ -70,6 +70,10 @@ def handle_event(event, access_token: str):
         _handle_sale_this_month(reply_token, access_token)
     elif t in ['sale this year', 'ยอดขายทั้งปี', 'ยอดขายปีนี้']:
         _handle_sale_this_year(reply_token, access_token)
+    elif t in ['purchase this month', 'ยอดสั่งซื้อเดือนนี้', 'ยอดซื้อเดือนนี้']:
+        _handle_purchase_this_month(reply_token, access_token)
+    elif t in ['purchase this year', 'ยอดซื้อทั้งปี', 'ยอดซื้อปีนี้', 'ยอดสั่งซื้อทั้งปี']:
+        _handle_purchase_this_year(reply_token, access_token)
     elif t in ['ต้นทุนสต๊อก', 'ต้นทุน']:
         _handle_cost_stock(reply_token, access_token)
     elif t in ['มูลค่าสต๊อก', 'มูลค่า', 'value', 'มูลค่าสต็อก']:
@@ -138,7 +142,7 @@ def _reply_menu(reply_token, access_token, title, subtitle, contents, header_col
 def _handle_report_menu(reply_token, access_token):
     _reply_menu(reply_token, access_token, '📊 Dashboard Report', 'เลือกรายงานที่ต้องการ', [
         _menu_btn('💵', 'Sale Report', 'ยอดขายรายลูกค้า', 'sale report'),
-        _menu_btn('🛒', 'Purchase Report', 'รายงานฝั่งซื้อ', 'purchase report'),
+        _menu_btn('🛒', 'Purchase Report', 'ยอดซื้อราย Supplier', 'purchase report'),
         _menu_btn('📦', 'Product Report', 'สต๊อก / มูลค่า / Forecast / สินค้าใหม่', 'product menu'),
     ])
 
@@ -152,7 +156,8 @@ def _handle_sale_menu(reply_token, access_token):
 
 def _handle_purchase_menu(reply_token, access_token):
     _reply_menu(reply_token, access_token, '🛒 Purchase Report', 'เลือกรายงานฝั่งซื้อ', [
-        {'type': 'text', 'text': 'ยังไม่มีรายงานในหมวดนี้', 'size': 'sm', 'color': '#888888', 'align': 'center'},
+        _menu_btn('📅', 'ยอดสั่งซื้อเดือนนี้', 'แยกการ์ดราย Supplier เรียงยอดมากไปน้อย รวมตามวันที่สั่ง', 'purchase this month'),
+        _menu_btn('🗓️', 'ยอดซื้อทั้งปี', 'แยกการ์ดราย Supplier เรียงยอดมากไปน้อย รวมรายเดือน', 'purchase this year'),
     ], header_color='#3a2a1e')
 
 
@@ -166,18 +171,24 @@ def _handle_product_menu(reply_token, access_token):
     ])
 
 
-# ── ยอดขายเดือนนี้ / ทั้งปี (รายลูกค้า) ───────────────────────────────────────
+# ── ยอดขาย (รายลูกค้า) / ยอดซื้อ (ราย Supplier) เดือนนี้ / ทั้งปี ────────────────
 
 _SALE_MAX_BUBBLES = 12          # LINE carousel รับได้สูงสุด 12 ใบ -> ลูกค้า 11 อันดับแรก + การ์ด "อื่นๆ"
 _FLEX_MAX_BYTES = 45_000        # LINE จำกัดขนาด flex message ~50KB เผื่อไว้
 
+
+# ข้อความ/สีของการ์ดแต่ละแบบ — 'flagged' = ยอดที่แสดงตัวเอียง (ขายแฟคตอริ่งแล้ว / PO ชำระครบแล้ว)
+_SALE_CARD = {'color': '#1e3a2a', 'label': 'ยอดขาย', 'flag': 'ขายแฟคตอริ่งแล้ว', 'date_col': 'วันที่ส่ง',
+              'empty': 'ยังไม่มีการส่งของ', 'unit': 'ลูกค้า'}
+_PURCHASE_CARD = {'color': '#3a2a1e', 'label': 'ยอดซื้อ', 'flag': 'ชำระครบแล้ว', 'date_col': 'วันที่สั่ง',
+                  'empty': 'ยังไม่มีใบสั่งซื้อ', 'unit': 'Supplier'}
 
 _TH_MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.']
 
 
 def _sale_by_customer(start, today, by_month=False):
     """คืน list ของ dict ต่อ 1 ลูกค้า เรียงยอดมากไปน้อย:
-    {'name', 'total', 'factored', 'days': {key: [ยอดปกติ, ยอดขายแฟคตอริ่งแล้ว]}}
+    {'name', 'total', 'flagged', 'days': {key: [ยอดปกติ, ยอดขายแฟคตอริ่งแล้ว]}}
     key = วันที่ส่งของ (date) หรือ (ปี, เดือน) ถ้า by_month
     ยอด = ยอดรวมสุทธิของใบเสร็จ (SalesReceipt, 1 ใบ = 1 SO + 1 วันส่งของ) ที่วันส่งของอยู่ในช่วง start..today"""
     from .models import SalesReceipt, SalesPayment
@@ -199,7 +210,7 @@ def _sale_by_customer(start, today, by_month=False):
     for r in receipts:
         c = customers.setdefault(r['sales_order__customer_id'], {
             'name': r['sales_order__customer__company_name'] or '-',
-            'total': 0.0, 'factored': 0.0, 'days': defaultdict(lambda: [0.0, 0.0]),
+            'total': 0.0, 'flagged': 0.0, 'days': defaultdict(lambda: [0.0, 0.0]),
         })
         amt = float(r['grand_total'] or 0)
         is_fx = r['id'] in factored_iv or r['sales_order_id'] in factored_so
@@ -208,8 +219,42 @@ def _sale_by_customer(start, today, by_month=False):
         key = (d.year, d.month) if by_month else d
         c['days'][key][1 if is_fx else 0] += amt
         if is_fx:
-            c['factored'] += amt
+            c['flagged'] += amt
     return sorted(customers.values(), key=lambda c: c['total'], reverse=True)
+
+
+def _purchase_by_supplier(start, today, by_month=False):
+    """เหมือน _sale_by_customer แต่ฝั่งซื้อ: 1 dict ต่อ supplier เรียงยอดมากไปน้อย
+    ยอด = ยอดรวมใบสั่งซื้อ (รวม VAT, แปลงเป็นบาทด้วยเรทของใบ) ตามวันที่สั่ง (order_date)
+    ไม่นับใบร่าง/ยกเลิก — 'flagged' = ใบที่ชำระครบแล้ว (Paid / ปิดยอดกรณีพิเศษ)"""
+    from django.db.models import Sum, F, DecimalField, ExpressionWrapper
+    from .models import PurchaseOrder, supplier_short_name
+
+    pos = list(PurchaseOrder.objects
+               .filter(order_date__gte=start, order_date__lte=today)
+               .exclude(status__in=['Draft', 'Cancelled'])
+               .annotate(items_total=Sum(ExpressionWrapper(F('items__quantity_ordered') * F('items__unit_price'),
+                                                           output_field=DecimalField(max_digits=20, decimal_places=4))))
+               .values('order_date', 'vat_percent', 'exchange_rate', 'payment_status', 'items_total',
+                       'supplier_id', 'supplier__company_name'))
+    suppliers = {}
+    for po in pos:
+        amt = (float(po['items_total'] or 0) * (1 + float(po['vat_percent'] or 0) / 100)
+               * float(po['exchange_rate'] or 1))
+        if not amt:
+            continue
+        c = suppliers.setdefault(po['supplier_id'], {
+            'name': supplier_short_name(po['supplier__company_name'], limit=40) or '-',
+            'total': 0.0, 'flagged': 0.0, 'days': defaultdict(lambda: [0.0, 0.0]),
+        })
+        is_paid = po['payment_status'] in ('Paid', 'SETTLED')
+        d = po['order_date']
+        key = (d.year, d.month) if by_month else d
+        c['total'] += amt
+        c['days'][key][1 if is_paid else 0] += amt
+        if is_paid:
+            c['flagged'] += amt
+    return sorted(suppliers.values(), key=lambda c: c['total'], reverse=True)
 
 
 def _merge_others(customers):
@@ -221,7 +266,7 @@ def _merge_others(customers):
     return {
         'name': f'อื่นๆ ({len(customers)} ราย)',
         'total': sum(c['total'] for c in customers),
-        'factored': sum(c['factored'] for c in customers),
+        'flagged': sum(c['flagged'] for c in customers),
         'days': days,
     }
 
@@ -230,11 +275,11 @@ def _money(v):
     return f'{v:,.2f}'
 
 
-def _sale_customer_bubble(c, rank, period_label, by_month=False):
+def _party_bubble(c, rank, period_label, by_month, card):
     rows = []
     for d in sorted(c['days']):
-        normal, factored = c['days'][d]
-        for amt, is_fx in ((normal, False), (factored, True)):
+        normal, flagged = c['days'][d]
+        for amt, is_fx in ((normal, False), (flagged, True)):
             if not amt:
                 continue
             style = {'weight': 'regular', 'style': 'italic', 'color': '#999999'} if is_fx \
@@ -250,17 +295,17 @@ def _sale_customer_bubble(c, rank, period_label, by_month=False):
     return {
         'type': 'bubble', 'size': 'kilo',
         'header': {
-            'type': 'box', 'layout': 'vertical', 'backgroundColor': '#1e3a2a', 'paddingAll': '12px', 'spacing': 'xs',
+            'type': 'box', 'layout': 'vertical', 'backgroundColor': card['color'], 'paddingAll': '12px', 'spacing': 'xs',
             'contents': [
                 {'type': 'text', 'text': title, 'weight': 'bold', 'size': 'md', 'color': '#ffffff', 'wrap': True, 'maxLines': 2},
-                {'type': 'text', 'text': f'ยอดขาย {period_label}', 'size': 'xxs', 'color': '#aaaaaa'},
+                {'type': 'text', 'text': f"{card['label']} {period_label}", 'size': 'xxs', 'color': '#aaaaaa'},
                 {'type': 'box', 'layout': 'horizontal', 'margin': 'sm', 'contents': [
                     {'type': 'text', 'text': 'ยอดรวมทั้งหมด', 'size': 'xs', 'color': '#cccccc', 'flex': 5},
                     {'type': 'text', 'text': _money(c['total']), 'size': 'sm', 'weight': 'bold', 'color': '#ffffff', 'align': 'end', 'flex': 6},
                 ]},
                 {'type': 'box', 'layout': 'horizontal', 'contents': [
-                    {'type': 'text', 'text': 'ขายแฟคตอริ่งแล้ว', 'size': 'xs', 'color': '#cccccc', 'flex': 5},
-                    {'type': 'text', 'text': _money(c['factored']), 'size': 'sm', 'color': '#f5c26b', 'align': 'end', 'flex': 6},
+                    {'type': 'text', 'text': card['flag'], 'size': 'xs', 'color': '#cccccc', 'flex': 5},
+                    {'type': 'text', 'text': _money(c['flagged']), 'size': 'sm', 'color': '#f5c26b', 'align': 'end', 'flex': 6},
                 ]},
             ],
         },
@@ -268,13 +313,13 @@ def _sale_customer_bubble(c, rank, period_label, by_month=False):
             'type': 'box', 'layout': 'vertical', 'paddingAll': '12px', 'spacing': 'xs',
             'contents': [
                 {'type': 'box', 'layout': 'horizontal', 'contents': [
-                    {'type': 'text', 'text': 'เดือน' if by_month else 'วันที่ส่ง', 'size': 'xxs', 'color': '#aaaaaa', 'flex': 3},
-                    {'type': 'text', 'text': 'ยอดขาย', 'size': 'xxs', 'color': '#aaaaaa', 'flex': 7, 'align': 'end'},
+                    {'type': 'text', 'text': 'เดือน' if by_month else card['date_col'], 'size': 'xxs', 'color': '#aaaaaa', 'flex': 3},
+                    {'type': 'text', 'text': card['label'], 'size': 'xxs', 'color': '#aaaaaa', 'flex': 7, 'align': 'end'},
                 ]},
                 {'type': 'separator', 'margin': 'xs'},
                 *rows,
                 {'type': 'separator', 'margin': 'md'},
-                {'type': 'text', 'text': 'ตัวเอียง = ขายแฟคตอริ่งแล้ว', 'size': 'xxs', 'color': '#bbbbbb',
+                {'type': 'text', 'text': f"ตัวเอียง = {card['flag']}", 'size': 'xxs', 'color': '#bbbbbb',
                  'style': 'italic', 'margin': 'sm'},
             ],
         },
@@ -298,38 +343,60 @@ def _chunk_carousels(bubbles, alt_text):
             for m in messages[:5]]
 
 
-def _reply_sale_by_customer(reply_token, access_token, title, period_label, start, today, by_month):
+def _reply_by_party(reply_token, access_token, title, period_label, rows_fn, start, today, by_month, card):
     try:
-        customers = _sale_by_customer(start, today, by_month)
-        if not customers:
-            reply_message(reply_token, [{'type': 'text', 'text': f'{title} ({period_label})\nยังไม่มีการส่งของ'}], access_token)
+        parties = rows_fn(start, today, by_month)
+        if not parties:
+            reply_message(reply_token, [{'type': 'text', 'text': f"{title} ({period_label})\n{card['empty']}"}], access_token)
             return
-        if len(customers) > _SALE_MAX_BUBBLES:
-            top, rest = customers[:_SALE_MAX_BUBBLES - 1], customers[_SALE_MAX_BUBBLES - 1:]
+        if len(parties) > _SALE_MAX_BUBBLES:
+            top, rest = parties[:_SALE_MAX_BUBBLES - 1], parties[_SALE_MAX_BUBBLES - 1:]
         else:
-            top, rest = customers, []
-        bubbles = [_sale_customer_bubble(c, i + 1, period_label, by_month) for i, c in enumerate(top)]
+            top, rest = parties, []
+        bubbles = [_party_bubble(c, i + 1, period_label, by_month, card) for i, c in enumerate(top)]
         if rest:
-            bubbles.append(_sale_customer_bubble(_merge_others(rest), None, period_label, by_month))
-        total = sum(c['total'] for c in customers)
-        alt = f'{title} {period_label}: {_money(total)} ({len(customers)} ลูกค้า)'
+            bubbles.append(_party_bubble(_merge_others(rest), None, period_label, by_month, card))
+        total = sum(c['total'] for c in parties)
+        alt = f"{title} {period_label}: {_money(total)} ({len(parties)} {card['unit']})"
         reply_message(reply_token, _chunk_carousels(bubbles, alt), access_token)
     except Exception as e:
         reply_message(reply_token, [{'type': 'text', 'text': f'{title} Error:\n{type(e).__name__}: {e}'}], access_token)
 
 
+def _this_month(today):
+    return today.strftime('%m/%Y'), today.replace(day=1)
+
+
+def _this_year(today):
+    return f'ปี {today.year}', today.replace(month=1, day=1)
+
+
 def _handle_sale_this_month(reply_token, access_token):
     from django.utils import timezone
     today = timezone.localdate()
-    _reply_sale_by_customer(reply_token, access_token, '📅 ยอดขายเดือนนี้', today.strftime('%m/%Y'),
-                            today.replace(day=1), today, by_month=False)
+    label, start = _this_month(today)
+    _reply_by_party(reply_token, access_token, '📅 ยอดขายเดือนนี้', label, _sale_by_customer, start, today, False, _SALE_CARD)
 
 
 def _handle_sale_this_year(reply_token, access_token):
     from django.utils import timezone
     today = timezone.localdate()
-    _reply_sale_by_customer(reply_token, access_token, '🗓️ ยอดขายทั้งปี', f'ปี {today.year}',
-                            today.replace(month=1, day=1), today, by_month=True)
+    label, start = _this_year(today)
+    _reply_by_party(reply_token, access_token, '🗓️ ยอดขายทั้งปี', label, _sale_by_customer, start, today, True, _SALE_CARD)
+
+
+def _handle_purchase_this_month(reply_token, access_token):
+    from django.utils import timezone
+    today = timezone.localdate()
+    label, start = _this_month(today)
+    _reply_by_party(reply_token, access_token, '📅 ยอดสั่งซื้อเดือนนี้', label, _purchase_by_supplier, start, today, False, _PURCHASE_CARD)
+
+
+def _handle_purchase_this_year(reply_token, access_token):
+    from django.utils import timezone
+    today = timezone.localdate()
+    label, start = _this_year(today)
+    _reply_by_party(reply_token, access_token, '🗓️ ยอดซื้อทั้งปี', label, _purchase_by_supplier, start, today, True, _PURCHASE_CARD)
 
 
 # ── ต้นทุนสต๊อก ───────────────────────────────────────────────────────────────
@@ -710,6 +777,8 @@ def _handle_help(reply_token, access_token):
         '• report — เมนูรายงาน (Sale / Purchase / Product)\n'
         '• ยอดขายเดือนนี้ — ยอดขายรายลูกค้า (รายวัน)\n'
         '• ยอดขายทั้งปี — ยอดขายรายลูกค้า (รายเดือน)\n'
+        '• ยอดสั่งซื้อเดือนนี้ — ยอดซื้อราย Supplier (รายวัน)\n'
+        '• ยอดซื้อทั้งปี — ยอดซื้อราย Supplier (รายเดือน)\n'
         '• stock — เมนู Product Report\n'
         '• ต้นทุนสต๊อก — เรียงตามต้นทุน\n'
         '• มูลค่าสต๊อก — เรียงตามมูลค่าขาย\n'
