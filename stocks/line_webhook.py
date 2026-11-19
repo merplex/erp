@@ -267,7 +267,7 @@ def _money(v):
     return f'{v:,.2f}'
 
 
-def _party_bubble(c, rank, period_label, by_month, card):
+def _party_bubble(c, rank, period_label, by_month, card, nav=None):
     rows = []
     for d in sorted(c['days']):
         normal, flagged = c['days'][d]
@@ -290,7 +290,7 @@ def _party_bubble(c, rank, period_label, by_month, card):
             'type': 'box', 'layout': 'vertical', 'backgroundColor': card['color'], 'paddingAll': '12px', 'spacing': 'xs',
             'contents': [
                 {'type': 'text', 'text': title, 'weight': 'bold', 'size': 'md', 'color': '#ffffff', 'wrap': True, 'maxLines': 2},
-                {'type': 'text', 'text': f"{card['label']} {period_label}", 'size': 'xxs', 'color': '#aaaaaa'},
+                _period_row(f"{card['label']} {period_label}", nav),
                 {'type': 'box', 'layout': 'horizontal', 'margin': 'sm', 'contents': [
                     {'type': 'text', 'text': 'ยอดรวมทั้งหมด', 'size': 'xs', 'color': '#cccccc', 'flex': 5},
                     {'type': 'text', 'text': _money(c['total']), 'size': 'sm', 'weight': 'bold', 'color': '#ffffff', 'align': 'end', 'flex': 6},
@@ -335,22 +335,50 @@ def _chunk_carousels(bubbles, alt_text):
             for m in messages[:5]]
 
 
-def _reply_by_party(reply_token, access_token, title, period_label, rows_fn, start, today, by_month, card):
+def _period_row(text, nav):
+    """บรรทัดช่วงเวลาในหัวการ์ด — รายงานรายเดือนมีปุ่ม ◀ ▶ เลื่อนเดือน"""
+    if not nav:
+        return {'type': 'text', 'text': text, 'size': 'xxs', 'color': '#aaaaaa'}
+
+    def _arrow(sym, cmd):
+        box = {'type': 'box', 'layout': 'vertical', 'flex': 2, 'paddingAll': '4px', 'cornerRadius': '10px',
+               'backgroundColor': '#ffffff22' if cmd else '#00000000',
+               'contents': [{'type': 'text', 'text': sym, 'size': 'xs', 'align': 'center',
+                             'color': '#ffffff' if cmd else '#ffffff44'}]}
+        if cmd:
+            box['action'] = {'type': 'message', 'label': sym, 'text': cmd}
+        return box
+
+    return {'type': 'box', 'layout': 'horizontal', 'margin': 'xs', 'spacing': 'sm', 'contents': [
+        _arrow('◀', nav.get('prev')),
+        {'type': 'text', 'text': text, 'size': 'xs', 'color': '#ffffff', 'align': 'center', 'gravity': 'center', 'flex': 7},
+        _arrow('▶', nav.get('next')),
+    ]}
+
+
+def _reply_by_party(reply_token, access_token, title, period_label, rows_fn, start, today, by_month, card, nav=None):
+    quick = {'items': nav['quick']} if nav and nav.get('quick') else None
     try:
         parties = rows_fn(start, today, by_month)
         if not parties:
-            reply_message(reply_token, [{'type': 'text', 'text': f"{title} ({period_label})\n{card['empty']}"}], access_token)
+            msg = {'type': 'text', 'text': f"{title} ({period_label})\n{card['empty']}"}
+            if quick:
+                msg['quickReply'] = quick
+            reply_message(reply_token, [msg], access_token)
             return
         if len(parties) > _SALE_MAX_BUBBLES:
             top, rest = parties[:_SALE_MAX_BUBBLES - 1], parties[_SALE_MAX_BUBBLES - 1:]
         else:
             top, rest = parties, []
-        bubbles = [_party_bubble(c, i + 1, period_label, by_month, card) for i, c in enumerate(top)]
+        bubbles = [_party_bubble(c, i + 1, period_label, by_month, card, nav) for i, c in enumerate(top)]
         if rest:
-            bubbles.append(_party_bubble(_merge_others(rest), None, period_label, by_month, card))
+            bubbles.append(_party_bubble(_merge_others(rest), None, period_label, by_month, card, nav))
         total = sum(c['total'] for c in parties)
         alt = f"{title} {period_label}: {_money(total)} ({len(parties)} {card['unit']})"
-        reply_message(reply_token, _chunk_carousels(bubbles, alt), access_token)
+        messages = _chunk_carousels(bubbles, alt)
+        if quick:
+            messages[-1]['quickReply'] = quick   # ปุ่มเลือกเดือนด้านล่างแชท (LINE แสดงของข้อความสุดท้าย)
+        reply_message(reply_token, messages, access_token)
     except Exception as e:
         reply_message(reply_token, [{'type': 'text', 'text': f'{title} Error:\n{type(e).__name__}: {e}'}], access_token)
 
@@ -481,7 +509,37 @@ def _handle_party_command(reply_token, access_token, kind, action, year, month):
         title = f"📅 {cfg['month_now'] if (year, month) == (today.year, today.month) else cfg['month_any']}"
     else:
         title = f"🗓️ {cfg['year']}"
-    _reply_by_party(reply_token, access_token, title, label, cfg['rows_fn'], start, end, action == 'year', cfg['card'])
+    nav = _month_nav(kind, year, month, today) if action == 'month' else None
+    _reply_by_party(reply_token, access_token, title, label, cfg['rows_fn'], start, end, action == 'year', cfg['card'], nav)
+
+
+def _available_months(today):
+    """(ปี, เดือน) ทั้งหมดตั้งแต่เดือนเริ่มนับถึงเดือนนี้"""
+    y, mo, out = _REPORT_START.year, _REPORT_START.month, []
+    while (y, mo) <= (today.year, today.month):
+        out.append((y, mo))
+        y, mo = (y + 1, 1) if mo == 12 else (y, mo + 1)
+    return out
+
+
+def _month_nav(kind, year, month, today):
+    """ปุ่ม ◀ ▶ (เดือนก่อน/ถัดไป) + quick reply 12 เดือนล่าสุด สำหรับรายงานรายเดือน"""
+    months = _available_months(today)
+    cmd = lambda ym: f'{kind} month {ym[0]}-{ym[1]}'
+    cur = (year, month)
+    prev = [ym for ym in months if ym < cur]
+    nxt = [ym for ym in months if ym > cur]
+    # quick reply ได้สูงสุด 13 ปุ่ม -> แสดง 12 เดือนรอบๆ เดือนที่เลือก (ใหม่สุดอยู่ซ้าย)
+    end = min(len(months), max(len(prev) + 7, 12))
+    window = months[max(0, end - 12):end]
+    return {
+        'prev': cmd(prev[-1]) if prev else None,
+        'next': cmd(nxt[0]) if nxt else None,
+        'quick': [{'type': 'action', 'action': {
+                      'type': 'message', 'label': f"{'✓ ' if ym == cur else ''}{_TH_MONTHS[ym[1] - 1]} {ym[0]}",
+                      'text': cmd(ym)}}
+                  for ym in reversed(window)],
+    }
 
 
 def _no_data_text(year):
