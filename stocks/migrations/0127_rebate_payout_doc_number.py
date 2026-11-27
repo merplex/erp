@@ -26,7 +26,7 @@ class Migration(migrations.Migration):
             name="category",
             field=models.CharField(
                 choices=[
-                    ("CONTRACT", "ตามเงื่อนไขสัญญา (คำนวณ)"),
+                    ("CONTRACT", "ตามสัญญาการขาย"),
                     ("CUSTOMER_SALES", "ตามยอดจำหน่ายของลูกค้า"),
                     ("LISTING_FEE", "ค่าวางสินค้าใหม่"),
                     ("OTHER", "อื่นๆ"),

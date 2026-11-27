@@ -7410,8 +7410,8 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         if obj.is_manual:  # สร้างเอง: ไม่มีรายการ IV — แก้ประเภท/รายละเอียด/ยอดได้ (ยอดต้องไม่น้อยกว่างวดที่จ่ายแล้ว)
             return ['doc_number', 'contract', 'category', 'note', 'payout_date', 'rebate_amount',
                     'get_outstanding', 'get_status', 'ref_invoice']
-        head = ['purchase_contract', 'purchase_order_link'] if obj.is_purchase else ['doc_number', 'contract',
-                                                                                     'sales_receipt_link']
+        head = (['purchase_contract', 'purchase_order_link'] if obj.is_purchase
+                else ['doc_number', 'contract', 'get_category', 'sales_receipt_link'])
         # ยอดเงินในหน้าใบก็กดดูได้ว่ามาจาก PO/IV ไหน (เหมือนหน้ารายการ) — จ่าย/หัก กรอกในตารางงวดด้านล่าง
         return head + ['period_start', 'period_end', 'payout_date', 'get_total', 'get_commission',
                        'get_outstanding', 'currency', 'get_status', 'ref_invoice']
@@ -7419,7 +7419,7 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     def get_readonly_fields(self, request, obj=None):
         if obj is None:
             return ()
-        return ('doc_number', 'contract', 'purchase_contract', 'purchase_order_link', 'sales_receipt_link',
+        return ('doc_number', 'contract', 'get_category', 'purchase_contract', 'purchase_order_link', 'sales_receipt_link',
                 'period_start', 'period_end', 'get_total', 'get_commission', 'get_outstanding', 'currency', 'get_status')
 
     def get_form(self, request, obj=None, change=False, **kwargs):
@@ -7471,6 +7471,10 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         paid = sum((i.amount for i in obj.installments.all()), Decimal(0))
         left = max(round_money((obj.rebate_amount or 0) - paid), Decimal(0))
         return f"{left:,.2f}"
+
+    @admin.display(description="ประเภท")
+    def get_category(self, obj):
+        return obj.category_label
 
     @admin.display(description="รหัส", ordering='doc_number')
     def get_doc_number(self, obj):
@@ -7553,12 +7557,10 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
 
     @admin.display(description="ประเภท")
     def get_kind(self, obj):
-        if obj.is_purchase:
-            return format_html('<span style="color:{};font-weight:600;">{}</span>', '#16a34a', "ซื้อ")
-        if obj.is_manual:  # สร้างเอง: ขาย + ประเภทที่เลือก
-            return format_html('<span style="color:{};font-weight:600;">{}</span><br><small style="color:#64748b">{}</small>',
-                               '#2563eb', "ขาย · สร้างเอง", obj.get_category_display())
-        return format_html('<span style="color:{};font-weight:600;">{}</span>', '#2563eb', "ขาย")
+        # ขาย/ซื้อ + ประเภท (คำนวณจาก A7 = ตามสัญญาการขาย, สร้างเอง = ประเภทที่เลือก)
+        color, kind = ('#16a34a', "ซื้อ") if obj.is_purchase else ('#2563eb', "ขาย · สร้างเอง" if obj.is_manual else "ขาย")
+        return format_html('<span style="color:{};font-weight:600;">{}</span><br><small style="color:#64748b">{}</small>',
+                           color, kind, obj.category_label)
 
     @admin.display(description="สัญญา")
     def get_contract(self, obj):

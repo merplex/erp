@@ -2650,7 +2650,7 @@ class RebatePayout(models.Model):
     doc_number = models.CharField(max_length=30, blank=True, default='', db_index=True, editable=False,
                                   verbose_name="รหัสรายการ")
     # CONTRACT = คำนวณตามเงื่อนไขสัญญา (A7/A8) | อื่นๆ = สร้างเองใน A6 (ลูกค้าแจ้งภายหลัง ไม่เข้ากฎปกติ, ไม่มีรายการ IV ผูก)
-    CATEGORY_CHOICES = [('CONTRACT', 'ตามเงื่อนไขสัญญา (คำนวณ)'), ('CUSTOMER_SALES', 'ตามยอดจำหน่ายของลูกค้า'),
+    CATEGORY_CHOICES = [('CONTRACT', 'ตามสัญญาการขาย'), ('CUSTOMER_SALES', 'ตามยอดจำหน่ายของลูกค้า'),
                         ('LISTING_FEE', 'ค่าวางสินค้าใหม่'), ('OTHER', 'อื่นๆ')]
     MANUAL_CATEGORIES = CATEGORY_CHOICES[1:]
     category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default='CONTRACT', verbose_name="ประเภท")
@@ -2666,12 +2666,19 @@ class RebatePayout(models.Model):
         return self.category != 'CONTRACT'
 
     @property
+    def category_label(self):
+        # ใบที่คำนวณจาก A8 (สัญญาซื้อ) = ตามสัญญาการซื้อ
+        if self.category == 'CONTRACT' and self.purchase_contract_id:
+            return 'ตามสัญญาการซื้อ'
+        return self.get_category_display()
+
+    @property
     def ledger_label(self):
         """ข้อความในสมุดบัญชี: รหัส + สัญญา + (ช่วงยอด หรือ ประเภท/รายละเอียดของใบที่สร้างเอง)"""
         contract = self.contract or self.purchase_contract
         head = ' '.join(x for x in (self.doc_number, contract.contract_name if contract else '') if x)
         if self.is_manual:
-            return f"{head} {self.get_category_display()}" + (f": {self.note}" if self.note else '')
+            return f"{head} {self.category_label}" + (f": {self.note}" if self.note else '')
         return f"{head} ({self.period_start:%d/%m/%Y}–{self.period_end:%d/%m/%Y})"
 
     @property

@@ -809,6 +809,9 @@ class RebatePayoutManualAddTests(RebatePayoutDeductTests):
     def test_codes_are_sc(self):
         self.assertTrue(all(p.doc_number.startswith('SC-202611-') for p in self.payouts))
         self.assertNotEqual(self.payouts[0].doc_number, self.payouts[1].doc_number)
+        resp = self.client.get(f'/admin/stocks/rebatepayout/{self.payouts[0].pk}/change/')
+        self.assertContains(resp, 'ตามสัญญาการขาย')
+        self.assertContains(self.client.get('/admin/stocks/rebatepayout/'), 'ตามสัญญาการขาย')
 
     def test_add_page_renders(self):
         resp = self.client.get('/admin/stocks/rebatepayout/add/')
