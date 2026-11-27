@@ -7296,9 +7296,9 @@ class RebatePayoutForm(forms.ModelForm):
 @admin.register(RebatePayout)
 class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     form = RebatePayoutForm
-    actions = ['export_to_excel']
+    actions = ['deduct_from_customer', 'export_to_excel']
     list_display = ('get_kind', 'get_contract', 'get_party', 'period_start', 'period_end', 'payout_date',
-                    'get_total', 'get_commission', 'currency', 'status', 'ref_invoice', 'get_doc_link')
+                    'get_total', 'get_commission', 'currency', 'get_status', 'ref_invoice', 'get_doc_link')
     list_filter = (
         RebatePayoutKindFilter,
         ('status', MultipleChoicesDropdownFilter),
@@ -7317,8 +7317,9 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         head = ['purchase_contract', 'purchase_order_link'] if obj and obj.is_purchase else ['contract', 'sales_receipt_link']
         tail = ['exchange_rate'] if obj and obj.is_purchase and obj.currency != 'THB' else []
         # ยอดเงินในหน้าใบก็กดดูได้ว่ามาจาก PO/IV ไหน (เหมือนหน้ารายการ)
+        deduct = [] if obj and obj.is_purchase else ['deduct_month']
         return head + ['period_start', 'period_end', 'payout_date', 'get_total', 'get_commission',
-                       'currency', 'status', 'paid_date', 'bank_account', *tail, 'ref_invoice']
+                       'currency', 'status', *deduct, 'paid_date', 'bank_account', *tail, 'ref_invoice']
 
     def get_readonly_fields(self, request, obj=None):
         return ('contract', 'purchase_contract', 'purchase_order_link', 'sales_receipt_link', 'period_start', 'period_end',
@@ -7331,6 +7332,50 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
 
     def has_add_permission(self, request):
         return False  # ใบสรุปสร้างจาก action ใน A7/A8 เท่านั้น
+
+    @admin.action(description="✂️ หักจากเงินลูกค้า (เลือกรอบเดือน) — เฉพาะสัญญาขาย")
+    def deduct_from_customer(self, request, queryset):
+        """ไม่จ่ายแยก: หัก Rebate ตามสัญญาจากเงินที่ลูกค้าจ่ายเข้าในเดือนที่เลือก
+        ลูกค้าจ่ายผ่านแฟคตอริ่ง = หักจากส่วนที่เหลือที่แฟคตอริ่งโอนให้ — 1 รายการต่อใบ (Sale Contract) แยกจาก DC/Rebate ของ A5"""
+        payouts = list(queryset.select_related('contract__customer').order_by('payout_date', 'id'))
+        rows = [p for p in payouts if p.contract_id and not p.purchase_contract_id and p.status != 'PAID']
+        skipped = [p for p in payouts if p not in rows]
+        if 'apply' in request.POST:
+            form = DeductMonthForm(request.POST)
+            if form.is_valid() and rows:
+                month = form.cleaned_data['month']
+                with transaction.atomic():
+                    for p in rows:
+                        p.status, p.deduct_month = 'DEDUCTED', month
+                        p.save()
+                msg = (f"หัก Sale Contract {len(rows)} ใบ รวม {sum((p.rebate_amount or 0 for p in rows), Decimal(0)):,.2f} บาท "
+                       f"จากเงินลูกค้ารอบ {thai_month_label(month)} แล้ว")
+                if skipped:
+                    msg += f" (ข้าม {len(skipped)} ใบ: จ่ายแล้ว/สัญญาซื้อ)"
+                self.message_user(request, msg, messages.SUCCESS)
+                return None
+        else:
+            form = DeductMonthForm()
+        # Rebate ของรายการส่งของเดียวกันที่หักไปแล้วจาก A5 (ตั้งใน S4) -> เตือนหักซ้ำ
+        overlap = set(SalesPayment.objects.filter(
+            deduction_kind='REBATE', deduction_log__payout_items__payout__in=rows)
+            .values_list('deduction_log__payout_items__payout_id', flat=True))
+        for p in rows:
+            p.a5_overlap = p.pk in overlap
+        return TemplateResponse(request, 'admin/stocks/rebatepayout/deduct_month.html', {
+            **self.admin_site.each_context(request),
+            'title': "หัก Rebate ตามสัญญาจากเงินลูกค้า", 'opts': self.model._meta,
+            'rows': rows, 'skipped': skipped, 'form': form, 'has_overlap': bool(overlap),
+            'total': sum((p.rebate_amount or 0 for p in rows), Decimal(0)),
+            'action_name': 'deduct_from_customer', 'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
+        })
+
+    @admin.display(description="Status", ordering='status')
+    def get_status(self, obj):
+        if obj.status == 'DEDUCTED' and obj.deduct_month:
+            return format_html('{}<br><small style="color:#2563eb">หัก {}</small>',
+                               obj.get_status_display(), thai_month_label(obj.deduct_month))
+        return obj.get_status_display()
 
     @admin.display(description="ประเภท")
     def get_kind(self, obj):

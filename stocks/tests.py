@@ -630,3 +630,100 @@ class ShipmentAccountingReceivePaymentTests(TestCase):
         self.assertEqual([(p.receipt_id, p.amount) for p in pays], [(self.receipt.pk, self.D('600'))])
         # ไม่ติ๊ก flag เดิม (จะล็อคตารางรับเงินของ S2 และสร้างยอดเต็มซ้ำ)
         self.assertFalse(SalesDeliveryLog.objects.filter(is_revenue_confirmed=True).exists())
+
+
+class RebatePayoutDeductTests(TestCase):
+    """A6 สัญญาขาย: หักจากเงินลูกค้า (แทนจ่ายแยก) — 1 รายการ Sale Contract ต่อใบ ไม่รวมกับก้อน DC/Rebate ของ A5"""
+
+    def setUp(self):
+        from decimal import Decimal
+        from django.contrib.auth.models import User
+        from .models import BankAccount, SalesContract
+        self.D = Decimal
+        self.client.force_login(User.objects.create_superuser('admin', 'a@a.com', 'x'))
+        self.bank = BankAccount.objects.create(name='B', is_default=True, opening_date=datetime.date(2026, 1, 1))
+        self.customer = Customer.objects.create(company_name='C', contact_person='P', address='A', phone='0')
+        so = SalesOrder.objects.create(customer=self.customer, order_date=datetime.date(2026, 9, 1))
+        self.so = SalesOrder.objects.get(pk=so.pk)
+        self.receipt = SalesReceipt.objects.create(sales_order=self.so, shipped_date=datetime.date(2026, 9, 21),
+                                                   due_date=datetime.date(2026, 11, 2))
+        SalesReceipt.objects.filter(pk=self.receipt.pk).update(grand_total=Decimal('1000'))
+        self.contracts = [SalesContract.objects.create(customer=self.customer, contract_name=n,
+                                                       start_date=datetime.date(2026, 1, 1),
+                                                       end_date=datetime.date(2026, 12, 31)) for n in ('K1', 'K2')]
+        self.payouts = [self.payout(c, amt) for c, amt in zip(self.contracts, ('50', '30'))]
+
+    def payout(self, contract, amount):
+        from .models import RebatePayout
+        return RebatePayout.objects.create(contract=contract, period_start=datetime.date(2026, 9, 1),
+                                           period_end=datetime.date(2026, 9, 30),
+                                           payout_date=datetime.date(2026, 11, 5),
+                                           total_sales_amount=1000, rebate_amount=self.D(amount))
+
+    def sell_factoring(self):
+        from .models import BankAccount
+        fx = BankAccount.objects.create(name='FX', account_type='FACTORING', linked_account=self.bank,
+                                        advance_percent=80, factoring_interest_rate=0)
+        Customer.objects.filter(pk=self.customer.pk).update(receiving_account=fx)
+        self.client.post('/admin/stocks/salesreceipt/', {
+            'action': 'sell_factoring_by_receipt', '_selected_action': [self.receipt.pk], 'apply': '1',
+            'advance_date': '2026-10-16'})
+        return fx
+
+    def deduct(self, month='2026-11-01', payouts=None):
+        return self.client.post('/admin/stocks/rebatepayout/', {
+            'action': 'deduct_from_customer', 'apply': '1', 'month': month,
+            '_selected_action': [p.pk for p in (payouts or self.payouts)]})
+
+    def transfer_total(self):
+        from django.db.models import Sum
+        from .models import BankTransaction
+        return BankTransaction.objects.filter(bank_account=self.bank, source_type='FACTORING').aggregate(
+            t=Sum('amount'))['t'] or 0
+
+    def test_factoring_one_row_per_contract_and_net_reduced(self):
+        from .models import BankTransaction
+        fx = self.sell_factoring()
+        before = self.transfer_total()
+        self.assertEqual(self.deduct().status_code, 302)
+        rows = BankTransaction.objects.filter(rebate_payout__in=self.payouts).order_by('amount')
+        self.assertEqual([(r.bank_account_id, r.amount) for r in rows], [(fx.pk, self.D('-50')), (fx.pk, self.D('-30'))])
+        self.assertTrue(all('Sale Contract' in r.description for r in rows))
+        self.assertIn('K1', rows[0].description)
+        self.assertFalse(BankTransaction.objects.filter(reference='หัก DC/Rebate/ลดหนี้').exists())  # ไม่รวมก้อน
+        self.assertEqual(before - self.transfer_total(), self.D('80'))
+
+    def test_without_factoring_goes_to_main_account(self):
+        from .models import BankTransaction
+        self.deduct(payouts=self.payouts[:1])
+        row = BankTransaction.objects.get(rebate_payout=self.payouts[0])
+        self.assertEqual((row.bank_account_id, row.amount), (self.bank.pk, self.D('-50')))
+        self.assertEqual(row.txn_date.month, 11)
+
+    def test_back_to_pending_removes_and_restores_net(self):
+        from .models import BankTransaction, RebatePayout
+        self.sell_factoring()
+        before = self.transfer_total()
+        self.deduct()
+        p = RebatePayout.objects.get(pk=self.payouts[0].pk)
+        p.status = 'PENDING'
+        p.save()
+        self.assertIsNone(RebatePayout.objects.get(pk=p.pk).deduct_month)
+        self.assertFalse(BankTransaction.objects.filter(rebate_payout=p).exists())
+        self.assertEqual(before - self.transfer_total(), self.D('30'))
+        self.payouts[1].delete()
+        self.assertEqual(self.transfer_total(), before)
+
+    def test_paid_payout_skipped(self):
+        from .models import RebatePayout
+        RebatePayout.objects.filter(pk=self.payouts[0].pk).update(status='PAID')
+        self.deduct()
+        self.assertEqual(RebatePayout.objects.get(pk=self.payouts[0].pk).status, 'PAID')
+        self.assertEqual(RebatePayout.objects.get(pk=self.payouts[1].pk).status, 'DEDUCTED')
+
+    def test_change_page_shows_deduct_month(self):
+        self.deduct(payouts=self.payouts[:1])
+        resp = self.client.get(f'/admin/stocks/rebatepayout/{self.payouts[0].pk}/change/')
+        self.assertContains(resp, 'name="deduct_month"')
+        resp = self.client.get('/admin/stocks/rebatepayout/')
+        self.assertContains(resp, 'หักจากเงินลูกค้า')

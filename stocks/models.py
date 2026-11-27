@@ -2645,7 +2645,12 @@ class RebatePayout(models.Model):
                                         validators=[MinValueValidator(Decimal('0.0001'))], verbose_name="ExRate ตอนจ่าย",
                                         help_text="สกุลต่างประเทศ: บาทต่อ 1 หน่วยเงิน — สมุดบัญชีลงบาท = ค่าคอมฯ x เรทนี้")
     
-    status = models.CharField(max_length=20, choices=[('PENDING', 'รอจ่าย'), ('PAID', 'จ่ายแล้ว')], default='PENDING')
+    # DEDUCTED (สัญญาขายเท่านั้น) = ไม่จ่ายแยก แต่หักจากเงินที่ลูกค้าจ่ายเข้าในเดือน deduct_month
+    # ลูกค้าจ่ายผ่านแฟคตอริ่ง -> หักจากส่วนที่เหลือที่แฟคตอริ่งโอนให้ (1 รายการต่อใบ ชื่อ Sale Contract ไม่รวมกับ DC/Rebate ของ A5)
+    STATUS_CHOICES = [('PENDING', 'รอจ่าย'), ('PAID', 'จ่ายแล้ว'), ('DEDUCTED', 'หักจากเงินลูกค้า')]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    deduct_month = models.DateField(null=True, blank=True, verbose_name="หักรอบเดือน",
+                                    help_text="สถานะ \"หักจากเงินลูกค้า\": หักจากเงินเข้าของลูกค้าในเดือนนี้")
     ref_invoice = models.CharField(max_length=100, blank=True, verbose_name="เลขที่ใบลดหนี้/ใบจ่ายเงิน")
     paid_date = models.DateField(null=True, blank=True, verbose_name="วันที่จ่ายจริง")
     bank_account = models.ForeignKey('BankAccount', on_delete=models.PROTECT, null=True, blank=True,
@@ -2664,6 +2669,11 @@ class RebatePayout(models.Model):
     def clean(self):
         if self.status == 'PAID' and self.currency != 'THB' and not self.exchange_rate:
             raise ValidationError({'exchange_rate': f"กรอก ExRate ตอนจ่าย ({self.currency})"})
+        if self.status == 'DEDUCTED':
+            if self.purchase_contract_id or not self.contract_id:
+                raise ValidationError({'status': "หักจากเงินลูกค้าได้เฉพาะสัญญาขาย"})
+            if not self.deduct_month:
+                raise ValidationError({'deduct_month': "เลือกรอบเดือนที่จะหัก"})
 
     def recalculate_totals(self):
         """คำนวณยอดรวมใหม่จากรายการในใบ (ขาย: รายการส่งของ | ซื้อ: รายการจ่ายเงินค่าสินค้า)"""
@@ -2878,7 +2888,7 @@ def _contract_period(period, d):
 def _pending_payout(filters, period_start, period_end):
     """ใบของรอบนี้ที่ยังรอจ่าย (เพิ่มรายการเข้าใบเดิม) / 'PAID' ถ้ารอบนี้จ่ายไปแล้ว / None = ยังไม่มีใบ"""
     existing = RebatePayout.objects.filter(period_start=period_start, period_end=period_end, **filters)
-    if existing.filter(status='PAID').exists():
+    if existing.exclude(status='PENDING').exists():  # จ่ายแล้ว หรือหักจากเงินลูกค้าแล้ว
         return 'PAID'
     return existing.first()
 
@@ -3733,13 +3743,33 @@ def _payment_batch_on_delete(sender, instance, **kwargs):
 
 @receiver(models.signals.pre_save, sender=RebatePayout)
 def _rebate_payout_paid_defaults(sender, instance, **kwargs):
+    if instance.deduct_month:
+        instance.deduct_month = _as_date(instance.deduct_month).replace(day=1)
+    if instance.status != 'DEDUCTED':
+        instance.deduct_month = None
+    # รอบหักเดิม (ย้ายเดือน / เปลี่ยนเป็นจ่ายแยก / ลบ) -> คำนวณเดือนเดิมใหม่ด้วย
+    instance._old_deduct = None
+    if instance.pk:
+        old = RebatePayout.objects.filter(pk=instance.pk).values_list('contract__customer_id', 'deduct_month').first()
+        if old and old[1]:
+            instance._old_deduct = old
     if instance.status == 'PAID':
         instance.paid_date = instance.paid_date or datetime.date.today()
         if not instance.bank_account_id:
             instance.bank_account_id = default_bank_account_id()
 
 
+def _payout_deduct_key(payout):
+    if payout.status == 'DEDUCTED' and payout.contract_id and payout.deduct_month:
+        return (payout.contract.customer_id, payout.deduct_month)
+    return None
+
+
 def sync_rebate_payout_ledger(payout):
+    key = _payout_deduct_key(payout)
+    if key:  # หักจากเงินลูกค้า: รายการ Sale Contract สร้างใน resync_factoring_month (แฟคตอริ่ง/บัญชีหลัก)
+        resync_factoring_month(*key)
+        return
     if payout.status != 'PAID':
         BankTransaction.objects.filter(rebate_payout=payout).delete()
         return
@@ -3753,7 +3783,7 @@ def sync_rebate_payout_ledger(payout):
         values = {'amount': -round_money(payout.rebate_amount), 'source_type': 'REBATE_PAYOUT',
                   'party': contract.customer.company_name}
     BankTransaction.objects.update_or_create(rebate_payout=payout, defaults={
-        'bank_account_id': payout.bank_account_id,
+        'bank_account_id': payout.bank_account_id, 'factoring_payment': None,
         'txn_date': payout.paid_date or payout.payout_date,
         'reference': (payout.ref_invoice or contract.contract_name)[:100],
         # คำอธิบาย = ชื่อสัญญา ลูกค้า/ผู้จำหน่าย (ช่วงวันที่)
@@ -3765,6 +3795,23 @@ def sync_rebate_payout_ledger(payout):
 @receiver(post_save, sender=RebatePayout)
 def _rebate_payout_post_save(sender, instance, **kwargs):
     sync_rebate_payout_ledger(instance)
+    old = getattr(instance, '_old_deduct', None)
+    if old and old != _payout_deduct_key(instance):
+        resync_factoring_month(*old)
+
+
+@receiver(models.signals.pre_delete, sender=RebatePayout)
+def _rebate_payout_pre_delete(sender, instance, **kwargs):
+    # อ่านจาก DB (instance ในมืออาจเก่า) — ลบใบที่หักจากเงินลูกค้าอยู่ -> คำนวณเดือนนั้นใหม่หลังลบ
+    instance._old_deduct = (RebatePayout.objects.filter(pk=instance.pk, status='DEDUCTED', deduct_month__isnull=False)
+                            .values_list('contract__customer_id', 'deduct_month').first())
+
+
+@receiver(post_delete, sender=RebatePayout)
+def _rebate_payout_post_delete(sender, instance, **kwargs):
+    old = getattr(instance, '_old_deduct', None)
+    if old and old[0]:
+        resync_factoring_month(*old)
 
 # ── M3. เงินกู้ ──────────────────────────────────────────────────────────────
 # กรอกยอดกู้ + เงื่อนไข (วันครบกำหนดงวดแรก, จำนวนงวด, วิธีผ่อน, อัตราดอกเบี้ยหลายช่วง)
@@ -4647,7 +4694,31 @@ def resync_factoring_month(customer_id, month):
     cn_docs = [cn.cn_number for cn, _amount in cn_rows]
     carry += cn_total
 
-    if remainders and (carry > 0):
+    # A6 สัญญาขายที่เลือก "หักจากเงินลูกค้า" เดือนนี้ — แยก 1 รายการต่อใบ (Sale Contract) ไม่รวมกับ DC/Rebate
+    contract_payouts = list(RebatePayout.objects.filter(contract__customer_id=customer_id, status='DEDUCTED',
+                                                        deduct_month=month).select_related('contract__customer')
+                            .order_by('payout_date', 'id'))
+    combined = carry
+    for payout in contract_payouts:
+        amount = round_money(payout.rebate_amount or 0)
+        period = f"({payout.period_start:%d/%m/%Y}–{payout.period_end:%d/%m/%Y})"
+        fields = {
+            'amount': -amount, 'source_type': 'REBATE_PAYOUT',
+            'reference': (payout.ref_invoice or f"Sale Contract {payout.contract.contract_name}")[:100],
+            'party': payout.contract.customer.company_name,
+            'description': f"หัก Sale Contract {payout.contract.contract_name} {period} (รอบ {month:%m/%Y})"[:255],
+        }
+        if remainders:  # หักจากส่วนที่เหลือที่แฟคตอริ่งโอนให้
+            pay_day = min(r.factoring_customer_paid_date or _as_date(r.payment_date) for r in remainders)
+            fields.update(bank_account=remainders[0].bank_account, txn_date=pay_day,
+                          factoring_payment=remainders[0])
+            carry += amount
+        else:  # ไม่ได้จ่ายผ่านแฟคตอริ่งเดือนนี้ -> ลงบัญชีหลักแยกรายการ (วันกำหนดชำระของลูกค้า)
+            fields.update(bank_account_id=default_bank_account_id(),
+                          txn_date=deduction_date_in_month(payout.contract.customer, month), factoring_payment=None)
+        BankTransaction.objects.update_or_create(rebate_payout=payout, defaults=fields)
+
+    if remainders and (combined > 0):
         fx0, first = remainders[0].bank_account, remainders[0]
         pay_day = min(r.factoring_customer_paid_date or _as_date(r.payment_date) for r in remainders)
         base = {'bank_account': fx0, 'txn_date': pay_day, 'source_type': 'FACTORING', 'factoring_payment': first,
