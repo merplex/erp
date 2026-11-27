@@ -19,6 +19,7 @@ from .models import (
     PurchaseReport,
 )
 from .models import DocumentLock, round_money, _delivery_local_date
+from types import SimpleNamespace
 # 1. เปลี่ยนชื่อที่ปรากฏบนหัวเอกสาร (Header สีน้ำเงิน)
 admin.site.site_header = "Meebun ERP"
 
@@ -3217,6 +3218,46 @@ def _receivable_rows(queryset):
     return ok, skipped
 
 
+def receive_payment_flow(model_admin, request, queryset, selected_ids, action_name, extra_skipped=()):
+    """A1/A2/A5 รับเงินตามยอดค้าง: queryset = ใบ IV ที่จะรับ, selected_ids = pk ที่ติ๊กในหน้านั้น (ส่งกลับตอนยืนยัน)"""
+    ok, skipped = _receivable_rows(queryset)
+    skipped = list(extra_skipped) + skipped
+    form = ReceivePaymentForm(request.POST if 'apply' in request.POST else None,
+                              need_fallback=any(r.target_account is None for r in ok))
+    amount_errors = _read_amount_inputs(request, ok)
+    if 'apply' in request.POST and form.is_valid() and not amount_errors:
+        to_receive = [r for r in ok if r.receive_amount > 0]
+        if not to_receive:
+            model_admin.message_user(request, "ไม่มีใบที่ต้องรับเงิน", messages.WARNING)
+            return None
+        fallback, pay_date = form.cleaned_data.get('bank_account'), form.cleaned_data['payment_date']
+        # รับหลายใบพร้อมกัน = เงินก้อนเดียว -> สมุดบัญชีลง 1 รายการต่อ (บัญชี, วันที่) กดยอดใน M2 ดูราย IV ได้
+        batch_ref = uuid.uuid4().hex[:16] if len(to_receive) > 1 else ''
+        with transaction.atomic():
+            for r in to_receive:
+                # เข้าบัญชีรับโอนของลูกค้าเสมอ (บัญชีแฟคตอริ่ง: signal โอนต่อเข้าบัญชีที่ผูก 100%)
+                SalesPayment.objects.create(
+                    order=r.sales_order, receipt=r, amount=r.receive_amount, payment_date=pay_date,
+                    bank_account=r.target_account or fallback, remark=f"รับชำระ {r.receipt_number}",
+                    batch_ref=batch_ref)
+        total = sum((r.receive_amount for r in to_receive), Decimal(0))
+        msg = f"บันทึกรับเงิน {len(to_receive)} ใบ รวม {total:,.2f} บาท"
+        not_received = len(skipped) + len(ok) - len(to_receive)
+        if not_received:
+            msg += f" (ข้าม {not_received} ใบ)"
+        model_admin.message_user(request, msg, messages.SUCCESS)
+        return None
+    return TemplateResponse(request, 'admin/stocks/salesreceipt/receive_payment.html', {
+        **model_admin.admin_site.each_context(request),
+        'title': "รับเงินตามยอดค้าง", 'opts': model_admin.model._meta, 'form': form,
+        'rows': ok, 'skipped': skipped, 'amount_errors': amount_errors,
+        'total_outstanding': sum((r.outstanding for r in ok), Decimal(0)),
+        'total': sum((r.receive_amount for r in ok if not r.amount_error), Decimal(0)),
+        'selected_ids': selected_ids,
+        'action_name': action_name, 'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
+    })
+
+
 class ReceiptPayStateFilter(CheckboxFilter):
     """A1/A2: สถานะรับเงินต่อใบ IV (ยังไม่ถึงกำหนด/ครบกำหนด/เกินกำหนด/รับบางส่วน/รับเงินแล้ว)
     คำนวณใน Python (ไล่ตัดยอดรับเงินของ SO เข้าใบที่ครบกำหนดเก่าสุดก่อน) จึงกรองด้วย pk__in"""
@@ -3398,41 +3439,8 @@ class SalesReceiptAdmin(ColumnTotalsMixin, TaxReportActionsMixin, UnfoldModelAdm
 
     @admin.action(description="💰 รับเงินตามยอดค้าง (เลือกบัญชีที่รับ)")
     def receive_payment(self, request, queryset):
-        ok, skipped = _receivable_rows(queryset)
-        form = ReceivePaymentForm(request.POST if 'apply' in request.POST else None,
-                                  need_fallback=any(r.target_account is None for r in ok))
-        amount_errors = _read_amount_inputs(request, ok)
-        if 'apply' in request.POST and form.is_valid() and not amount_errors:
-            to_receive = [r for r in ok if r.receive_amount > 0]
-            if not to_receive:
-                self.message_user(request, "ไม่มีใบที่ต้องรับเงิน", messages.WARNING)
-                return None
-            fallback, pay_date = form.cleaned_data.get('bank_account'), form.cleaned_data['payment_date']
-            # รับหลายใบพร้อมกัน = เงินก้อนเดียว -> สมุดบัญชีลง 1 รายการต่อ (บัญชี, วันที่) กดยอดใน M2 ดูราย IV ได้
-            batch_ref = uuid.uuid4().hex[:16] if len(to_receive) > 1 else ''
-            with transaction.atomic():
-                for r in to_receive:
-                    # เข้าบัญชีรับโอนของลูกค้าเสมอ (บัญชีแฟคตอริ่ง: signal โอนต่อเข้าบัญชีที่ผูก 100%)
-                    SalesPayment.objects.create(
-                        order=r.sales_order, receipt=r, amount=r.receive_amount, payment_date=pay_date,
-                        bank_account=r.target_account or fallback, remark=f"รับชำระ {r.receipt_number}",
-                        batch_ref=batch_ref)
-            total = sum((r.receive_amount for r in to_receive), Decimal(0))
-            msg = f"บันทึกรับเงิน {len(to_receive)} ใบ รวม {total:,.2f} บาท"
-            not_received = len(skipped) + len(ok) - len(to_receive)
-            if not_received:
-                msg += f" (ข้าม {not_received} ใบ)"
-            self.message_user(request, msg, messages.SUCCESS)
-            return None
-        return TemplateResponse(request, 'admin/stocks/salesreceipt/receive_payment.html', {
-            **self.admin_site.each_context(request),
-            'title': "รับเงินตามยอดค้าง", 'opts': self.model._meta, 'form': form,
-            'rows': ok, 'skipped': skipped, 'amount_errors': amount_errors,
-            'total_outstanding': sum((r.outstanding for r in ok), Decimal(0)),
-            'total': sum((r.receive_amount for r in ok if not r.amount_error), Decimal(0)),
-            'selected_ids': list(queryset.values_list('pk', flat=True)),
-            'action_name': 'receive_payment', 'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
-        })
+        return receive_payment_flow(self, request, queryset, list(queryset.values_list('pk', flat=True)),
+                                    'receive_payment')
 
     @admin.action(description="💳 ขายแฟคตอริ่ง (เฉพาะใบที่เลือก)")
     def sell_factoring_by_receipt(self, request, queryset):
@@ -6575,7 +6583,7 @@ class ShipmentAccountingAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModel
     actions = [
         'confirm_dc_only',
         'confirm_rebate_only',
-        'confirm_revenue_only',
+        'receive_payment',
         'export_to_excel',
     ]
 
@@ -6775,15 +6783,29 @@ class ShipmentAccountingAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModel
         })
 
     # --- ✅ Actions ---
-    @admin.action(description="💰 ยืนยันเฉพาะยอดรับเงิน (Revenue)")
-    def confirm_revenue_only(self, request, queryset):
-        for obj in queryset:
-            if obj.is_revenue_confirmed:
+    @admin.action(description="💰 รับเงินตามยอดค้าง (เลือกบัญชีที่รับ)")
+    def receive_payment(self, request, queryset):
+        """เหมือน A1/A2: รับเงินของใบ IV ที่รายการส่งของที่ติ๊กอยู่ (1 วันส่งของของ SO = 1 ใบ, หลายสินค้าใบเดียวกันรับครั้งเดียว)
+        ไม่ติ๊ก is_revenue_confirmed — flag นั้นล็อคตารางรับเงินใน S2 และ save_model จะสร้างยอดรับเต็มจำนวนซ้ำ
+        (ช่อง Paid โชว์ ✓ จากรับเงินของ SO อยู่แล้ว)"""
+        logs = list(queryset.select_related('sales_order__customer'))
+        keys = {(log.sales_order_id, _delivery_local_date(log.shipped_date)) for log in logs}
+        cond = Q(pk__in=[])
+        for so_id, day in keys:
+            cond |= Q(sales_order_id=so_id, shipped_date=day)
+        receipts = SalesReceipt.objects.filter(cond, is_cancelled=False)
+        found = set(receipts.values_list('sales_order_id', 'shipped_date'))
+        no_iv, seen = [], set()
+        for log in logs:
+            key = (log.sales_order_id, _delivery_local_date(log.shipped_date))
+            if key in found or key in seen:
                 continue
-            obj.is_revenue_confirmed = True
-            # 🔥 บังคับเรียก save_model เพื่อให้สร้าง SalesPaymentLog
-            self.save_model(request, obj, None, True)
-        self.message_user(request, f"ยืนยันยอดรับเงิน {queryset.count()} รายการ และสร้างประวัติเงินแล้ว")
+            seen.add(key)
+            no_iv.append((SimpleNamespace(
+                receipt_number=f"{log.sales_order.so_number} ส่ง {key[1]:%d/%m/%Y}", sales_order=log.sales_order),
+                "ยังไม่มีใบกำกับ (IV) ของวันส่งนี้"))
+        return receive_payment_flow(self, request, receipts, list(queryset.values_list('pk', flat=True)),
+                                    'receive_payment', extra_skipped=no_iv)
 
     @admin.action(description="🚚 ยืนยัน DC และลงบัญชีในเดือนที่เลือก")
     def confirm_dc_only(self, request, queryset):

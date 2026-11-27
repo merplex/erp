@@ -586,3 +586,47 @@ class SubmitOnceTests(TestCase):
 
     def test_script_on_admin_pages(self):
         self.assertContains(self.client.get('/admin/stocks/banktransaction/'), 'submit_once')
+
+
+class ShipmentAccountingReceivePaymentTests(TestCase):
+    """A5 action รับเงินตามยอดค้าง = ขั้นตอนเดียวกับ A1/A2 (รับเงินของใบ IV ของรายการส่งของที่ติ๊ก)"""
+
+    def setUp(self):
+        from decimal import Decimal
+        from django.contrib.auth.models import User
+        from django.utils import timezone
+        from .models import BankAccount, Product, SalesDeliveryLog
+        self.D = Decimal
+        self.client.force_login(User.objects.create_superuser('admin', 'a@a.com', 'x'))
+        self.bank = BankAccount.objects.create(name='B')
+        customer = Customer.objects.create(company_name='C', contact_person='P', address='A', phone='0',
+                                           vat=Decimal('7'))
+        self.so = SalesOrder.objects.create(customer=customer, order_date=datetime.date(2026, 9, 1),
+                                            vat_percent=Decimal('7'))
+        product = Product.objects.create(name='X', sale_price=0)
+        shipped = timezone.make_aware(datetime.datetime(2026, 9, 21, 10, 0))
+        self.logs = [SalesDeliveryLog.objects.create(sales_order=self.so, product=product, quantity_shipped=q,
+                                                     shipped_date=shipped) for q in (1, 2)]
+        self.receipt = SalesReceipt.objects.filter(sales_order=self.so, shipped_date=datetime.date(2026, 9, 21)).first()
+        if self.receipt is None:
+            self.receipt = SalesReceipt.objects.create(sales_order=self.so, shipped_date=datetime.date(2026, 9, 21))
+        SalesReceipt.objects.filter(pk=self.receipt.pk).update(grand_total=Decimal('1000'))
+        self.url = '/admin/stocks/shipmentaccounting/'
+
+    def test_confirm_page_lists_iv_once(self):
+        resp = self.client.post(self.url, {'action': 'receive_payment',
+                                           '_selected_action': [l.pk for l in self.logs]})
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, f'name="amount_{self.receipt.pk}"', count=1)
+        self.assertContains(resp, 'value="receive_payment"')
+
+    def test_apply_creates_payment_linked_to_iv(self):
+        from .models import SalesPayment, SalesDeliveryLog
+        resp = self.client.post(self.url, {
+            'action': 'receive_payment', '_selected_action': [l.pk for l in self.logs], 'apply': '1',
+            'bank_account': self.bank.pk, 'payment_date': '2026-10-09', f'amount_{self.receipt.pk}': '600'})
+        self.assertEqual(resp.status_code, 302)
+        pays = SalesPayment.objects.filter(order=self.so, deduction_kind='')
+        self.assertEqual([(p.receipt_id, p.amount) for p in pays], [(self.receipt.pk, self.D('600'))])
+        # ไม่ติ๊ก flag เดิม (จะล็อคตารางรับเงินของ S2 และสร้างยอดเต็มซ้ำ)
+        self.assertFalse(SalesDeliveryLog.objects.filter(is_revenue_confirmed=True).exists())
