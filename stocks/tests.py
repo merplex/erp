@@ -670,10 +670,21 @@ class RebatePayoutDeductTests(TestCase):
             'advance_date': '2026-10-16'})
         return fx
 
-    def deduct(self, month='2026-11-01', payouts=None):
-        return self.client.post('/admin/stocks/rebatepayout/', {
-            'action': 'deduct_from_customer', 'apply': '1', 'month': month,
-            '_selected_action': [p.pk for p in (payouts or self.payouts)]})
+    def deduct(self, month='2026-11-01', payouts=None, amounts=None):
+        data = {'action': 'deduct_from_customer', 'apply': '1', 'month': month,
+                '_selected_action': [p.pk for p in (payouts or self.payouts)]}
+        data.update({f'amount_{pk}': v for pk, v in (amounts or {}).items()})
+        return self.client.post('/admin/stocks/rebatepayout/', data)
+
+    def pay(self, payouts, amounts=None):
+        data = {'action': 'pay_separately', 'apply': '1', 'bank_account': self.bank.pk,
+                'payment_date': '2026-12-05', '_selected_action': [p.pk for p in payouts]}
+        data.update({f'amount_{pk}': v for pk, v in (amounts or {}).items()})
+        return self.client.post('/admin/stocks/rebatepayout/', data)
+
+    def status(self, payout):
+        from .models import RebatePayout
+        return RebatePayout.objects.get(pk=payout.pk).status
 
     def transfer_total(self):
         from django.db.models import Sum
@@ -686,44 +697,96 @@ class RebatePayoutDeductTests(TestCase):
         fx = self.sell_factoring()
         before = self.transfer_total()
         self.assertEqual(self.deduct().status_code, 302)
-        rows = BankTransaction.objects.filter(rebate_payout__in=self.payouts).order_by('amount')
+        rows = BankTransaction.objects.filter(rebate_installment__payout__in=self.payouts).order_by('amount')
         self.assertEqual([(r.bank_account_id, r.amount) for r in rows], [(fx.pk, self.D('-50')), (fx.pk, self.D('-30'))])
         self.assertTrue(all('Sale Contract' in r.description for r in rows))
         self.assertIn('K1', rows[0].description)
         self.assertFalse(BankTransaction.objects.filter(reference='หัก DC/Rebate/ลดหนี้').exists())  # ไม่รวมก้อน
         self.assertEqual(before - self.transfer_total(), self.D('80'))
+        self.assertEqual([self.status(p) for p in self.payouts], ['PAID', 'PAID'])
+
+    def test_partial_deduct_then_pay_rest_separately(self):
+        from .models import BankTransaction
+        fx = self.sell_factoring()
+        before = self.transfer_total()
+        k1 = self.payouts[0]
+        self.deduct(payouts=[k1], amounts={k1.pk: '20'})
+        self.assertEqual(self.status(k1), 'PARTIAL')
+        self.assertEqual(before - self.transfer_total(), self.D('20'))
+        row = BankTransaction.objects.get(rebate_installment__payout=k1)
+        self.assertEqual((row.bank_account_id, row.amount), (fx.pk, self.D('-20')))
+        self.assertIn('งวด', row.description)
+        # งวดที่ 2 จ่ายแยก ยอดคงค้าง (ค่าเริ่มต้น) = 30
+        self.assertEqual(self.pay([k1]).status_code, 302)
+        self.assertEqual(self.status(k1), 'PAID')
+        rows = BankTransaction.objects.filter(rebate_installment__payout=k1).order_by('txn_date')
+        self.assertEqual([(r.bank_account_id, r.amount) for r in rows],
+                         [(fx.pk, self.D('-20')), (self.bank.pk, self.D('-30'))])
+        self.assertEqual(before - self.transfer_total(), self.D('20'))  # จ่ายแยกไม่หักจากแฟคตอริ่ง
+
+    def test_over_outstanding_rejected(self):
+        from .models import RebatePayoutPayment
+        k1 = self.payouts[0]
+        self.deduct(payouts=[k1], amounts={k1.pk: '20'})
+        resp = self.pay([k1], amounts={k1.pk: '30.01'})
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'ยอดไม่ถูกต้อง')
+        self.assertEqual(RebatePayoutPayment.objects.filter(payout=k1).count(), 1)
 
     def test_without_factoring_goes_to_main_account(self):
         from .models import BankTransaction
         self.deduct(payouts=self.payouts[:1])
-        row = BankTransaction.objects.get(rebate_payout=self.payouts[0])
+        row = BankTransaction.objects.get(rebate_installment__payout=self.payouts[0])
         self.assertEqual((row.bank_account_id, row.amount), (self.bank.pk, self.D('-50')))
         self.assertEqual(row.txn_date.month, 11)
 
-    def test_back_to_pending_removes_and_restores_net(self):
-        from .models import BankTransaction, RebatePayout
+    def test_delete_installment_restores_net_and_status(self):
+        from .models import BankTransaction, RebatePayoutPayment
         self.sell_factoring()
         before = self.transfer_total()
         self.deduct()
-        p = RebatePayout.objects.get(pk=self.payouts[0].pk)
-        p.status = 'PENDING'
-        p.save()
-        self.assertIsNone(RebatePayout.objects.get(pk=p.pk).deduct_month)
-        self.assertFalse(BankTransaction.objects.filter(rebate_payout=p).exists())
+        RebatePayoutPayment.objects.get(payout=self.payouts[0]).delete()
+        self.assertEqual(self.status(self.payouts[0]), 'PENDING')
+        self.assertFalse(BankTransaction.objects.filter(rebate_installment__payout=self.payouts[0]).exists())
         self.assertEqual(before - self.transfer_total(), self.D('30'))
         self.payouts[1].delete()
         self.assertEqual(self.transfer_total(), before)
 
-    def test_paid_payout_skipped(self):
-        from .models import RebatePayout
-        RebatePayout.objects.filter(pk=self.payouts[0].pk).update(status='PAID')
-        self.deduct()
-        self.assertEqual(RebatePayout.objects.get(pk=self.payouts[0].pk).status, 'PAID')
-        self.assertEqual(RebatePayout.objects.get(pk=self.payouts[1].pk).status, 'DEDUCTED')
-
-    def test_change_page_shows_deduct_month(self):
+    def test_move_installment_to_separate_moves_ledger(self):
+        from .models import BankTransaction, RebatePayoutPayment
+        self.sell_factoring()
+        before = self.transfer_total()
         self.deduct(payouts=self.payouts[:1])
-        resp = self.client.get(f'/admin/stocks/rebatepayout/{self.payouts[0].pk}/change/')
-        self.assertContains(resp, 'name="deduct_month"')
-        resp = self.client.get('/admin/stocks/rebatepayout/')
-        self.assertContains(resp, 'หักจากเงินลูกค้า')
+        inst = RebatePayoutPayment.objects.get(payout=self.payouts[0])
+        inst.method = 'SEPARATE'
+        inst.save()
+        self.assertEqual(self.transfer_total(), before)
+        row = BankTransaction.objects.get(rebate_installment=inst)
+        self.assertEqual((row.bank_account_id, row.amount), (self.bank.pk, self.D('-50')))
+
+    def test_paid_payout_skipped(self):
+        self.pay(self.payouts[:1])
+        self.deduct()
+        self.assertEqual(self.payouts[0].installments.count(), 1)
+        self.assertEqual(self.payouts[1].installments.get().method, 'DEDUCT')
+
+    def test_change_page_inline_and_total_check(self):
+        url = f'/admin/stocks/rebatepayout/{self.payouts[0].pk}/change/'
+        resp = self.client.get(url)
+        self.assertContains(resp, 'installments-0-amount')
+        self.assertContains(resp, 'value="50.00"')
+        # 2 งวดรวมเกินยอดใบ (50) -> ไม่บันทึก
+        data = {'ref_invoice': '', 'payout_date': '2026-11-05', 'installments-TOTAL_FORMS': '2', 'installments-INITIAL_FORMS': '0',
+                'installments-MIN_NUM_FORMS': '0', 'installments-MAX_NUM_FORMS': '1000',
+                'items-TOTAL_FORMS': '0', 'items-INITIAL_FORMS': '0',
+                'items-MIN_NUM_FORMS': '0', 'items-MAX_NUM_FORMS': '1000'}
+        for i, amt in enumerate(('30', '30')):
+            data.update({f'installments-{i}-method': 'SEPARATE', f'installments-{i}-amount': amt,
+                         f'installments-{i}-paid_date': '2026-12-01', f'installments-{i}-bank_account': self.bank.pk})
+        resp = self.client.post(url, data)
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'เกินยอดของใบ')
+        data['installments-1-amount'] = '20'
+        self.assertEqual(self.client.post(url, data).status_code, 302)
+        self.assertEqual(self.status(self.payouts[0]), 'PAID')
+        self.assertContains(self.client.get('/admin/stocks/rebatepayout/'), 'จ่ายแล้ว')

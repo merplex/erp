@@ -7282,23 +7282,61 @@ class RebatePayoutKindFilter(admin.SimpleListFilter):
         return queryset
 
 
-class RebatePayoutForm(forms.ModelForm):
+class RebatePayoutPaymentForm(forms.ModelForm):
+    deduct_month = forms.DateField(
+        label="หักรอบเดือน", required=False, input_formats=['%Y-%m', '%Y-%m-%d'],
+        widget=forms.DateInput(attrs={'type': 'month'}, format='%Y-%m'),
+        help_text="หักจากเงินลูกค้า: หักจากเงินเข้าของลูกค้าเดือนนี้ (แฟคตอริ่ง = หักจากส่วนที่เหลือที่โอนให้)")
+
     class Meta:
-        model = RebatePayout
+        model = RebatePayoutPayment
         fields = '__all__'
+        widgets = {'paid_date': forms.DateInput(attrs=BOX_DATE_ATTRS, format='%Y-%m-%d')}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.instance._total_checked_by_formset = True  # ยอดรวมทุกงวดเช็คใน formset (แก้หลายแถวพร้อมกันได้)
         if self.instance.pk and self.instance.exchange_rate:
             self.initial['exchange_rate'] = _plain_decimal(self.instance.exchange_rate)
 
 
+class RebatePayoutPaymentFormSet(forms.BaseInlineFormSet):
+    def clean(self):
+        super().clean()
+        if any(self.errors):
+            return
+        total = sum((f.cleaned_data.get('amount') or 0 for f in self.forms
+                     if f.cleaned_data and not f.cleaned_data.get('DELETE')), Decimal(0))
+        limit = round_money(self.instance.rebate_amount or 0)
+        if total > limit:
+            raise ValidationError(f"ยอดงวดรวม {total:,.2f} เกินยอดของใบ {limit:,.2f}")
+
+
+class RebatePayoutPaymentInline(UnfoldTabularInline):
+    """A6 งวดจ่าย: 1 ใบจ่ายได้หลายงวด — จ่ายแยก (โอนออก) หรือ หักจากเงินลูกค้า (สัญญาขาย) ต่องวด"""
+    model = RebatePayoutPayment
+    form = RebatePayoutPaymentForm
+    formset = RebatePayoutPaymentFormSet
+    autocomplete_fields = ['bank_account']
+    verbose_name = "งวดจ่าย"
+    verbose_name_plural = "งวดจ่าย / หัก (จ่ายเป็นงวดได้ จนครบยอด)"
+
+    def get_fields(self, request, obj=None):
+        if obj is not None and obj.is_purchase:  # ค่าคอมฯ สัญญาซื้อ = จ่ายแยกเท่านั้น
+            rate = ['exchange_rate'] if obj.currency != 'THB' else []
+            return ['amount', 'paid_date', 'bank_account', *rate, 'ref']
+        return ['method', 'amount', 'paid_date', 'bank_account', 'deduct_month', 'ref']
+
+    def get_extra(self, request, obj=None, **kwargs):
+        return 1 if obj is not None and obj.outstanding > 0 else 0
+
+
 @admin.register(RebatePayout)
 class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
-    form = RebatePayoutForm
-    actions = ['deduct_from_customer', 'export_to_excel']
+    actions = ['pay_separately', 'deduct_from_customer', 'export_to_excel']
     list_display = ('get_kind', 'get_contract', 'get_party', 'period_start', 'period_end', 'payout_date',
-                    'get_total', 'get_commission', 'currency', 'get_status', 'ref_invoice', 'get_doc_link')
+                    'get_total', 'get_commission', 'get_outstanding', 'currency', 'get_status', 'ref_invoice',
+                    'get_doc_link')
     list_filter = (
         RebatePayoutKindFilter,
         ('status', MultipleChoicesDropdownFilter),
@@ -7308,68 +7346,119 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     list_filter_submit = True
     search_fields = ('contract__contract_name', 'contract__customer__company_name', 'ref_invoice',
                      'purchase_contract__contract_name', 'purchase_contract__supplier__company_name')
-    autocomplete_fields = ['bank_account']
     list_display_links = ('get_contract',)
     ordering = ('-payout_date',)
     list_select_related = ('contract__customer', 'purchase_contract__supplier')
 
     def get_fields(self, request, obj=None):
         head = ['purchase_contract', 'purchase_order_link'] if obj and obj.is_purchase else ['contract', 'sales_receipt_link']
-        tail = ['exchange_rate'] if obj and obj.is_purchase and obj.currency != 'THB' else []
-        # ยอดเงินในหน้าใบก็กดดูได้ว่ามาจาก PO/IV ไหน (เหมือนหน้ารายการ)
-        deduct = [] if obj and obj.is_purchase else ['deduct_month']
+        # ยอดเงินในหน้าใบก็กดดูได้ว่ามาจาก PO/IV ไหน (เหมือนหน้ารายการ) — จ่าย/หัก กรอกในตารางงวดด้านล่าง
         return head + ['period_start', 'period_end', 'payout_date', 'get_total', 'get_commission',
-                       'currency', 'status', *deduct, 'paid_date', 'bank_account', *tail, 'ref_invoice']
+                       'get_outstanding', 'currency', 'get_status', 'ref_invoice']
 
     def get_readonly_fields(self, request, obj=None):
         return ('contract', 'purchase_contract', 'purchase_order_link', 'sales_receipt_link', 'period_start', 'period_end',
-                'get_total', 'get_commission', 'currency')
+                'get_total', 'get_commission', 'get_outstanding', 'currency', 'get_status')
 
     def get_inlines(self, request, obj):
         if obj is None:
             return []
-        return [PurchaseCommissionItemInline] if obj.is_purchase else [RebatePayoutItemInline]
+        items = PurchaseCommissionItemInline if obj.is_purchase else RebatePayoutItemInline
+        return [RebatePayoutPaymentInline, items]
+
+    def get_formset_kwargs(self, request, obj, inline, prefix):
+        kwargs = super().get_formset_kwargs(request, obj, inline, prefix)
+        if isinstance(inline, RebatePayoutPaymentInline) and request.method != 'POST':
+            # แถวว่างใหม่ = ยอดคงค้าง (ไม่แตะ = ไม่บันทึก)
+            kwargs['initial'] = [{'amount': obj.outstanding, 'paid_date': timezone.localdate()}]
+        return kwargs
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related('installments')
+
+    @admin.display(description="คงค้าง")
+    def get_outstanding(self, obj):
+        paid = sum((i.amount for i in obj.installments.all()), Decimal(0))
+        left = max(round_money((obj.rebate_amount or 0) - paid), Decimal(0))
+        return f"{left:,.2f}"
 
     def has_add_permission(self, request):
         return False  # ใบสรุปสร้างจาก action ใน A7/A8 เท่านั้น
 
-    @admin.action(description="✂️ หักจากเงินลูกค้า (เลือกรอบเดือน) — เฉพาะสัญญาขาย")
-    def deduct_from_customer(self, request, queryset):
-        """ไม่จ่ายแยก: หัก Rebate ตามสัญญาจากเงินที่ลูกค้าจ่ายเข้าในเดือนที่เลือก
-        ลูกค้าจ่ายผ่านแฟคตอริ่ง = หักจากส่วนที่เหลือที่แฟคตอริ่งโอนให้ — 1 รายการต่อใบ (Sale Contract) แยกจาก DC/Rebate ของ A5"""
-        payouts = list(queryset.select_related('contract__customer').order_by('payout_date', 'id'))
-        rows = [p for p in payouts if p.contract_id and not p.purchase_contract_id and p.status != 'PAID']
-        skipped = [p for p in payouts if p not in rows]
-        if 'apply' in request.POST:
-            form = DeductMonthForm(request.POST)
-            if form.is_valid() and rows:
-                month = form.cleaned_data['month']
-                with transaction.atomic():
-                    for p in rows:
-                        p.status, p.deduct_month = 'DEDUCTED', month
-                        p.save()
-                msg = (f"หัก Sale Contract {len(rows)} ใบ รวม {sum((p.rebate_amount or 0 for p in rows), Decimal(0)):,.2f} บาท "
-                       f"จากเงินลูกค้ารอบ {thai_month_label(month)} แล้ว")
-                if skipped:
-                    msg += f" (ข้าม {len(skipped)} ใบ: จ่ายแล้ว/สัญญาซื้อ)"
-                self.message_user(request, msg, messages.SUCCESS)
+    def _installment_action(self, request, queryset, method):
+        """สร้างงวดจ่ายให้หลายใบพร้อมกัน — ยอดต่อใบแก้ได้ (ค่าเริ่มต้น = ยอดคงค้าง, ว่าง/0 = ไม่ทำใบนั้น)
+        SEPARATE = จ่ายแยก (เลือกสมุดบัญชี/วันที่) | DEDUCT = หักจากเงินลูกค้า (เลือกรอบเดือน, สัญญาขายเท่านั้น)"""
+        payouts = list(queryset.select_related('contract__customer', 'purchase_contract__supplier')
+                       .order_by('payout_date', 'id'))
+        rows, skipped = [], []
+        for p in payouts:
+            p.outstanding_value = p.outstanding
+            if p.outstanding_value <= 0:
+                skipped.append((p, "จ่ายครบแล้ว"))
+            elif method == 'DEDUCT' and p.is_purchase:
+                skipped.append((p, "สัญญาซื้อ — หักจากเงินลูกค้าไม่ได้"))
+            elif method == 'SEPARATE' and p.currency != 'THB':
+                skipped.append((p, f"สกุล {p.currency} — จ่ายในหน้าใบ (กรอก ExRate)"))
+            else:
+                rows.append(p)
+        posted = 'apply' in request.POST
+        form = ((DeductMonthForm if method == 'DEDUCT' else PaymentDateForm)(request.POST if posted else None))
+        amount_errors = _read_amount_inputs(request, rows)
+        if posted and form.is_valid() and not amount_errors:
+            todo = [p for p in rows if p.receive_amount > 0]
+            if not todo:
+                self.message_user(request, "ไม่มีใบที่ต้องจ่าย", messages.WARNING)
                 return None
-        else:
-            form = DeductMonthForm()
-        return TemplateResponse(request, 'admin/stocks/rebatepayout/deduct_month.html', {
+            data = form.cleaned_data
+            with transaction.atomic():
+                for p in todo:
+                    inst = RebatePayoutPayment(payout=p, method=method, amount=p.receive_amount)
+                    if method == 'DEDUCT':
+                        inst.deduct_month = data['month']
+                    else:
+                        inst.paid_date, inst.bank_account = data['payment_date'], data.get('bank_account')
+                    inst.save()
+            total = sum((p.receive_amount for p in todo), Decimal(0))
+            where = (f"หักจากเงินลูกค้ารอบ {thai_month_label(data['month'])}" if method == 'DEDUCT'
+                     else "จ่ายแยก")
+            msg = f"{where} {len(todo)} ใบ รวม {total:,.2f}"
+            if len(payouts) > len(todo):
+                msg += f" (ข้าม {len(payouts) - len(todo)} ใบ)"
+            self.message_user(request, msg, messages.SUCCESS)
+            return None
+        action = 'deduct_from_customer' if method == 'DEDUCT' else 'pay_separately'
+        return TemplateResponse(request, 'admin/stocks/rebatepayout/installment.html', {
             **self.admin_site.each_context(request),
-            'title': "หัก Rebate ตามสัญญาจากเงินลูกค้า", 'opts': self.model._meta,
-            'rows': rows, 'skipped': skipped, 'form': form,
-            'total': sum((p.rebate_amount or 0 for p in rows), Decimal(0)),
-            'action_name': 'deduct_from_customer', 'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
+            'title': ("หัก Rebate ตามสัญญาจากเงินลูกค้า" if method == 'DEDUCT' else "จ่ายตามสัญญา (จ่ายแยก)"),
+            'is_deduct': method == 'DEDUCT', 'opts': self.model._meta, 'form': form,
+            'rows': rows, 'skipped': skipped, 'amount_errors': amount_errors,
+            'total_outstanding': sum((p.outstanding for p in rows), Decimal(0)),
+            'total': sum((p.receive_amount for p in rows if not p.amount_error), Decimal(0)),
+            'selected_ids': [p.pk for p in payouts],
+            'action_name': action, 'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
         })
+
+    @admin.action(description="💸 จ่ายแยก (ยอดคงค้าง / แก้ยอดเป็นงวดได้)")
+    def pay_separately(self, request, queryset):
+        return self._installment_action(request, queryset, 'SEPARATE')
+
+    @admin.action(description="✂️ หักจากเงินลูกค้า (เลือกรอบเดือน, แก้ยอดเป็นงวดได้) — เฉพาะสัญญาขาย")
+    def deduct_from_customer(self, request, queryset):
+        return self._installment_action(request, queryset, 'DEDUCT')
 
     @admin.display(description="Status", ordering='status')
     def get_status(self, obj):
-        if obj.status == 'DEDUCTED' and obj.deduct_month:
-            return format_html('{}<br><small style="color:#2563eb">หัก {}</small>',
-                               obj.get_status_display(), thai_month_label(obj.deduct_month))
-        return obj.get_status_display()
+        # งวดล่าสุดสั้นๆ ใต้สถานะ: หัก พ.ย. 2569 / จ่าย 05/12/2569
+        notes = []
+        for i in list(obj.installments.all())[-3:]:
+            if i.method == 'DEDUCT' and i.deduct_month:
+                notes.append(f"หัก {thai_month_label(i.deduct_month)} {i.amount:,.2f}")
+            elif i.paid_date:
+                notes.append(f"จ่าย {i.paid_date:%d/%m/%Y} {i.amount:,.2f}")
+        if not notes:
+            return obj.get_status_display()
+        return format_html('{}<br><small style="color:#2563eb">{}</small>', obj.get_status_display(),
+                           format_html_join(mark_safe('<br>'), '{}', ((n,) for n in notes)))
 
     @admin.display(description="ประเภท")
     def get_kind(self, obj):
@@ -8484,7 +8573,7 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
                 queryset = queryset.exclude(pk__in=list(loan_rows.values_list('pk', flat=True)))
                 rows = list(queryset)
                 for model, field in ((SalesPayment, 'sales_payment_id'), (PurchasePaymentLog, 'purchase_payment_id'),
-                                     (RebatePayout, 'rebate_payout_id')):
+                                     (RebatePayoutPayment, 'rebate_installment_id')):
                     ids = [getattr(t, field) for t in rows if getattr(t, field)]
                     model.objects.filter(pk__in=ids).update(bank_account=account)
                 refs = {t.batch_ref for t in rows if t.batch_ref}
@@ -8524,6 +8613,8 @@ class BankTransactionAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdm
             url = reverse('admin:stocks_financereport_change', args=[obj.purchase_payment.purchase_order_id])
         elif obj.rebate_payout_id:
             url = reverse('admin:stocks_rebatepayout_change', args=[obj.rebate_payout_id])
+        elif obj.rebate_installment_id:
+            url = reverse('admin:stocks_rebatepayout_change', args=[obj.rebate_installment.payout_id])
         elif obj.loan_drawdown_id:
             url = reverse('admin:stocks_loan_change', args=[obj.loan_drawdown.loan_id])
         elif obj.loan_installment_id:
