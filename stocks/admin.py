@@ -6570,12 +6570,12 @@ class PaidRadioFilter(UnfoldRadioFilter):
 @admin.register(ShipmentAccounting)
 class ShipmentAccountingAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModelAdmin):
     # ✅ เพิ่ม Action ที่ต้องการให้โชว์แยกกันใน List นี้ครับ
+    # ยืนยัน DC / Rebate แยกเมนูกัน (ปกติไม่ได้ยืนยันพร้อมกัน) — ทั้งสองเมนูลงรายการหักในเดือนที่เลือกด้วย
+    # ไม่มีเมนูสรุปยอด: กล่องสรุปด้านบน (admin_sum_selected.js) อัปเดตตามการติ๊กอยู่แล้ว
     actions = [
-        'confirm_selected_items',
-        'confirm_revenue_only',
         'confirm_dc_only',
         'confirm_rebate_only',
-        'calculate_selected_totals',
+        'confirm_revenue_only',
         'export_to_excel',
     ]
 
@@ -6652,45 +6652,6 @@ class ShipmentAccountingAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModel
         return "-"
     short_shipped_date.short_description = "วันที่ส่ง"
     short_shipped_date.admin_order_field = 'shipped_date'
-
-    @admin.action(description="📝 สรุปยอดรวมรายการที่เลือก (เฉพาะที่ติ๊ก)")
-    def calculate_selected_totals(self, request, queryset):
-        total_qty = 0
-        total_revenue = Decimal('0')
-        total_dc = Decimal('0')
-        total_rebate = Decimal('0')
-        count = queryset.count()
-
-        for obj in queryset:
-            # ดึงข้อมูลสินค้าเพื่อเอาราคาขาย
-            item = obj.sales_order.items.filter(product=obj.product).first()
-            if item:
-                qty = obj.quantity_shipped
-                rev = item.sale_price * qty
-                
-                total_qty += qty
-                total_revenue += rev
-                
-                # ดึง Contract เพื่อคำนวณ DC/Rebate
-                from .models import CustomerProductContract
-                c = CustomerProductContract.objects.filter(
-                    customer=obj.sales_order.customer, 
-                    product=obj.product
-                ).first()
-                
-                if c:
-                    total_dc += (rev * c.dc_percent) / Decimal('100')
-                    total_rebate += (rev * c.rebate_percent) / Decimal('100')
-
-        # แสดงผลลัพธ์เป็นข้อความ Alert สีเขียวด้านบน
-        msg = (
-            f"✅ สรุป {count} รายการที่เลือก: "
-            f"จำนวนรวม: {total_qty:,} ชิ้น | "
-            f"ยอดรวม VAT: ฿{total_revenue:,.2f} | "
-            f"DC: ฿{total_dc:,.2f} | "
-            f"Rebate: ฿{total_rebate:,.2f}"
-        )
-        self.message_user(request, msg, messages.SUCCESS)
 
     # --- 📊 สรุปยอด: กล่องสรุป (admin_sum_selected.js) แทนแบนเนอร์เดิมที่ไม่เปลี่ยนตามการติ๊ก ---
     # แถวเยอะ (หลายพันรายการ) -> รวมด้วย DB ทีเดียว แทนการไล่คำนวณทีละแถว
@@ -6824,19 +6785,14 @@ class ShipmentAccountingAdmin(ColumnTotalsMixin, ExportToExcelMixin, UnfoldModel
             self.save_model(request, obj, None, True)
         self.message_user(request, f"ยืนยันยอดรับเงิน {queryset.count()} รายการ และสร้างประวัติเงินแล้ว")
 
-    @admin.action(description="🚚 ยืนยันเฉพาะค่า DC (เลือกรอบเดือนที่หัก)")
+    @admin.action(description="🚚 ยืนยัน DC และลงบัญชีในเดือนที่เลือก")
     def confirm_dc_only(self, request, queryset):
         return self._confirm_with_month(request, queryset, ['DC'], False, 'confirm_dc_only', "ยืนยันค่า DC")
 
-    @admin.action(description="🎁 ยืนยันเฉพาะยอด Rebate (เลือกรอบเดือนที่หัก)")
+    @admin.action(description="🎁 ยืนยัน Rebate และลงบัญชีในเดือนที่เลือก")
     def confirm_rebate_only(self, request, queryset):
         return self._confirm_with_month(request, queryset, ['REBATE'], False, 'confirm_rebate_only',
                                         "ยืนยันยอด Rebate")
-
-    @admin.action(description="✅ ยืนยันยอดทั้งหมด (ครบทุกส่วน, เลือกรอบเดือนที่หัก DC/Rebate)")
-    def confirm_selected_items(self, request, queryset):
-        return self._confirm_with_month(request, queryset, ['DC', 'REBATE'], True, 'confirm_selected_items',
-                                        "ยืนยันยอดทั้งหมด (รับเงิน + DC + Rebate)")
 
     @admin.display(description="เลขที่ IV", ordering='iv_number')
     def get_iv_number(self, obj):

@@ -185,6 +185,42 @@ document.addEventListener('DOMContentLoaded', function() {
         render(`เลือก <b style="color:#1e293b;">${selected.length}</b> รายการ`, pageTotals(selected));
     }
 
+    // ── แถบลอย: เลื่อนลงไปติ๊กรายการล่างๆ จนกล่องสรุปหลุดจอ -> โชว์สำเนาลอยติดขอบบนจอ ──
+    const floatBox = document.createElement('div');
+    floatBox.id = 'realtime-sum-float';
+    floatBox.style.cssText = [
+        'display:none', 'position:fixed', 'top:8px', 'left:50%', 'transform:translateX(-50%)',
+        'z-index:1000', 'max-width:calc(100vw - 16px)', 'box-sizing:border-box',
+        'flex-wrap:wrap', 'align-items:center', 'gap:2px 0', 'padding:6px 14px',
+        'background:#f0f4f8', 'border:1px solid #cbd5e1', 'border-radius:6px',
+        'box-shadow:0 4px 12px rgba(15,23,42,.18)', 'font-size:13px', 'color:#1e293b',
+    ].join(';');
+    document.body.appendChild(floatBox);
+    // ปุ่มในสำเนา (เช่น 🧮 คำนวณยอดรวม) -> กดปุ่มตัวจริงแทน
+    floatBox.addEventListener('click', e => {
+        const link = e.target.closest('a');
+        if (!link) return;
+        e.preventDefault();
+        const real = summaryBox.querySelector('a');
+        if (real) real.click();
+    });
+    let boxOffscreen = false;
+    function syncFloat() {
+        const show = boxOffscreen && summaryBox.style.display !== 'none';
+        floatBox.style.display = show ? 'flex' : 'none';
+        if (show) floatBox.innerHTML = summaryBox.innerHTML;
+    }
+    if ('IntersectionObserver' in window) {
+        new IntersectionObserver(entries => {
+            const e = entries[0];
+            // หลุดจอด้านบนเท่านั้น (เลื่อนลงไปแล้ว)
+            boxOffscreen = !e.isIntersecting && e.boundingClientRect.top < 0;
+            syncFloat();
+        }).observe(summaryBox);
+        new MutationObserver(syncFloat).observe(summaryBox,
+            {childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['style']});
+    }
+
     table.addEventListener('change', function(e) {
         if (e.target.classList.contains('action-select') || e.target.id === 'action-toggle') {
             setTimeout(calculateSum, 50);
