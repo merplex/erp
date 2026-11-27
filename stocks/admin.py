@@ -7356,16 +7356,10 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
                 return None
         else:
             form = DeductMonthForm()
-        # Rebate ของรายการส่งของเดียวกันที่หักไปแล้วจาก A5 (ตั้งใน S4) -> เตือนหักซ้ำ
-        overlap = set(SalesPayment.objects.filter(
-            deduction_kind='REBATE', deduction_log__payout_items__payout__in=rows)
-            .values_list('deduction_log__payout_items__payout_id', flat=True))
-        for p in rows:
-            p.a5_overlap = p.pk in overlap
         return TemplateResponse(request, 'admin/stocks/rebatepayout/deduct_month.html', {
             **self.admin_site.each_context(request),
             'title': "หัก Rebate ตามสัญญาจากเงินลูกค้า", 'opts': self.model._meta,
-            'rows': rows, 'skipped': skipped, 'form': form, 'has_overlap': bool(overlap),
+            'rows': rows, 'skipped': skipped, 'form': form,
             'total': sum((p.rebate_amount or 0 for p in rows), Decimal(0)),
             'action_name': 'deduct_from_customer', 'action_checkbox_name': helpers.ACTION_CHECKBOX_NAME,
         })
