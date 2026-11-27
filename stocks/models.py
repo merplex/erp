@@ -2646,6 +2646,33 @@ class RebatePayout(models.Model):
     STATUS_CHOICES = [('PENDING', 'รอจ่าย'), ('PARTIAL', 'จ่ายบางส่วน'), ('PAID', 'จ่ายแล้ว')]
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING', editable=False)
     ref_invoice = models.CharField(max_length=100, blank=True, verbose_name="เลขที่ใบลดหนี้/ใบจ่ายเงิน")
+    # รหัสรายการฝั่งขาย SC-YYYYMM-0001 (เดือนตามวันครบกำหนดจ่าย) — ทั้งใบที่คำนวณจาก A7 และใบที่สร้างเอง
+    doc_number = models.CharField(max_length=30, blank=True, default='', db_index=True, editable=False,
+                                  verbose_name="รหัสรายการ")
+    # CONTRACT = คำนวณตามเงื่อนไขสัญญา (A7/A8) | อื่นๆ = สร้างเองใน A6 (ลูกค้าแจ้งภายหลัง ไม่เข้ากฎปกติ, ไม่มีรายการ IV ผูก)
+    CATEGORY_CHOICES = [('CONTRACT', 'ตามเงื่อนไขสัญญา (คำนวณ)'), ('CUSTOMER_SALES', 'ตามยอดจำหน่ายของลูกค้า'),
+                        ('LISTING_FEE', 'ค่าวางสินค้าใหม่'), ('OTHER', 'อื่นๆ')]
+    MANUAL_CATEGORIES = CATEGORY_CHOICES[1:]
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default='CONTRACT', verbose_name="ประเภท")
+    note = models.CharField(max_length=255, blank=True, verbose_name="รายละเอียด")
+
+    def save(self, *args, **kwargs):
+        if self.contract_id and not self.doc_number:
+            self.doc_number = generate_number('SC', RebatePayout, 'doc_number', self.payout_date)
+        super().save(*args, **kwargs)
+
+    @property
+    def is_manual(self):
+        return self.category != 'CONTRACT'
+
+    @property
+    def ledger_label(self):
+        """ข้อความในสมุดบัญชี: รหัส + สัญญา + (ช่วงยอด หรือ ประเภท/รายละเอียดของใบที่สร้างเอง)"""
+        contract = self.contract or self.purchase_contract
+        head = ' '.join(x for x in (self.doc_number, contract.contract_name if contract else '') if x)
+        if self.is_manual:
+            return f"{head} {self.get_category_display()}" + (f": {self.note}" if self.note else '')
+        return f"{head} ({self.period_start:%d/%m/%Y}–{self.period_end:%d/%m/%Y})"
 
     @property
     def is_purchase(self):
@@ -3820,7 +3847,6 @@ def sync_rebate_installment_ledger(inst):
         resync_factoring_month(*key)
         return
     payout = inst.payout
-    period = f"({payout.period_start:%d/%m/%Y}–{payout.period_end:%d/%m/%Y})"
     if payout.purchase_contract_id:  # ค่าคอมฯ ตามสัญญาซื้อ = เงินออก (สกุลต่างประเทศ x ExRate ตอนจ่าย)
         contract = payout.purchase_contract
         values = {'amount': -inst.amount_thb, 'source_type': 'PURCHASE_COMMISSION',
@@ -3833,9 +3859,9 @@ def sync_rebate_installment_ledger(inst):
     BankTransaction.objects.update_or_create(rebate_installment=inst, defaults={
         'bank_account_id': inst.bank_account_id, 'factoring_payment': None,
         'txn_date': inst.paid_date or payout.payout_date,
-        'reference': (inst.ref or payout.ref_invoice or contract.contract_name)[:100],
-        # คำอธิบาย = ชื่อสัญญา ลูกค้า/ผู้จำหน่าย (ช่วงวันที่)
-        'description': f"{contract.contract_name} {values['party']} {period}{part}"[:255],
+        'reference': (inst.ref or payout.ref_invoice or payout.doc_number or contract.contract_name)[:100],
+        # คำอธิบาย = รหัส ชื่อสัญญา (ช่วงวันที่ / ประเภท) ลูกค้า/ผู้จำหน่าย
+        'description': f"{payout.ledger_label} {values['party']}{part}"[:255],
         **values,
     })
 
@@ -4753,14 +4779,13 @@ def resync_factoring_month(customer_id, month):
     for inst in contract_installments:
         payout = inst.payout
         amount = round_money(inst.amount or 0)
-        period = f"({payout.period_start:%d/%m/%Y}–{payout.period_end:%d/%m/%Y})"
         part = '' if amount >= round_money(payout.rebate_amount or 0) else ' งวด'
         fields = {
             'amount': -amount, 'source_type': 'REBATE_PAYOUT',
-            'reference': (inst.ref or payout.ref_invoice or f"Sale Contract {payout.contract.contract_name}")[:100],
+            'reference': (inst.ref or payout.ref_invoice or payout.doc_number
+                          or f"Sale Contract {payout.contract.contract_name}")[:100],
             'party': payout.contract.customer.company_name,
-            'description': (f"หัก Sale Contract {payout.contract.contract_name} {period}{part} "
-                            f"(รอบ {month:%m/%Y})")[:255],
+            'description': f"หัก Sale Contract {payout.ledger_label}{part} (รอบ {month:%m/%Y})"[:255],
         }
         if remainders:  # หักจากส่วนที่เหลือที่แฟคตอริ่งโอนให้
             pay_day = min(r.factoring_customer_paid_date or _as_date(r.payment_date) for r in remainders)

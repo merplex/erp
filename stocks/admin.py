@@ -7331,38 +7331,128 @@ class RebatePayoutPaymentInline(UnfoldTabularInline):
         return 1 if obj is not None and obj.outstanding > 0 else 0
 
 
+MONTH_INPUT = forms.DateInput(attrs={'type': 'month'}, format='%Y-%m')
+
+
+class RebatePayoutAddForm(forms.ModelForm):
+    """A6 + Add: รายการ Sale Contract ที่ลูกค้าแจ้งภายหลัง (ไม่เข้ากฎปกติของสัญญา) — ยอดกรอกเอง ไม่มีรายการ IV ผูก
+    บันทึกแล้วสร้างงวดแรกเต็มยอดตามวิธีที่เลือก (ตัดแยก = เงินออกวันที่ระบุ / หักตอนเงินเข้า = หักจากเงินลูกค้าเดือนที่เลือก)"""
+    contract = forms.ModelChoiceField(label="สัญญาการขาย (A7)", widget=box_select(420),
+                                      queryset=SalesContract.objects.select_related('customer').order_by('-is_active', 'contract_name'))
+    category = forms.ChoiceField(label="ประเภท", choices=RebatePayout.MANUAL_CATEGORIES, widget=box_select(320))
+    rebate_amount = forms.DecimalField(label="ยอดเงิน (บาท)", max_digits=12, decimal_places=2,
+                                       min_value=Decimal('0.01'))
+    method = forms.ChoiceField(label="วิธีจ่าย", widget=forms.RadioSelect, initial='SEPARATE', choices=[
+        ('SEPARATE', "ตัดแยก (ระบุวันที่หัก)"), ('DEDUCT', "หักจากบัญชีตอนเงินเข้า (เลือกเดือน)")])
+    pay_date = forms.DateField(label="วันที่หัก", required=False, initial=timezone.localdate,
+                               widget=forms.DateInput(attrs=BOX_DATE_ATTRS, format='%Y-%m-%d'),
+                               help_text="ตัดแยก: ลงสมุดบัญชีเป็นเงินออกวันนี้")
+    bank_account = forms.ModelChoiceField(label="จากสมุดบัญชี", required=False, initial=default_bank_account_id,
+                                          queryset=BankAccount.objects.filter(is_active=True).order_by('-is_default', 'name'),
+                                          widget=box_select(320), help_text="ตัดแยก: ไม่เลือก = บัญชีหลัก")
+    deduct_month = forms.DateField(label="หักรอบเดือน", required=False, input_formats=['%Y-%m', '%Y-%m-%d'],
+                                   widget=MONTH_INPUT,
+                                   help_text="หักตอนเงินเข้า: หักจากเงินที่ลูกค้าจ่ายเข้าเดือนนี้ "
+                                             "(แฟคตอริ่ง = หักจากส่วนที่เหลือที่โอนให้)")
+
+    class Meta:
+        model = RebatePayout
+        fields = ['contract', 'category', 'note', 'rebate_amount', 'ref_invoice']
+
+    def clean(self):
+        data = super().clean()
+        if data.get('method') == 'DEDUCT':
+            if not data.get('deduct_month'):
+                self.add_error('deduct_month', "เลือกเดือนที่จะหัก")
+        elif not data.get('pay_date'):
+            self.add_error('pay_date', "ระบุวันที่หัก")
+        return data
+
+
+class RebatePayoutForm(forms.ModelForm):
+    class Meta:
+        model = RebatePayout
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if 'category' in self.fields:  # ใบที่สร้างเอง เปลี่ยนได้เฉพาะประเภทของรายการสร้างเอง
+            self.fields['category'].choices = RebatePayout.MANUAL_CATEGORIES
+
+
 @admin.register(RebatePayout)
 class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
+    form = RebatePayoutForm
     actions = ['pay_separately', 'deduct_from_customer', 'export_to_excel']
-    list_display = ('get_kind', 'get_contract', 'get_party', 'period_start', 'period_end', 'payout_date',
+    list_display = ('get_doc_number', 'get_kind', 'get_contract', 'get_party', 'period_start', 'period_end', 'payout_date',
                     'get_total', 'get_commission', 'get_outstanding', 'currency', 'get_status', 'ref_invoice',
                     'get_doc_link')
     list_filter = (
         RebatePayoutKindFilter,
         ('status', MultipleChoicesDropdownFilter),
+        ('category', MultipleChoicesDropdownFilter),
         ('contract__customer', AutocompleteSelectMultipleFilter),
         ('purchase_contract__supplier', AutocompleteSelectMultipleFilter),
     )
     list_filter_submit = True
-    search_fields = ('contract__contract_name', 'contract__customer__company_name', 'ref_invoice',
+    search_fields = ('doc_number', 'note', 'contract__contract_name', 'contract__customer__company_name', 'ref_invoice',
                      'purchase_contract__contract_name', 'purchase_contract__supplier__company_name')
     list_display_links = ('get_contract',)
     ordering = ('-payout_date',)
     list_select_related = ('contract__customer', 'purchase_contract__supplier')
 
+    ADD_FIELDS = ['contract', 'category', 'note', 'rebate_amount', 'method', 'pay_date', 'bank_account',
+                  'deduct_month', 'ref_invoice']
+
     def get_fields(self, request, obj=None):
-        head = ['purchase_contract', 'purchase_order_link'] if obj and obj.is_purchase else ['contract', 'sales_receipt_link']
+        if obj is None:
+            return list(self.ADD_FIELDS)
+        if obj.is_manual:  # สร้างเอง: ไม่มีรายการ IV — แก้ประเภท/รายละเอียด/ยอดได้ (ยอดต้องไม่น้อยกว่างวดที่จ่ายแล้ว)
+            return ['doc_number', 'contract', 'category', 'note', 'payout_date', 'rebate_amount',
+                    'get_outstanding', 'get_status', 'ref_invoice']
+        head = ['purchase_contract', 'purchase_order_link'] if obj.is_purchase else ['doc_number', 'contract',
+                                                                                     'sales_receipt_link']
         # ยอดเงินในหน้าใบก็กดดูได้ว่ามาจาก PO/IV ไหน (เหมือนหน้ารายการ) — จ่าย/หัก กรอกในตารางงวดด้านล่าง
         return head + ['period_start', 'period_end', 'payout_date', 'get_total', 'get_commission',
                        'get_outstanding', 'currency', 'get_status', 'ref_invoice']
 
     def get_readonly_fields(self, request, obj=None):
-        return ('contract', 'purchase_contract', 'purchase_order_link', 'sales_receipt_link', 'period_start', 'period_end',
-                'get_total', 'get_commission', 'get_outstanding', 'currency', 'get_status')
+        if obj is None:
+            return ()
+        return ('doc_number', 'contract', 'purchase_contract', 'purchase_order_link', 'sales_receipt_link',
+                'period_start', 'period_end', 'get_total', 'get_commission', 'get_outstanding', 'currency', 'get_status')
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        if obj is None:
+            kwargs['form'] = RebatePayoutAddForm
+        return super().get_form(request, obj, change=change, **kwargs)
+
+    def save_model(self, request, obj, form, change):
+        if change:
+            return super().save_model(request, obj, form, change)
+        data = form.cleaned_data
+        method = data['method']
+        if method == 'DEDUCT':
+            month = data['deduct_month'].replace(day=1)
+            day = deduction_date_in_month(obj.contract.customer, month)
+        else:
+            day = data['pay_date']
+        obj.period_start = obj.period_end = obj.payout_date = day
+        obj.total_sales_amount, obj.currency = Decimal(0), 'THB'
+        with transaction.atomic():
+            super().save_model(request, obj, form, change)
+            inst = RebatePayoutPayment(payout=obj, method=method, amount=obj.rebate_amount)
+            if method == 'DEDUCT':
+                inst.deduct_month = month
+            else:
+                inst.paid_date, inst.bank_account = day, data.get('bank_account')
+            inst.save()
 
     def get_inlines(self, request, obj):
         if obj is None:
             return []
+        if obj.is_manual:
+            return [RebatePayoutPaymentInline]
         items = PurchaseCommissionItemInline if obj.is_purchase else RebatePayoutItemInline
         return [RebatePayoutPaymentInline, items]
 
@@ -7382,8 +7472,9 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
         left = max(round_money((obj.rebate_amount or 0) - paid), Decimal(0))
         return f"{left:,.2f}"
 
-    def has_add_permission(self, request):
-        return False  # ใบสรุปสร้างจาก action ใน A7/A8 เท่านั้น
+    @admin.display(description="รหัส", ordering='doc_number')
+    def get_doc_number(self, obj):
+        return obj.doc_number or '-'
 
     def _installment_action(self, request, queryset, method):
         """สร้างงวดจ่ายให้หลายใบพร้อมกัน — ยอดต่อใบแก้ได้ (ค่าเริ่มต้น = ยอดคงค้าง, ว่าง/0 = ไม่ทำใบนั้น)
@@ -7464,6 +7555,9 @@ class RebatePayoutAdmin(ExportToExcelMixin, UnfoldModelAdmin):
     def get_kind(self, obj):
         if obj.is_purchase:
             return format_html('<span style="color:{};font-weight:600;">{}</span>', '#16a34a', "ซื้อ")
+        if obj.is_manual:  # สร้างเอง: ขาย + ประเภทที่เลือก
+            return format_html('<span style="color:{};font-weight:600;">{}</span><br><small style="color:#64748b">{}</small>',
+                               '#2563eb', "ขาย · สร้างเอง", obj.get_category_display())
         return format_html('<span style="color:{};font-weight:600;">{}</span>', '#2563eb', "ขาย")
 
     @admin.display(description="สัญญา")

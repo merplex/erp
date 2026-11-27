@@ -790,3 +790,65 @@ class RebatePayoutDeductTests(TestCase):
         self.assertEqual(self.client.post(url, data).status_code, 302)
         self.assertEqual(self.status(self.payouts[0]), 'PAID')
         self.assertContains(self.client.get('/admin/stocks/rebatepayout/'), 'จ่ายแล้ว')
+
+
+class RebatePayoutManualAddTests(RebatePayoutDeductTests):
+    """A6 + Add: รายการ Sale Contract ที่ลูกค้าแจ้งภายหลัง — รหัส SC, ประเภท, ตัดแยก/หักตอนเงินเข้า"""
+
+    def add(self, **kw):
+        data = {'contract': self.contracts[0].pk, 'category': 'LISTING_FEE', 'note': 'วางสินค้าใหม่ 3 SKU',
+                'rebate_amount': '1200', 'method': 'SEPARATE', 'pay_date': '2026-12-03',
+                'bank_account': self.bank.pk, 'deduct_month': '', 'ref_invoice': ''}
+        data.update(kw)
+        return self.client.post('/admin/stocks/rebatepayout/add/', data)
+
+    def latest(self):
+        from .models import RebatePayout
+        return RebatePayout.objects.order_by('-id').first()
+
+    def test_codes_are_sc(self):
+        self.assertTrue(all(p.doc_number.startswith('SC-202611-') for p in self.payouts))
+        self.assertNotEqual(self.payouts[0].doc_number, self.payouts[1].doc_number)
+
+    def test_add_page_renders(self):
+        resp = self.client.get('/admin/stocks/rebatepayout/add/')
+        self.assertContains(resp, 'ค่าวางสินค้าใหม่')
+        self.assertContains(resp, 'ตัดแยก (ระบุวันที่หัก)')
+        self.assertContains(resp, 'type="month"')
+
+    def test_add_separate(self):
+        from .models import BankTransaction
+        self.assertEqual(self.add().status_code, 302)
+        p = self.latest()
+        self.assertEqual((p.category, p.status, p.doc_number[:10]), ('LISTING_FEE', 'PAID', 'SC-202612-'))
+        row = BankTransaction.objects.get(rebate_installment__payout=p)
+        self.assertEqual((row.bank_account_id, row.amount, row.txn_date),
+                         (self.bank.pk, self.D('-1200'), datetime.date(2026, 12, 3)))
+        self.assertIn(p.doc_number, row.reference)
+        self.assertIn('ค่าวางสินค้าใหม่', row.description)
+
+    def test_add_deduct_from_factoring(self):
+        from .models import BankTransaction
+        fx = self.sell_factoring()
+        before = self.transfer_total()
+        self.assertEqual(self.add(method='DEDUCT', deduct_month='2026-11', rebate_amount='100',
+                                  category='CUSTOMER_SALES').status_code, 302)
+        row = BankTransaction.objects.get(rebate_installment__payout=self.latest())
+        self.assertEqual((row.bank_account_id, row.amount), (fx.pk, self.D('-100')))
+        self.assertIn('Sale Contract', row.description)
+        self.assertEqual(before - self.transfer_total(), self.D('100'))
+
+    def test_add_requires_date_or_month(self):
+        resp = self.add(method='DEDUCT', deduct_month='')
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'เลือกเดือนที่จะหัก')
+        resp = self.add(pay_date='')
+        self.assertContains(resp, 'ระบุวันที่หัก')
+
+    def test_manual_change_page(self):
+        self.add(method='DEDUCT', deduct_month='2026-11')
+        p = self.latest()
+        resp = self.client.get(f'/admin/stocks/rebatepayout/{p.pk}/change/')
+        self.assertContains(resp, 'name="rebate_amount"')
+        self.assertContains(resp, 'name="category"')
+        self.assertContains(self.client.get('/admin/stocks/rebatepayout/'), 'สร้างเอง')
